@@ -1,0 +1,85 @@
+name: Build Lumina TV APK (Fire TV & Android TV)
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout do repositório
+        uses: actions/checkout@v4
+
+      - name: Configurar JDK 17 (Temurin)
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "17"
+
+      - name: Configurar Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.7"
+
+      - name: Sincronizar assets se ../lumina-tv/app existir no repositório
+        run: |
+          if [ -d "../lumina-tv/app" ]; then
+            chmod +x scripts/sync-assets.sh
+            ./scripts/sync-assets.sh ../lumina-tv/app
+          elif [ -d "lumina-tv/app" ]; then
+            chmod +x scripts/sync-assets.sh
+            ./scripts/sync-assets.sh lumina-tv/app
+          else
+            echo "Usando app/src/main/assets/app já versionado no repositório."
+          fi
+
+      - name: Gerar keystore de release (se não houver secret configurado)
+        run: |
+          if [ -n "${{ secrets.KEYSTORE_BASE64 }}" ]; then
+            echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > lumina-release-key.jks
+            cat <<EOF > keystore.properties
+          storeFile=../lumina-release-key.jks
+          storePassword=${{ secrets.KEYSTORE_PASSWORD }}
+          keyAlias=${{ secrets.KEY_ALIAS }}
+          keyPassword=${{ secrets.KEY_PASSWORD }}
+          EOF
+          else
+            keytool -genkeypair -v \
+              -keystore lumina-release-key.jks \
+              -alias lumina \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -storepass lumina123 \
+              -keypass lumina123 \
+              -dname "CN=Lumina TV, OU=Media, O=Lumina, L=Surubim, ST=PE, C=BR"
+            cat <<EOF > keystore.properties
+          storeFile=../lumina-release-key.jks
+          storePassword=lumina123
+          keyAlias=lumina
+          keyPassword=lumina123
+          EOF
+          fi
+
+      - name: Compilar APK Debug e Release Assinado
+        run: |
+          gradle assembleDebug assembleRelease --no-daemon
+
+      - name: Publicar APK de Release como Artefato
+        uses: actions/upload-artifact@v4
+        with:
+          name: lumina-tv-v1.5.1-firetv-release-apk
+          path: app/build/outputs/apk/release/*.apk
+          if-no-files-found: error
+
+      - name: Publicar APK de Debug como Artefato
+        uses: actions/upload-artifact@v4
+        with:
+          name: lumina-tv-v1.5.1-firetv-debug-apk
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: warn

@@ -1,0 +1,19 @@
+{
+  "appName": "Lumina TV",
+  "defaultPerformanceMode": "auto",
+  "defaultAspectRatio": "auto",
+  "pairing": {
+    "enabled": true,
+    "baseUrl": "https://surubim-player-pairing.vercel.app"
+  },
+  "parental": {
+    "enabled": true,
+    "defaultPin": "0000",
+    "hideAdultInSearchAndHome": true
+  },
+  "tmdb": {
+    "enabled": false,
+    "apiKey": "",
+    "language": "pt-BR"
+  }
+}

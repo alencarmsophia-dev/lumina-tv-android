@@ -1,0 +1,87 @@
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+html, body {
+  width: 1920px;
+  height: 1080px;
+  overflow: hidden;
+  background-color: var(--bg-obsidian);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: var(--fs-body);
+  line-height: 1.35;
+  -webkit-font-smoothing: antialiased;
+}
+
+#app-root {
+  position: relative;
+  width: 1920px;
+  height: 1080px;
+  overflow: hidden;
+  background: radial-gradient(circle at 80% 15%, #16223B 0%, #0B0F17 65%);
+}
+
+#video-stage {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 1920px;
+  height: 1080px;
+  background: #000;
+  z-index: 1;
+  display: none;
+}
+
+#video-stage.is-active {
+  display: block;
+}
+
+#main-video {
+  width: 1920px;
+  height: 1080px;
+  background: #000;
+}
+
+#main-video.ratio-auto { object-fit: contain; }
+#main-video.ratio-16-9 { object-fit: fill; }
+#main-video.ratio-4-3 { width: 1440px; height: 1080px; margin: 0 240px; object-fit: fill; }
+#main-video.ratio-fill { object-fit: cover; }
+
+#ui-layer {
+  position: relative;
+  width: 1920px;
+  height: 1080px;
+  z-index: 10;
+  display: flex;
+}
+
+.hidden {
+  display: none !important;
+}
+
+.focusable {
+  position: relative;
+  outline: none;
+  transition: transform var(--dur-fast) var(--ease-out),
+              background-color 80ms linear,
+              border-color 80ms linear;
+  border: 3px solid transparent;
+  will-change: transform;
+}
+
+.focusable.is-focused {
+  transform: scale(1.05);
+  border-color: var(--accent-cyan) !important;
+  background-color: var(--bg-elevated);
+  box-shadow: 0 0 0 4px var(--accent-cyan-glow);
+  z-index: 6;
+}
+
+.focusable.is-pressed {
+  transform: scale(0.98);
+}

@@ -1,0 +1,41 @@
+#EXTM3U url-tvg="http://exemplo.local/epg.xml"
+#EXTINF:-1 tvg-id="canal.aberto.1" tvg-name="Canal Sintonia HD [FHD]" group-title="Canais | Abertos",Canal Sintonia HD [FHD]
+http://exemplo.local/live/sintonia/index.m3u8
+#EXTINF:-1 tvg-id="canal.noticias.1" tvg-name="BR | Jornal 24h FHD" group-title="Canais | Notícias",BR | Jornal 24h FHD
+http://exemplo.local/live/jornal24h/index.m3u8
+#EXTINF:-1 tvg-id="canal.esporte.1" tvg-name="Arena Esporte 1 [4K]" group-title="Esportes Ao Vivo",Arena Esporte 1 [4K]
+http://exemplo.local/live/arena1/stream.ts
+#EXTINF:-1 tvg-id="canal.cultura.1" tvg-name="Horizonte Documentários" group-title="Canais | Documentários",Horizonte Documentários
+http://exemplo.local/live/horizonte/index.m3u8
+
+#EXTINF:-1 tvg-id="vod.filme.1" tvg-rating="8.7" group-title="Filmes | Ficção & Aventura",A Travessia do Vento (2024) [4K] (Dublado)
+http://exemplo.local/movie/1001.mp4
+#EXTINF:-1 tvg-id="vod.filme.2" tvg-rating="8.1" group-title="Filmes | Ficção & Aventura",O Último Farol Atlântico (2023) [FHD] (Legendado)
+http://exemplo.local/movie/1002.mp4
+#EXTINF:-1 tvg-id="vod.filme.3" tvg-rating="7.9" group-title="Filmes | Suspense",Código Obsidiana (2022) [FHD]
+http://exemplo.local/movie/1003.mp4
+#EXTINF:-1 tvg-id="vod.filme.4" tvg-rating="9.0" group-title="Filmes | Suspense",Memórias de Neblina (2024) [4K]
+http://exemplo.local/movie/1004.mp4
+
+#EXTINF:-1 tvg-id="serie.neblina.101" tvg-rating="8.9" group-title="Séries | Mistério",Crônicas da Neblina S01E01 [FHD]
+http://exemplo.local/series/2001/s01e01.mp4
+#EXTINF:-1 tvg-id="serie.neblina.102" tvg-rating="8.9" group-title="Séries | Mistério",Crônicas da Neblina S01E02 [FHD]
+http://exemplo.local/series/2001/s01e02.mp4
+#EXTINF:-1 tvg-id="serie.neblina.201" tvg-rating="8.9" group-title="Séries | Mistério",Crônicas da Neblina S02E01 [4K]
+http://exemplo.local/series/2001/s02e01.mp4
+#EXTINF:-1 tvg-id="serie.orbita.101" tvg-rating="8.4" group-title="Séries | Ficção",Estação Órbita Zero S01E01 [4K]
+http://exemplo.local/series/2002/s01e01.mp4
+#EXTINF:-1 tvg-id="serie.orbita.102" tvg-rating="8.4" group-title="Séries | Ficção",Estação Órbita Zero S01E02 [4K]
+http://exemplo.local/series/2002/s01e02.mp4
+
+#EXTINF:-1 tvg-id="novela.sertao.01" tvg-rating="9.1" group-title="Novelas | Clássicas",Ventos do Sertão S01E01 - Cap. 01
+http://exemplo.local/series/3001/cap01.mp4
+#EXTINF:-1 tvg-id="novela.sertao.02" tvg-rating="9.1" group-title="Novelas | Clássicas",Ventos do Sertão S01E02 - Cap. 02
+http://exemplo.local/series/3001/cap02.mp4
+#EXTINF:-1 tvg-id="novela.mares.01" tvg-rating="8.5" group-title="Novelas | Contemporâneas",Marés do Tempo - Cap. 01 [FHD]
+http://exemplo.local/series/3002/cap01.mp4
+
+#EXTINF:-1 tvg-id="extra.acervo.01" tvg-rating="7.5" group-title="Acervo Especial Festival",Curta Experimental Aurora (2021) [HD]
+http://exemplo.local/acervo/aurora.mp4
+#EXTINF:-1 tvg-id="adult1" tvg-name="Canal Noturno +18" group-title="Adulto +18",Canal Noturno +18 [FHD]
+http://exemplo.local/live/adulto-noturno.m3u8

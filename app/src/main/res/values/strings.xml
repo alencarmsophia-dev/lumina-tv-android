@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Lumina TV</string>
+    <string name="webview_outdated_title">Atualização do Sistema WebView Necessária</string>
+    <string name="webview_outdated_message">O componente Android System WebView deste aparelho está desatualizado ou indisponível. Atualize o sistema da sua Fire TV / Android TV ou instale uma versão atualizada do Android System WebView para abrir o Lumina TV.</string>
+</resources>

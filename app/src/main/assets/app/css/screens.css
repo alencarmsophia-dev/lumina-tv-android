@@ -1,0 +1,732 @@
+.screen-viewport {
+  flex: 1;
+  margin-left: 108px;
+  height: 1080px;
+  padding: var(--safe-y) var(--safe-x) var(--safe-y) 42px;
+  overflow: hidden;
+  position: relative;
+}
+
+.screen-title {
+  font-size: var(--fs-h1);
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+
+.screen-subtitle {
+  font-size: var(--fs-label);
+  color: var(--text-secondary);
+  margin-bottom: 24px;
+}
+
+/* Onboarding */
+.onboarding-grid { display: flex; margin-top: 16px; }
+.onboarding-col {
+  flex: 1;
+  background: rgba(19, 27, 46, 0.75);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--radius-lg);
+  padding: 32px;
+  margin-right: 28px;
+}
+.onboarding-col:last-child { margin-right: 0; }
+
+/* Canais Ao Vivo */
+.live-layout { display: flex; height: 840px; }
+.live-cats { width: 330px; margin-right: 22px; overflow: hidden; display: flex; flex-direction: column; }
+.cat-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  height: 64px;
+  padding: 0 20px;
+  margin-bottom: 10px;
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  font-size: var(--fs-label);
+}
+.cat-item.is-selected {
+  border-left: 6px solid var(--accent-cyan);
+  background: rgba(56, 189, 248, 0.14);
+}
+.cat-count {
+  font-size: 19px;
+  color: var(--text-secondary);
+  background: var(--bg-obsidian);
+  padding: 3px 11px;
+  border-radius: var(--radius-pill);
+}
+.live-channels { width: 620px; margin-right: 24px; overflow: hidden; }
+.live-preview-pane {
+  flex: 1;
+  background: var(--bg-surface);
+  border-radius: var(--radius-lg);
+  padding: 28px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+.preview-stage-box {
+  width: 100%;
+  height: 320px;
+  background: #06090F;
+  border-radius: var(--radius-md);
+  border: 2px solid rgba(56, 189, 248, 0.22);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 22px;
+  text-align: center;
+}
+
+/* Tela de Detalhe (Filmes, Séries e Novelas) */
+.detail-hero {
+  display: flex;
+  background: linear-gradient(135deg, rgba(19, 27, 46, 0.95) 0%, rgba(11, 15, 23, 0.98) 100%);
+  border: 1px solid rgba(56, 189, 248, 0.22);
+  border-radius: var(--radius-lg);
+  padding: 32px;
+  margin-bottom: 24px;
+}
+
+.detail-poster-box {
+  width: 220px;
+  height: 320px;
+  border-radius: var(--radius-md);
+  flex-shrink: 0;
+  margin-right: 32px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  font-size: 54px;
+  font-weight: 800;
+}
+
+.detail-info {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+
+.detail-meta-row {
+  display: flex;
+  align-items: center;
+  margin: 10px 0 16px 0;
+  font-size: 21px;
+  color: var(--text-secondary);
+}
+
+.detail-meta-tag {
+  background: var(--bg-elevated);
+  padding: 4px 14px;
+  border-radius: var(--radius-sm);
+  margin-right: 12px;
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.episode-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.episode-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 76px;
+  padding: 0 24px;
+  margin-bottom: 10px;
+  background: var(--bg-surface);
+  border-radius: var(--radius-md);
+}
+
+.ep-progress-bar {
+  width: 180px;
+  height: 10px;
+  background: rgba(255, 255, 255, 0.14);
+  border-radius: var(--radius-pill);
+  overflow: hidden;
+  margin-left: 20px;
+}
+
+.ep-progress-fill {
+  height: 100%;
+  background: var(--accent-cyan);
+}
+
+/* Tela Organizar Minha Lista (Seção 5.4) */
+.organizer-header-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: var(--bg-surface);
+  padding: 18px 26px;
+  border-radius: var(--radius-lg);
+  margin-bottom: 20px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.preview-counts-row {
+  display: flex;
+  align-items: center;
+}
+
+.preview-pill {
+  background: var(--bg-obsidian);
+  padding: 8px 18px;
+  border-radius: var(--radius-pill);
+  margin-right: 12px;
+  font-size: 20px;
+}
+
+.organizer-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 78px;
+  padding: 0 22px;
+  margin-bottom: 10px;
+  background: var(--bg-surface);
+  border-radius: var(--radius-md);
+}
+
+.org-group-info {
+  width: 440px;
+  overflow: hidden;
+}
+
+.org-group-name {
+  font-size: 24px;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.org-group-sub {
+  font-size: 18px;
+  color: var(--text-secondary);
+}
+
+.org-actions {
+  display: flex;
+  align-items: center;
+}
+
+/* Player OSD */
+#player-osd {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 1920px;
+  height: 1080px;
+  z-index: 50;
+  pointer-events: none;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: var(--safe-y) var(--safe-x);
+  background: linear-gradient(180deg, rgba(7,10,16,0.75) 0%, rgba(7,10,16,0) 25%, rgba(7,10,16,0) 60%, rgba(7,10,16,0.94) 100%);
+}
+#player-osd.Interactive { pointer-events: auto; }
+.osd-top-bar { display: flex; justify-content: space-between; align-items: flex-start; }
+.osd-channel-badge {
+  background: var(--bg-glass);
+  padding: 18px 28px;
+  border-radius: var(--radius-lg);
+  border-left: 6px solid var(--accent-cyan);
+}
+.osd-bottom-panel {
+  background: var(--bg-glass);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: var(--radius-lg);
+  padding: 24px 32px;
+}
+.osd-progress-row { display: flex; align-items: center; margin-bottom: 20px; }
+.osd-seek-bar {
+  flex: 1;
+  height: 14px;
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: var(--radius-pill);
+  margin-right: 24px;
+  overflow: hidden;
+}
+.osd-seek-fill { height: 100%; width: 0%; background: var(--accent-cyan); }
+.osd-controls-row { display: flex; align-items: center; justify-content: space-between; }
+.osd-btn-group { display: flex; align-items: center; }
+.osd-btn {
+  height: 58px;
+  padding: 0 22px;
+  margin-right: 12px;
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-primary);
+  font-size: 21px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+#diag-overlay {
+  position: absolute;
+  top: 190px;
+  left: 96px;
+  width: 580px;
+  background: rgba(7, 10, 16, 0.92);
+  border: 2px solid var(--accent-cyan);
+  border-radius: var(--radius-md);
+  padding: 20px;
+  font-family: var(--font-mono);
+  font-size: 20px;
+  z-index: 95;
+  color: #E2E8F0;
+}
+
+/* Fase 3: Banner Rotativo da Home e Fileiras Dinâmicas */
+.home-scroll-area {
+  height: 980px;
+  overflow: hidden;
+}
+
+.hero-banner {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  height: 290px;
+  border-radius: var(--radius-lg);
+  padding: 28px 36px;
+  margin-bottom: 22px;
+  border: 1px solid rgba(56, 189, 248, 0.30);
+  background: linear-gradient(125deg, #172554 0%, #0F172A 55%, #1E1B4B 100%);
+}
+
+.hero-top-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.hero-dots {
+  display: flex;
+  align-items: center;
+}
+
+.hero-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.25);
+  margin-left: 8px;
+}
+
+.hero-dot.is-active {
+  width: 28px;
+  border-radius: 99px;
+  background: var(--accent-cyan);
+}
+
+.home-row-block {
+  margin-bottom: 18px;
+}
+
+.home-row-title {
+  font-size: 23px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin-bottom: 10px;
+  display: flex;
+  align-items: center;
+}
+
+.home-row-strip {
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+}
+
+.mini-card {
+  width: 265px;
+  height: 118px;
+  background: var(--bg-surface);
+  border-radius: var(--radius-md);
+  padding: 14px 18px;
+  margin-right: 16px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  flex-shrink: 0;
+  border-left: 5px solid var(--accent-cyan);
+}
+
+.mini-card.kind-movie { border-left-color: #38BDF8; }
+.mini-card.kind-series { border-left-color: #A855F7; }
+.mini-card.kind-novela { border-left-color: #F59E0B; }
+.mini-card.kind-continue { border-left-color: #22C55E; }
+
+/* Fase 3: Busca e Teclado Virtual 10-foot */
+.search-layout {
+  display: flex;
+  height: 850px;
+}
+
+.keyboard-pane {
+  width: 580px;
+  background: var(--bg-surface);
+  border-radius: var(--radius-lg);
+  padding: 24px;
+  margin-right: 28px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+
+.search-query-box {
+  height: 64px;
+  background: var(--bg-obsidian);
+  border: 2px solid rgba(56, 189, 248, 0.45);
+  border-radius: var(--radius-md);
+  padding: 0 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 26px;
+  font-family: var(--font-mono);
+  color: var(--accent-cyan);
+  margin-bottom: 16px;
+}
+
+.kb-grid {
+  display: flex;
+  flex-wrap: wrap;
+}
+
+.kb-key {
+  width: 76px;
+  height: 52px;
+  margin-right: 10px;
+  margin-bottom: 8px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  font-size: 24px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.kb-key.kb-wide {
+  width: 162px;
+  font-size: 20px;
+}
+
+.search-results-pane {
+  flex: 1;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.search-section-group {
+  margin-bottom: 18px;
+}
+
+.search-section-header {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--accent-cyan);
+  margin-bottom: 8px;
+}
+
+/* Fase 3: Continuar Assistindo */
+.continue-row-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 92px;
+  padding: 0 24px;
+  margin-bottom: 12px;
+  background: var(--bg-surface);
+  border-radius: var(--radius-md);
+}
+
+/* Fase 4: Pareamento pelo Celular (Surubim Pairing + QR Code) */
+.pairing-hero-box {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: linear-gradient(130deg, rgba(15, 23, 42, 0.96) 0%, rgba(23, 37, 84, 0.92) 100%);
+  border: 2px solid rgba(56, 189, 248, 0.45);
+  border-radius: var(--radius-lg);
+  padding: 32px 42px;
+  margin-top: 14px;
+}
+
+.pairing-code-pill {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: 58px;
+  font-weight: 800;
+  letter-spacing: 14px;
+  color: #38BDF8;
+  background: rgba(11, 15, 23, 0.90);
+  border: 2px solid rgba(56, 189, 248, 0.55);
+  border-radius: var(--radius-md);
+  padding: 14px 28px;
+  margin: 12px 0;
+}
+
+.pairing-qr-card {
+  background: #FFFFFF;
+  padding: 18px;
+  border-radius: 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.55);
+}
+
+/* Fase 4: Tela de Ajustes (Settings) */
+.settings-grid {
+  display: flex;
+  flex-wrap: wrap;
+}
+
+.settings-card {
+  width: 740px;
+  background: var(--bg-surface);
+  border-radius: var(--radius-md);
+  padding: 20px 26px;
+  margin-right: 22px;
+  margin-bottom: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+
+.settings-card-title {
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--accent-cyan);
+  margin-bottom: 6px;
+}
+
+.settings-card-desc {
+  font-size: 19px;
+  color: var(--text-secondary);
+  margin-bottom: 14px;
+}
+
+/* Fase 4: Modal de PIN Parental 10-foot */
+#pin-modal-backdrop {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 1920px;
+  height: 1080px;
+  background: rgba(7, 10, 16, 0.88);
+  z-index: 950;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.pin-modal-box {
+  width: 660px;
+  background: var(--bg-surface);
+  border: 2px solid var(--accent-cyan);
+  border-radius: var(--radius-lg);
+  padding: 34px 40px;
+  text-align: center;
+}
+
+.pin-dots-display {
+  font-family: var(--font-mono);
+  font-size: 46px;
+  letter-spacing: 18px;
+  color: var(--accent-cyan);
+  background: var(--bg-obsidian);
+  border-radius: var(--radius-md);
+  padding: 12px 24px;
+  margin: 18px auto;
+  width: 320px;
+  border: 1px solid rgba(56, 189, 248, 0.35);
+}
+
+.pin-pad-grid {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  margin-top: 12px;
+}
+
+.pin-key {
+  width: 110px;
+  height: 60px;
+  margin: 6px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  font-size: 26px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Fase 4: Painel de Diagnóstico (RED -> GREEN -> YELLOW -> BLUE) */
+#diag-overlay {
+  position: fixed;
+  top: 54px;
+  right: 96px;
+  width: 620px;
+  background: rgba(11, 15, 23, 0.95);
+  border: 2px solid var(--accent-cyan);
+  border-radius: var(--radius-md);
+  padding: 20px 24px;
+  z-index: 980;
+  font-family: var(--font-mono);
+  font-size: 17px;
+  color: #E2E8F0;
+  box-shadow: 0 16px 42px rgba(0, 0, 0, 0.75);
+}
+
+/* Modo Leve Automático (Seção 2.3): desativa sombras pesadas e transições */
+body.lite-mode *,
+body.lite-mode *::before,
+body.lite-mode *::after {
+  transition: none !important;
+  animation: none !important;
+  box-shadow: none !important;
+}
+
+
+/* Fase 5: Boot Splash Screen 1080p & Ícones Vetoriais SVG */
+.boot-splash {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 1920px;
+  height: 1080px;
+  background: radial-gradient(circle at 50% 42%, #172554 0%, #0B0F17 68%);
+  z-index: 1200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 1;
+  transform: scale(1);
+  transition: opacity 320ms cubic-bezier(0.22, 1, 0.36, 1), transform 320ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.boot-splash.is-dismissed {
+  opacity: 0;
+  transform: scale(1.03);
+  pointer-events: none;
+}
+
+.boot-splash-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 48px 64px;
+  background: rgba(19, 27, 46, 0.78);
+  border: 2px solid rgba(56, 189, 248, 0.40);
+  border-radius: 24px;
+}
+
+.boot-emblem-ring {
+  width: 124px;
+  height: 124px;
+  border-radius: 50%;
+  padding: 6px;
+  background: linear-gradient(135deg, #38BDF8 0%, #F59E0B 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 22px;
+}
+
+.boot-emblem-core {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  background: #0B0F17;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 56px;
+  font-weight: 900;
+  color: #38BDF8;
+}
+
+.boot-title {
+  font-size: 54px;
+  font-weight: 800;
+  letter-spacing: 1px;
+  margin-bottom: 8px;
+}
+
+.boot-subtitle {
+  font-size: 23px;
+  color: var(--text-secondary);
+  margin-bottom: 26px;
+}
+
+.boot-progress-track {
+  width: 380px;
+  height: 8px;
+  background: rgba(255, 255, 255, 0.14);
+  border-radius: 99px;
+  overflow: hidden;
+  margin-bottom: 18px;
+}
+
+.boot-progress-bar {
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(90deg, #38BDF8 0%, #F59E0B 100%);
+}
+
+.boot-version-pill {
+  font-family: var(--font-mono);
+  font-size: 17px;
+  color: var(--accent-cyan);
+  background: rgba(11, 15, 23, 0.85);
+  padding: 6px 18px;
+  border-radius: 99px;
+  border: 1px solid rgba(56, 189, 248, 0.35);
+}
+
+.ui-icon {
+  width: 24px;
+  height: 24px;
+  display: inline-block;
+  vertical-align: middle;
+  flex-shrink: 0;
+}
+
+.empty-state-panel {
+  display: flex;
+  align-items: center;
+  background: linear-gradient(135deg, rgba(19, 27, 46, 0.88) 0%, rgba(11, 15, 23, 0.94) 100%);
+  border: 1px solid rgba(56, 189, 248, 0.25);
+  border-radius: var(--radius-lg);
+  padding: 36px 44px;
+  margin-top: 12px;
+}
+
+.empty-state-illustration {
+  width: 260px;
+  height: 150px;
+  margin-right: 38px;
+  flex-shrink: 0;
+}
