@@ -90,18 +90,18 @@
 </svg>
 
   <div id="app-root">
-    <!-- Boot Splash Screen 1080p (Fase 5) -->
+    <!-- Boot Splash Screen 1080p -->
     <div id="boot-splash" class="boot-splash">
       <div class="boot-splash-card">
         <div class="boot-emblem-ring">
           <div class="boot-emblem-core">L</div>
         </div>
         <h1 class="boot-title">Lumina TV</h1>
-        <p class="boot-subtitle">Cinema Obsidian · LG webOS 23 (2024) &amp; Pareamento Mobile Surubim</p>
+        <p class="boot-subtitle">Cinema Obsidian · Smart TV &amp; Pareamento Mobile Surubim</p>
         <div class="boot-progress-track">
           <div class="boot-progress-bar"></div>
         </div>
-        <div class="boot-version-pill">RELEASE FINAL · v1.5.1 · 60fps</div>
+        <div class="boot-version-pill">RELEASE v1.6.0 · 60fps</div>
       </div>
     </div>
 
@@ -117,8 +117,8 @@
     <div id="player-osd" class="hidden Interactive"></div>
 
     <div class="remote-hints">
-      <div class="hint-item"><span class="key-dot key-yellow"></span>Amarelo: Favoritar</div>
-      <div class="hint-item"><span class="key-dot key-blue"></span>CH+/CH-: Zapping</div>
+      <div class="hint-item"><span class="key-dot key-yellow"></span>Amarelo / Menu: Favoritar</div>
+      <div class="hint-item"><span class="key-dot key-blue"></span>CH+/CH-: Pular Página / Zapping</div>
       <div class="hint-item"><span class="key-dot key-red"></span>Voltar: Tela Anterior</div>
     </div>
 
@@ -128,7 +128,10 @@
         <div class="loading-status" id="loading-status">Preparando...</div>
         <div class="loading-track"><div class="loading-bar" id="loading-bar"></div></div>
         <div class="loading-percent" id="loading-percent"></div>
-        <div class="loading-hint">Aguarde, a lista está sendo preparada. Isso pode levar alguns instantes em listas grandes.</div>
+        <div class="loading-hint">Sua lista anterior permanece protegida caso você cancele ou ocorra falha de rede.</div>
+        <div>
+          <button id="btn-loading-cancel" class="btn btn-sm focusable" data-action="cancel-loading" data-scope="loading">✕ Cancelar Atualização</button>
+        </div>
       </div>
     </div>
 
@@ -139,7 +142,7 @@
     <div id="modal-backdrop" class="hidden">
       <div class="modal-card">
         <h2 class="modal-title">Sair do Lumina TV?</h2>
-        <p class="modal-body">Deseja fechar o aplicativo e retornar ao webOS?</p>
+        <p class="modal-body">Deseja fechar o aplicativo e retornar à tela inicial da TV?</p>
         <div class="modal-actions">
           <button id="btn-modal-cancel" class="btn focusable" data-action="modal-cancel" data-scope="modal">Continuar no App</button>
           <button id="btn-modal-exit" class="btn btn-primary focusable" data-action="modal-exit" data-scope="modal">Sair do App</button>
@@ -150,9 +153,11 @@
 
   <script src="js/vendor/hls.min.js"></script>
   <script src="js/vendor/mpegts.min.js"></script>
+  <script src="js/platform/platform.js"></script>
   <script src="js/core/log.js"></script>
   <script src="js/core/eventbus.js"></script>
   <script src="js/core/storage.js"></script>
+  <script src="js/core/settings.js"></script>
   <script src="js/core/store.js"></script>
   <script src="js/core/keys.js"></script>
   <script src="js/core/focus-engine.js"></script>

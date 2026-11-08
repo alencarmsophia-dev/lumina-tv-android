@@ -1,11 +1,15 @@
-name: Build Lumina TV APK (Fire TV & Android TV)
+name: Build & Release Lumina TV APK (v1.6.0)
 
 on:
   push:
     branches: [ "main", "master" ]
+    tags: [ "v*" ]
   pull_request:
     branches: [ "main", "master" ]
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   build-apk:
@@ -15,18 +19,37 @@ jobs:
       - name: Checkout do repositório
         uses: actions/checkout@v4
 
+      - name: Configurar Node.js 20 (para baixar vendor e rodar testes)
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
       - name: Configurar JDK 17 (Temurin)
         uses: actions/setup-java@v4
         with:
           distribution: "temurin"
           java-version: "17"
 
-      - name: Configurar Gradle
+      - name: Configurar Gradle 8.7
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.7"
 
-      - name: Sincronizar assets se ../lumina-tv/app existir no repositório
+      - name: Baixar bibliotecas vendor reais (hls.js 1.5.15 e mpegts.js 1.7.3)
+        run: |
+          if [ -f "../lumina-tv/tools/baixar-vendor.sh" ]; then
+            chmod +x ../lumina-tv/tools/baixar-vendor.sh
+            ../lumina-tv/tools/baixar-vendor.sh
+          elif [ -f "lumina-tv/tools/baixar-vendor.sh" ]; then
+            chmod +x lumina-tv/tools/baixar-vendor.sh
+            lumina-tv/tools/baixar-vendor.sh
+          else
+            mkdir -p app/src/main/assets/app/js/vendor
+            curl -fsSL "https://cdn.jsdelivr.net/npm/hls.js@1.5.15/dist/hls.min.js" -o app/src/main/assets/app/js/vendor/hls.min.js
+            curl -fsSL "https://cdn.jsdelivr.net/npm/mpegts.js@1.7.3/dist/mpegts.js" -o app/src/main/assets/app/js/vendor/mpegts.min.js
+          fi
+
+      - name: Sincronizar assets se lumina-tv/app existir no repositório
         run: |
           if [ -d "../lumina-tv/app" ]; then
             chmod +x scripts/sync-assets.sh
@@ -38,48 +61,40 @@ jobs:
             echo "Usando app/src/main/assets/app já versionado no repositório."
           fi
 
-      - name: Gerar keystore de release (se não houver secret configurado)
+      - name: Validar e configurar Keystore de Assinatura
         run: |
-          if [ -n "${{ secrets.KEYSTORE_BASE64 }}" ]; then
-            echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > lumina-release-key.jks
-            cat <<EOF > keystore.properties
+          if [ -z "${{ secrets.KEYSTORE_BASE64 }}" ] || [ -z "${{ secrets.KEYSTORE_PASSWORD }}" ] || [ -z "${{ secrets.KEY_ALIAS }}" ] || [ -z "${{ secrets.KEY_PASSWORD }}" ]; then
+            echo "::error::Secrets de assinatura ausentes! Configure KEYSTORE_BASE64, KEYSTORE_PASSWORD, KEY_ALIAS e KEY_PASSWORD em Settings -> Secrets and variables -> Actions para que o APK novo sempre instale por cima do antigo sem erro de assinatura."
+            exit 1
+          fi
+          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > lumina-release-key.jks
+          cat <<EOF > keystore.properties
           storeFile=../lumina-release-key.jks
           storePassword=${{ secrets.KEYSTORE_PASSWORD }}
           keyAlias=${{ secrets.KEY_ALIAS }}
           keyPassword=${{ secrets.KEY_PASSWORD }}
           EOF
-          else
-            keytool -genkeypair -v \
-              -keystore lumina-release-key.jks \
-              -alias lumina \
-              -keyalg RSA \
-              -keysize 2048 \
-              -validity 10000 \
-              -storepass lumina123 \
-              -keypass lumina123 \
-              -dname "CN=Lumina TV, OU=Media, O=Lumina, L=Surubim, ST=PE, C=BR"
-            cat <<EOF > keystore.properties
-          storeFile=../lumina-release-key.jks
-          storePassword=lumina123
-          keyAlias=lumina
-          keyPassword=lumina123
-          EOF
-          fi
 
       - name: Compilar APK Debug e Release Assinado
         run: |
           gradle assembleDebug assembleRelease --no-daemon
+          cp app/build/outputs/apk/release/app-release.apk app/build/outputs/apk/release/lumina-tv.apk
+          sha256sum app/build/outputs/apk/release/lumina-tv.apk > app/build/outputs/apk/release/lumina-tv.apk.sha256
 
       - name: Publicar APK de Release como Artefato
         uses: actions/upload-artifact@v4
         with:
-          name: lumina-tv-v1.5.1-firetv-release-apk
-          path: app/build/outputs/apk/release/*.apk
+          name: lumina-tv-v1.6.0-firetv-release-apk
+          path: |
+            app/build/outputs/apk/release/lumina-tv.apk
+            app/build/outputs/apk/release/lumina-tv.apk.sha256
           if-no-files-found: error
 
-      - name: Publicar APK de Debug como Artefato
-        uses: actions/upload-artifact@v4
+      - name: Publicar Release Automática no GitHub (quando enviar tag v*)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
         with:
-          name: lumina-tv-v1.5.1-firetv-debug-apk
-          path: app/build/outputs/apk/debug/*.apk
-          if-no-files-found: warn
+          files: |
+            app/build/outputs/apk/release/lumina-tv.apk
+            app/build/outputs/apk/release/lumina-tv.apk.sha256
+          generate_release_notes: true

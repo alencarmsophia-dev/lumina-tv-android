@@ -1,12 +1,13 @@
 :root {
   --bg-obsidian: #0B0F17;
   --bg-surface: #131B2E;
+  --bg-surface-hover: #19243D;
   --bg-elevated: #1E293B;
-  --bg-glass: rgba(19, 27, 46, 0.90);
+  --bg-glass: rgba(19, 27, 46, 0.92);
   --bg-overlay: rgba(7, 10, 16, 0.94);
 
   --accent-cyan: #38BDF8;
-  --accent-cyan-glow: rgba(56, 189, 248, 0.34);
+  --accent-cyan-glow: rgba(56, 189, 248, 0.36);
   --accent-amber: #F59E0B;
   --accent-danger: #EF4444;
   --accent-success: #22C55E;
@@ -18,26 +19,29 @@
   --font-sans: "LG Smart UI", "Noto Sans", "Segoe UI", Roboto, sans-serif;
   --font-mono: "JetBrains Mono", Consolas, monospace;
 
-  --fs-hero: 50px;
+  --fs-hero: 48px;
   --fs-h1: 38px;
-  --fs-h2: 30px;
-  --fs-body: 26px;
+  --fs-h2: 28px;
+  --fs-body: 24px;
   --fs-label: 22px;
   --fs-small: 19px;
 
   --safe-x: 84px;
-  --safe-y: 48px;
+  --safe-y: 44px;
   --radius-sm: 10px;
   --radius-md: 16px;
   --radius-lg: 24px;
   --radius-pill: 999px;
 
   --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
-  --dur-fast: 120ms;
-  --dur-normal: 200ms;
+  --dur-fast: 110ms;
+  --dur-normal: 180ms;
 }
 
-body.lite-mode * {
+body.lite-mode *,
+body.lite-mode *::before,
+body.lite-mode *::after {
   transition: none !important;
   animation: none !important;
+  box-shadow: none !important;
 }

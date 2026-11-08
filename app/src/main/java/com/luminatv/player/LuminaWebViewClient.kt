@@ -10,6 +10,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.ByteArrayInputStream
 import java.util.Locale
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 
 class LuminaWebViewClient(
@@ -18,15 +19,11 @@ class LuminaWebViewClient(
     private val onAppReady: () -> Unit
 ) : WebViewClient() {
 
+    data class StreamHeaderOverride(val userAgent: String, val referer: String)
+
     companion object {
         const val ASSET_HOST = "appassets.androidplatform.net"
         const val PAIRING_HOST = "surubim-player-pairing.vercel.app"
-
-        /**
-         * User-Agent configurável: por padrão usa o User-Agent nativo do WebView.
-         * Caso algum provedor IPTV exija um UA específico (ex.: "IPTVSmartersPlayer"),
-         * basta preencher CUSTOM_IPTV_USER_AGENT abaixo.
-         */
         const val CUSTOM_IPTV_USER_AGENT: String = ""
 
         private val DIRECT_VIDEO_EXTENSIONS = listOf(
@@ -34,14 +31,27 @@ class LuminaWebViewClient(
         )
     }
 
+    private val streamHeadersMap = ConcurrentHashMap<String, StreamHeaderOverride>()
+
     private val okHttpClient: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(20, TimeUnit.SECONDS)
-        .readTimeout(180, TimeUnit.SECONDS)
+        .readTimeout(120, TimeUnit.SECONDS)
         .writeTimeout(30, TimeUnit.SECONDS)
         .followRedirects(true)
         .followSslRedirects(true)
         .retryOnConnectionFailure(true)
         .build()
+
+    fun registerStreamHeaders(url: String, userAgent: String, referer: String) {
+        if (url.isBlank()) return
+        val baseKey = url.substringBefore("?")
+        streamHeadersMap[url] = StreamHeaderOverride(userAgent, referer)
+        streamHeadersMap[baseKey] = StreamHeaderOverride(userAgent, referer)
+    }
+
+    private fun findHeaderOverride(url: String): StreamHeaderOverride? {
+        return streamHeadersMap[url] ?: streamHeadersMap[url.substringBefore("?")]
+    }
 
     override fun shouldInterceptRequest(
         view: WebView?,
@@ -83,24 +93,28 @@ class LuminaWebViewClient(
             return null
         }
 
+        val urlStr = uri.toString()
+        val hasCustomStreamHeaders = findHeaderOverride(urlStr) != null
         val pathLower = (uri.encodedPath ?: "").lowercase(Locale.ROOT)
         val headers = req.requestHeaders ?: emptyMap()
         val secFetchDest = headers["Sec-Fetch-Dest"]?.lowercase(Locale.ROOT) ?: ""
         val secFetchMode = headers["Sec-Fetch-Mode"]?.lowercase(Locale.ROOT) ?: ""
         val hasRange = headers.keys.any { it.equals("Range", ignoreCase = true) }
 
-        // 5. Deixa a tag <video> nativa e imagens carregarem direto pelo pipeline C++ do Chromium
-        // sem passar pelo proxy de CORS quando não for uma requisição XHR/fetch (Sec-Fetch-Mode != cors).
-        if (secFetchDest == "video" || secFetchDest == "audio" || secFetchDest == "image") {
-            return null
-        }
-        if (DIRECT_VIDEO_EXTENSIONS.any { pathLower.endsWith(it) } && secFetchMode != "cors") {
-            return null
-        }
-        if ((pathLower.endsWith(".ts") || pathLower.endsWith(".m3u8")) &&
-            hasRange && secFetchMode == "no-cors"
-        ) {
-            return null
+        // 5. Se não houver #EXTVLCOPT customizado para esta URL, deixa a tag <video> e imagens
+        // carregarem direto pelo pipeline C++ do Chromium em modo no-cors.
+        if (!hasCustomStreamHeaders) {
+            if (secFetchDest == "video" || secFetchDest == "audio" || secFetchDest == "image") {
+                return null
+            }
+            if (DIRECT_VIDEO_EXTENSIONS.any { pathLower.endsWith(it) } && secFetchMode != "cors") {
+                return null
+            }
+            if ((pathLower.endsWith(".ts") || pathLower.endsWith(".m3u8")) &&
+                hasRange && secFetchMode == "no-cors"
+            ) {
+                return null
+            }
         }
 
         // 6. Proxy CORS via OkHttp com streaming direto de InputStream (sem carregar tudo na RAM)
@@ -138,13 +152,17 @@ class LuminaWebViewClient(
                 }
             }
 
-            val uaToUse = if (CUSTOM_IPTV_USER_AGENT.isNotBlank()) {
-                CUSTOM_IPTV_USER_AGENT
-            } else {
-                incomingHeaders["User-Agent"]?.takeIf { it.isNotBlank() } ?: defaultUserAgent
+            val overrideHeaders = findHeaderOverride(urlStr)
+            val uaToUse = when {
+                overrideHeaders != null && overrideHeaders.userAgent.isNotBlank() -> overrideHeaders.userAgent
+                CUSTOM_IPTV_USER_AGENT.isNotBlank() -> CUSTOM_IPTV_USER_AGENT
+                else -> incomingHeaders["User-Agent"]?.takeIf { it.isNotBlank() } ?: defaultUserAgent
             }
             if (uaToUse.isNotBlank()) {
                 reqBuilder.header("User-Agent", uaToUse)
+            }
+            if (overrideHeaders != null && overrideHeaders.referer.isNotBlank()) {
+                reqBuilder.header("Referer", overrideHeaders.referer)
             }
 
             val response = okHttpClient.newCall(reqBuilder.build()).execute()
@@ -185,7 +203,6 @@ class LuminaWebViewClient(
                 bodyStream
             )
         } catch (e: Exception) {
-            // Se falhar na rede, devolve null para que o próprio WebView reporte o erro ao XHR
             null
         }
     }
@@ -212,25 +229,22 @@ class LuminaWebViewClient(
 
     override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
         super.onPageStarted(view, url, favicon)
-        view?.let { injectViewportAndPlatformShim(it) }
+        view?.let { injectViewportShim(it) }
     }
 
     override fun onPageFinished(view: WebView?, url: String?) {
         super.onPageFinished(view, url)
         view?.let {
-            injectViewportAndPlatformShim(it)
+            injectViewportShim(it)
             onAppReady()
         }
     }
 
     /**
-     * Injetado por fora do app/ sem alterar nenhum arquivo em assets/app/:
-     * 1. Ajusta a escala 1920x1080 exatamente para qualquer resolução/densidade (720p, 1080p, 4K, mobile).
-     * 2. Conecta o evento 'app:confirm-exit' e os botões 'modal-cancel' / 'modal-exit' do modal já existente
-     *    no index.html para fechar o app no Android quando o usuário confirmar a saída.
-     * 3. Espelha o Backup JSON também em arquivo físico na pasta do app quando o usuário exporta.
+     * Ajusta a escala 1920x1080 exatamente para qualquer resolução/densidade (720p, 1080p, 4K, mobile)
+     * sem usar setInitialScale duplicado.
      */
-    private fun injectViewportAndPlatformShim(webView: WebView) {
+    private fun injectViewportShim(webView: WebView) {
         val js = """
         (function() {
           if (window.__luminaAndroidShimInstalled) {
@@ -272,58 +286,6 @@ class LuminaWebViewClient(
           window.__luminaFitViewport();
           setTimeout(window.__luminaFitViewport, 150);
           setTimeout(window.__luminaFitViewport, 600);
-
-          function wireExitModalAndBackup() {
-            if (!window.LuminaEventBus || !window.LuminaFocus) {
-              setTimeout(wireExitModalAndBackup, 100);
-              return;
-            }
-            if (window.__luminaExitModalWired) return;
-            window.__luminaExitModalWired = true;
-
-            function closeExitModal() {
-              var modal = document.getElementById('modal-backdrop');
-              if (modal) modal.classList.add('hidden');
-              window.LuminaFocus.setTrap(null);
-              var route = (window.LuminaRouter && window.LuminaRouter.getCurrent) ? window.LuminaRouter.getCurrent() : 'home';
-              window.LuminaFocus.restoreOrDefault(route);
-            }
-
-            window.LuminaEventBus.on('app:confirm-exit', function() {
-              var modal = document.getElementById('modal-backdrop');
-              if (!modal) return;
-              modal.classList.remove('hidden');
-              window.LuminaFocus.setTrap(modal);
-              var cancelBtn = document.getElementById('btn-modal-cancel');
-              if (cancelBtn) window.LuminaFocus.setFocus(cancelBtn, 'modal');
-            });
-
-            window.LuminaEventBus.on('modal:close', function() {
-              closeExitModal();
-            });
-
-            window.LuminaEventBus.on('focus:select', function(el) {
-              if (!el) return;
-              var action = el.getAttribute('data-action');
-              if (action === 'modal-cancel') {
-                closeExitModal();
-              } else if (action === 'modal-exit') {
-                closeExitModal();
-                if (window.LuminaAndroidBridge && window.LuminaAndroidBridge.exitApp) {
-                  window.LuminaAndroidBridge.exitApp();
-                }
-              } else if (action === 'backup-export') {
-                try {
-                  if (window.LuminaStore && window.LuminaAndroidBridge && window.LuminaAndroidBridge.saveBackupToDisk) {
-                    var bkp = window.LuminaStore.exportFullBackupJson();
-                    window.LuminaAndroidBridge.saveBackupToDisk('lumina-backup.json', bkp);
-                  }
-                } catch (e) {}
-              }
-            });
-          }
-
-          wireExitModalAndBackup();
         })();
         """.trimIndent()
 

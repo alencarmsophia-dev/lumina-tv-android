@@ -3,7 +3,7 @@
 
   var DEFAULT_PAIRING_BASE_URL = 'https://surubim-player-pairing.vercel.app';
 
-  // ── Gerador de QR Code ISO/IEC 18004 (Portado de surubim-player/src/utils/qrcode.ts para ES5) ──
+  // ── Gerador de QR Code ISO/IEC 18004 (ES5) ──
   var ECC_PER_BLOCK = [-1, 10, 16, 26, 18, 24, 16, 18, 22, 22, 26];
   var NUM_BLOCKS = [-1, 1, 1, 1, 2, 2, 4, 4, 4, 5, 5];
   var MAX_VERSION = 10;
@@ -293,7 +293,6 @@
     return decodeURIComponent(escape(s));
   }
 
-  // Gera o par de chaves da TV. cb(null) se a TV não tiver WebCrypto (usa cifra de reserva do servidor).
   function generateKeyPair(cb) {
     var c = getCrypto();
     if (!c) return cb(null);
@@ -306,7 +305,6 @@
       .then(function (pair) { cb(pair); }, function () { cb(null); });
   }
 
-  // Decifra { epk, iv, ct } enviado pelo celular usando a chave privada da TV.
   function decryptPayload(privateKey, msg, cb) {
     var c = getCrypto();
     if (!c || !privateKey) return cb(new Error('Esta TV não conseguiu decifrar a lista enviada. Gere um novo código.'));
@@ -343,8 +341,6 @@
     return 'Servidor de pareamento indisponível (erro ' + status + '). Tente novamente.';
   }
 
-  // Cria uma sessão REAL no servidor. Sem simulação: se falhar, devolve erro para a tela mostrar.
-  // onSessionReady(err, session) · onPayloadReceived(payload) · onError(err) (código expirou, etc.)
   function startSession(baseUrl, onSessionReady, onPayloadReceived, onError) {
     resetSession();
     var cleanBase = String(baseUrl || DEFAULT_PAIRING_BASE_URL).replace(/\/+$/, '');
@@ -364,17 +360,19 @@
         var j = null;
         try { j = JSON.parse(xhr.responseText); } catch (e) { j = null; }
         if (xhr.status >= 200 && xhr.status < 300 && j && j.pairId && j.code && j.pollToken) {
+          var ttlSec = j.expiresIn || 600;
           currentSession = {
             pairId: j.pairId,
             code: j.code,
             pollToken: j.pollToken,
-            expiresIn: j.expiresIn || 600,
+            expiresIn: ttlSec,
+            expiresAt: Date.now() + ttlSec * 1000,
             baseUrl: cleanBase,
             privateKey: pair ? pair.privateKey : null,
             mode: 'live'
           };
           if (onSessionReady) onSessionReady(null, currentSession);
-          schedulePoll(currentSession, onPayloadReceived, onError);
+          schedulePoll(currentSession, onPayloadReceived, onError, POLL_INTERVAL_MS);
           return;
         }
         fail(startErrorMessage(xhr.status, j && j.error));
@@ -385,13 +383,22 @@
     });
   }
 
-  function schedulePoll(session, onPayloadReceived, onError) {
+  function schedulePoll(session, onPayloadReceived, onError, delayMs) {
     stopPolling();
+    var wait = typeof delayMs === 'number' ? delayMs : POLL_INTERVAL_MS;
     activePollTimer = setTimeout(function () {
       if (!currentSession || currentSession.pairId !== session.pairId) return;
+      if (session.expiresAt && Date.now() > session.expiresAt) {
+        resetSession();
+        if (onError) onError(new Error('O código de pareamento expirou (10 minutos). Gere um novo código.'));
+        return;
+      }
+
       var xhr = new XMLHttpRequest();
-      var again = function (delay) {
-        if (currentSession && currentSession.pairId === session.pairId) schedulePoll(session, onPayloadReceived, onError);
+      var again = function (nextDelay) {
+        if (currentSession && currentSession.pairId === session.pairId) {
+          schedulePoll(session, onPayloadReceived, onError, nextDelay || POLL_INTERVAL_MS);
+        }
       };
       var abort = function (msg) {
         resetSession();
@@ -405,6 +412,10 @@
         try { j = JSON.parse(xhr.responseText); } catch (e) { j = null; }
         if (xhr.status === 404) return abort('O código expirou. Gere um novo código.');
         if (xhr.status === 403) return abort('Sessão de pareamento inválida. Gere um novo código.');
+        if (xhr.status === 429) {
+          // Limite de consultas atingido: desacelera o polling para 10s
+          return again(10000);
+        }
         if (xhr.status >= 200 && xhr.status < 300 && j && j.status === 'ready') {
           var keyOwner = session;
           resetSession();
@@ -420,12 +431,12 @@
           }
           return;
         }
-        again();
+        again(POLL_INTERVAL_MS);
       };
-      xhr.onerror = again;
-      xhr.ontimeout = again;
+      xhr.onerror = function () { again(5000); };
+      xhr.ontimeout = function () { again(4000); };
       xhr.send();
-    }, POLL_INTERVAL_MS);
+    }, wait);
   }
 
   function isHttpUrl(u) { return /^https?:\/\/\S+$/i.test(String(u || '')); }
@@ -439,7 +450,6 @@
     return h + ':' + p;
   }
 
-  // Aplica a lista recebida do celular ({ type: 'm3u' | 'xtream', ... }) e guarda a fonte para "Atualizar lista".
   function applyMobilePayload(payload, callback, onProgress) {
     function save(source) {
       global.LuminaStore.set('source', source);
@@ -451,9 +461,9 @@
     }
     if (payload.type === 'm3u') {
       if (!isHttpUrl(payload.url)) { if (callback) callback(new Error('Link M3U inválido.')); return; }
-      global.LuminaRepository.loadFromUrlOrLocalPath(payload.url, 'mobile-m3u', onProgress, function (err, items) {
+      global.LuminaRepository.loadFromUrlOrLocalPath(payload.url, 'mobile-m3u', onProgress, function (err, items, updateRecord) {
         if (!err) save({ type: 'm3u', name: payload.name || '', url: payload.url });
-        if (callback) callback(err, items, payload);
+        if (callback) callback(err, items, payload, updateRecord);
       });
     } else if (payload.type === 'xtream') {
       if (!isHttpUrl(payload.host) || !payload.username || !payload.password) {
@@ -465,12 +475,12 @@
         username: payload.username,
         password: payload.password
       };
-      global.LuminaRepository.loadFromXtream(creds, onProgress, function (err, items) {
+      global.LuminaRepository.loadFromXtream(creds, onProgress, function (err, items, updateRecord) {
         if (!err) {
           global.LuminaStore.set('xtreamCreds', creds);
           save({ type: 'xtream', name: payload.name || '', creds: creds });
         }
-        if (callback) callback(err, items, payload);
+        if (callback) callback(err, items, payload, updateRecord);
       });
     } else {
       if (callback) callback(new Error('Tipo de lista desconhecido: ' + payload.type));

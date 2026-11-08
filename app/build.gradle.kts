@@ -20,8 +20,8 @@ android {
         applicationId = "com.luminatv.player"
         minSdk = 22
         targetSdk = 34
-        versionCode = 1501
-        versionName = "1.5.1"
+        versionCode = 1600
+        versionName = "1.6.0"
     }
 
     signingConfigs {
@@ -71,7 +71,6 @@ android {
         jvmTarget = "17"
     }
 
-    // Empacota assets sem comprimir extensões de mídia/playlists
     androidResources {
         noCompress += listOf("m3u", "m3u8", "json", "svg", "png", "js", "css", "html")
     }
@@ -85,5 +84,6 @@ android {
 
 dependencies {
     implementation("androidx.webkit:webkit:1.11.0")
+    implementation("androidx.core:core:1.12.0")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
 }

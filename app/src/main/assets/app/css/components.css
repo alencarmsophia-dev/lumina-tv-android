@@ -1,11 +1,9 @@
 .side-nav {
-  /* Fora do fluxo: expandir/recolher nao redimensiona mais a tela inteira a cada quadro. */
   position: absolute;
   top: 0;
   left: 0;
   width: 108px;
   height: 1080px;
-  /* Fundo opaco (mesma cor do vidro sobre o fundo): a barra agora fica por cima do conteudo. */
   background: #121A2C;
   border-right: 1px solid rgba(255, 255, 255, 0.08);
   padding: var(--safe-y) 14px;
@@ -19,13 +17,14 @@
 
 .side-nav.is-expanded {
   width: 330px;
+  box-shadow: 16px 0 40px rgba(0, 0, 0, 0.65);
 }
 
 .brand-header {
   display: flex;
   align-items: center;
   padding: 6px 12px;
-  margin-bottom: 20px;
+  margin-bottom: 16px;
 }
 
 .brand-mark {
@@ -63,9 +62,9 @@
 .nav-item {
   display: flex;
   align-items: center;
-  height: 60px;
+  height: 54px;
   padding: 0 16px;
-  margin-bottom: 8px;
+  margin-bottom: 6px;
   border-radius: var(--radius-md);
   color: var(--text-secondary);
   font-size: var(--fs-label);
@@ -76,7 +75,8 @@
 
 .nav-item.is-active {
   color: var(--text-primary);
-  background: rgba(56, 189, 248, 0.16);
+  background: rgba(56, 189, 248, 0.18);
+  border-left: 4px solid var(--accent-cyan);
 }
 
 .nav-label {
@@ -93,8 +93,8 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  height: 62px;
-  padding: 0 28px;
+  height: 60px;
+  padding: 0 26px;
   border-radius: var(--radius-md);
   font-size: var(--fs-label);
   font-weight: 600;
@@ -115,7 +115,7 @@
 }
 
 .btn-sm {
-  height: 50px;
+  height: 48px;
   padding: 0 18px;
   font-size: 20px;
   border-radius: var(--radius-sm);
@@ -128,12 +128,12 @@
   color: var(--accent-cyan);
 }
 
-/* Chips de Categoria e Ordenação */
+/* Chips de Categoria, Ordenação e Barra A-Z */
 .filter-bar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 24px;
+  margin-bottom: 12px;
 }
 
 .chip-row {
@@ -144,26 +144,54 @@
 }
 
 .chip {
-  height: 52px;
-  padding: 0 22px;
+  height: 48px;
+  padding: 0 20px;
   border-radius: var(--radius-pill);
   background: var(--bg-surface);
   color: var(--text-secondary);
-  font-size: 21px;
+  font-size: 20px;
   font-weight: 600;
   display: inline-flex;
   align-items: center;
-  margin-right: 12px;
+  margin-right: 10px;
   white-space: nowrap;
 }
 
 .chip.is-selected {
   background: rgba(56, 189, 248, 0.22);
   color: var(--accent-cyan);
-  border-color: rgba(56, 189, 248, 0.45);
+  border-color: rgba(56, 189, 248, 0.55);
 }
 
-/* Grade 2:3 de Pôsteres (Filmes, Séries, Novelas) */
+.az-bar {
+  display: flex;
+  align-items: center;
+  margin-bottom: 16px;
+  flex-wrap: nowrap;
+  overflow: hidden;
+}
+
+.az-chip {
+  width: 46px;
+  height: 40px;
+  border-radius: 8px;
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  font-size: 18px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-right: 6px;
+  flex-shrink: 0;
+}
+
+.az-chip.is-selected {
+  background: var(--accent-cyan);
+  color: #06131F;
+}
+
+/* Grade Virtualizada 2:3 de Pôsteres (Filmes, Séries, Novelas) */
 .poster-grid {
   display: flex;
   flex-wrap: wrap;
@@ -171,26 +199,38 @@
 
 .poster-card {
   width: 248px;
-  height: 392px;
-  margin-right: 24px;
-  margin-bottom: 24px;
+  height: 368px;
+  margin-right: 22px;
+  margin-bottom: 20px;
   border-radius: var(--radius-md);
   background: var(--bg-surface);
   overflow: hidden;
   display: flex;
   flex-direction: column;
+  position: relative;
 }
 
 .poster-art {
   width: 100%;
-  height: 296px;
+  height: 274px;
   position: relative;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding: 20px;
+  padding: 18px;
   text-align: center;
+  overflow: hidden;
+}
+
+.poster-img {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  z-index: 1;
 }
 
 .poster-art.theme-movie {
@@ -207,44 +247,55 @@
 
 .poster-badge-top {
   position: absolute;
-  top: 12px;
-  left: 12px;
-  right: 12px;
+  top: 10px;
+  left: 10px;
+  right: 10px;
   display: flex;
   justify-content: space-between;
-  font-size: 17px;
+  font-size: 16px;
   font-weight: 700;
+  z-index: 3;
 }
 
 .badge-pill {
-  background: rgba(7, 10, 16, 0.82);
+  background: rgba(7, 10, 16, 0.86);
   padding: 4px 10px;
   border-radius: var(--radius-sm);
   color: var(--accent-cyan);
 }
 
+.badge-new {
+  background: #22C55E;
+  color: #052E16;
+  padding: 3px 9px;
+  border-radius: var(--radius-sm);
+  font-weight: 800;
+  font-size: 15px;
+}
+
 .badge-rating {
-  background: rgba(7, 10, 16, 0.82);
+  background: rgba(7, 10, 16, 0.86);
   padding: 4px 10px;
   border-radius: var(--radius-sm);
   color: var(--accent-amber);
 }
 
 .poster-monogram {
-  font-size: 46px;
+  font-size: 44px;
   font-weight: 800;
   color: rgba(255, 255, 255, 0.88);
   letter-spacing: 2px;
-  margin-bottom: 8px;
+  margin-bottom: 6px;
 }
 
 .poster-meta {
-  padding: 12px 14px;
+  padding: 10px 14px;
   flex: 1;
   display: flex;
   flex-direction: column;
   justify-content: space-between;
   background: var(--bg-surface);
+  z-index: 2;
 }
 
 .poster-title {
@@ -263,23 +314,39 @@
   text-overflow: ellipsis;
 }
 
+.poster-progress-strip {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 6px;
+  background: rgba(255, 255, 255, 0.16);
+  z-index: 4;
+}
+
+.poster-progress-fill {
+  height: 100%;
+  background: var(--accent-cyan);
+}
+
 /* Canais Ao Vivo */
 .channel-row-item {
   display: flex;
   align-items: center;
-  height: 82px;
-  padding: 0 20px;
+  height: 80px;
+  padding: 0 18px;
   margin-bottom: 10px;
   border-radius: var(--radius-md);
   background: var(--bg-surface);
 }
 
 .channel-num {
-  width: 64px;
+  width: 66px;
   font-family: var(--font-mono);
-  font-size: 25px;
+  font-size: 24px;
   font-weight: 700;
   color: var(--accent-cyan);
+  flex-shrink: 0;
 }
 
 .channel-logo-box {
@@ -290,46 +357,31 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  margin-right: 18px;
+  margin-right: 16px;
   font-weight: 700;
-  font-size: 21px;
+  font-size: 20px;
   color: var(--text-secondary);
   flex-shrink: 0;
+  overflow: hidden;
+  position: relative;
+}
+
+.channel-logo-img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #0B0F17;
 }
 
 .channel-info { flex: 1; overflow: hidden; }
-.channel-name { font-size: 26px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.channel-epg { font-size: 20px; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.fav-badge { color: var(--accent-amber); font-size: 26px; margin-left: 12px; }
-
-.tv-input {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  width: 100%;
-  height: 68px;
-  padding: 0 22px;
-  background: var(--bg-surface);
-  border-radius: var(--radius-md);
-  color: var(--text-primary);
-  font-size: var(--fs-label);
-  margin-bottom: 18px;
-}
-
-.tv-input-value {
-  color: var(--accent-cyan);
-  font-family: var(--font-mono);
-  font-size: 22px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 70%;
-}
+.channel-name { font-size: 24px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.channel-epg { font-size: 19px; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fav-badge { color: var(--accent-amber); font-size: 25px; margin-left: 10px; }
 
 .remote-hints {
   transition: opacity 0.35s ease;
   position: absolute;
-  bottom: 22px;
+  bottom: 20px;
   right: var(--safe-x);
   display: flex;
   align-items: center;
@@ -353,17 +405,17 @@
   position: absolute;
   top: var(--safe-y);
   right: var(--safe-x);
-  z-index: 90;
+  z-index: 1300;
 }
 
 .toast {
   background: var(--bg-elevated);
   border-left: 6px solid var(--accent-cyan);
-  padding: 18px 28px;
+  padding: 16px 26px;
   border-radius: var(--radius-md);
   font-size: var(--fs-label);
   margin-bottom: 10px;
-  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.5);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.55);
 }
 
 #modal-backdrop {
@@ -376,7 +428,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 80;
+  z-index: 990;
 }
 
 .modal-card {
@@ -411,4 +463,4 @@
 .loading-bar.is-indeterminate { width: 35%; animation: loading-slide 1.2s ease-in-out infinite alternate; }
 @keyframes loading-slide { from { margin-left: 0; } to { margin-left: 65%; } }
 .loading-percent { font-size: 24px; color: var(--text-secondary); margin-top: 14px; min-height: 30px; }
-.loading-hint { font-size: 20px; color: var(--text-secondary); margin-top: 26px; }
+.loading-hint { font-size: 20px; color: var(--text-secondary); margin-top: 22px; margin-bottom: 20px; }

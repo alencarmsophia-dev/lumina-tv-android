@@ -12,6 +12,7 @@
 
   function getFocusableList() {
     var root = trapContainer || document.getElementById('app-root') || document.body;
+    if (!root || !root.querySelectorAll) return [];
     var nodes = root.querySelectorAll('.focusable');
     var list = [];
     for (var i = 0; i < nodes.length; i++) {
@@ -27,12 +28,16 @@
     currentEl.classList.add('is-focused');
     var sc = scopeKey || currentEl.getAttribute('data-scope');
     if (sc && currentEl.id) memoryByScope[sc] = currentEl.id;
+    if (global.LuminaSettings && global.LuminaSettings.touchParentalActivity) {
+      global.LuminaSettings.touchParentalActivity();
+    }
     global.LuminaEventBus.emit('focus:changed', currentEl);
     return true;
   }
 
   function findNextSpatial(dir) {
     var root = trapContainer || document.getElementById('app-root') || document.body;
+    if (!root || !root.querySelectorAll) return null;
     var nodes = root.querySelectorAll('.focusable');
     if (!nodes.length) return null;
     if (!currentEl || !isVisible(currentEl)) {
@@ -42,7 +47,6 @@
       return null;
     }
 
-    // Uma unica leitura de layout por candidato (antes eram duas: isVisible + calculo).
     var curRect = currentEl.getBoundingClientRect();
     var cx = curRect.left + curRect.width / 2;
     var cy = curRect.top + curRect.height / 2;
@@ -75,6 +79,14 @@
   }
 
   function move(dir) {
+    // Permite que listas e grades virtualizadas rolem a janela antes do cálculo espacial
+    if (currentEl) {
+      var vListId = currentEl.getAttribute('data-vlist');
+      if (vListId && global.LuminaUI && typeof global.LuminaUI.handleVirtualBoundary === 'function') {
+        var handled = global.LuminaUI.handleVirtualBoundary(currentEl, dir);
+        if (handled) return true;
+      }
+    }
     var next = findNextSpatial(dir);
     if (next) return setFocus(next);
     return false;
@@ -82,11 +94,11 @@
 
   function restoreOrDefault(scopeKey, fallbackSelector) {
     var savedId = memoryByScope[scopeKey];
-    if (savedId) {
+    if (savedId && typeof document !== 'undefined') {
       var savedEl = document.getElementById(savedId);
       if (savedEl && setFocus(savedEl, scopeKey)) return;
     }
-    if (fallbackSelector) {
+    if (fallbackSelector && typeof document !== 'undefined') {
       var fb = document.querySelector(fallbackSelector);
       if (fb && setFocus(fb, scopeKey)) return;
     }
@@ -96,6 +108,9 @@
 
   function triggerOk() {
     if (!currentEl) return;
+    if (global.LuminaSettings && global.LuminaSettings.touchParentalActivity) {
+      global.LuminaSettings.touchParentalActivity();
+    }
     currentEl.classList.add('is-pressed');
     setTimeout(function () { if (currentEl) currentEl.classList.remove('is-pressed'); }, 120);
     global.LuminaEventBus.emit('focus:select', currentEl);
@@ -103,14 +118,16 @@
 
   global.LuminaFocus = {
     init: function () {
-      document.addEventListener('mouseover', function (e) {
-        var t = e.target.closest ? e.target.closest('.focusable') : null;
-        if (t && t !== currentEl && isVisible(t)) setFocus(t);
-      });
-      document.addEventListener('click', function (e) {
-        var t = e.target.closest ? e.target.closest('.focusable') : null;
-        if (t && isVisible(t)) { setFocus(t); triggerOk(); }
-      });
+      if (typeof document !== 'undefined') {
+        document.addEventListener('mouseover', function (e) {
+          var t = e.target && e.target.closest ? e.target.closest('.focusable') : null;
+          if (t && t !== currentEl && isVisible(t)) setFocus(t);
+        });
+        document.addEventListener('click', function (e) {
+          var t = e.target && e.target.closest ? e.target.closest('.focusable') : null;
+          if (t && isVisible(t)) { setFocus(t); triggerOk(); }
+        });
+      }
       global.LuminaEventBus.on('key:LEFT', function () { move('LEFT'); });
       global.LuminaEventBus.on('key:RIGHT', function () { move('RIGHT'); });
       global.LuminaEventBus.on('key:UP', function () { move('UP'); });
@@ -120,6 +137,9 @@
     setFocus: setFocus,
     restoreOrDefault: restoreOrDefault,
     setTrap: function (el) { trapContainer = el; },
-    getCurrent: function () { return currentEl; }
+    getCurrent: function () { return currentEl; },
+    saveScopeFocus: function (scopeKey, elId) {
+      if (scopeKey && elId) memoryByScope[scopeKey] = elId;
+    }
   };
 })(typeof window !== 'undefined' ? window : global);

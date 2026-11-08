@@ -3,14 +3,16 @@ package com.luminatv.player
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.Context
+import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.graphics.Color
 import android.media.AudioAttributes
 import android.media.AudioFocusRequest
 import android.media.AudioManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
-import android.util.DisplayMetrics
+import android.provider.Settings
 import android.view.Gravity
 import android.view.KeyEvent
 import android.view.View
@@ -27,17 +29,23 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
+import androidx.core.content.FileProvider
 import androidx.webkit.WebViewAssetLoader
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import org.json.JSONObject
 import java.io.File
-import kotlin.math.min
-import kotlin.math.roundToInt
+import java.io.FileOutputStream
+import java.security.MessageDigest
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 
 class MainActivity : Activity() {
 
     companion object {
         const val APP_ENTRY_URL = "https://appassets.androidplatform.net/assets/app/index.html"
-        private const val DESIGN_WIDTH = 1920.0
-        private const val DESIGN_HEIGHT = 1080.0
+        const val UPDATE_REPO = "alencarmsophia-dev/lumina-tv-android"
+        const val APP_VERSION_NAME = "1.6.0"
         private const val MIN_CHROMIUM_MAJOR = 50
     }
 
@@ -45,11 +53,21 @@ class MainActivity : Activity() {
     private lateinit var fullscreenVideoContainer: FrameLayout
     private lateinit var splashImageView: ImageView
     private var webView: WebView? = null
+    private var webViewClientInstance: LuminaWebViewClient? = null
     private var keyBridge: KeyBridge? = null
     private var chromeClient: LuminaChromeClient? = null
     private var audioManager: AudioManager? = null
     private var audioFocusRequest: Any? = null
     private var wasPlayingBeforePause: Boolean = false
+    private var isOutdatedWebViewScreenShown: Boolean = false
+    private val bgExecutor = Executors.newSingleThreadExecutor()
+
+    private val updateHttpClient: OkHttpClient = OkHttpClient.Builder()
+        .connectTimeout(20, TimeUnit.SECONDS)
+        .readTimeout(120, TimeUnit.SECONDS)
+        .followRedirects(true)
+        .followSslRedirects(true)
+        .build()
 
     private val audioFocusChangeListener = AudioManager.OnAudioFocusChangeListener { focusChange ->
         val wv = webView ?: return@OnAudioFocusChangeListener
@@ -126,7 +144,7 @@ class MainActivity : Activity() {
         }
 
         if (createdWebView == null) {
-            showOutdatedWebViewScreen("Componente WebView ausente no sistema.")
+            showOutdatedWebViewScreen("Componente WebView ausente no sistema. Pressione Voltar para sair.")
             setContentView(rootContainer)
             return
         }
@@ -135,7 +153,7 @@ class MainActivity : Activity() {
         val ua = createdWebView.settings.userAgentString ?: ""
         val majorVersion = extractChromiumMajor(ua)
         if (majorVersion in 1 until MIN_CHROMIUM_MAJOR) {
-            showOutdatedWebViewScreen("Versão detectada: Chromium $majorVersion (mínimo recomendado: $MIN_CHROMIUM_MAJOR).")
+            showOutdatedWebViewScreen("Versão detectada: Chromium $majorVersion (mínimo recomendado: $MIN_CHROMIUM_MAJOR). Pressione Voltar para sair.")
             setContentView(rootContainer)
             return
         }
@@ -160,7 +178,10 @@ class MainActivity : Activity() {
             val oldW = oldRight - oldLeft
             val oldH = oldBottom - oldTop
             if (w > 0 && h > 0 && (w != oldW || h != oldH)) {
-                updateWebViewScale(w, h)
+                createdWebView.evaluateJavascript(
+                    "if(window.__luminaFitViewport){window.__luminaFitViewport();}",
+                    null
+                )
             }
         }
 
@@ -205,11 +226,6 @@ class MainActivity : Activity() {
             setAcceptThirdPartyCookies(wv, true)
         }
 
-        val dm = DisplayMetrics()
-        @Suppress("DEPRECATION")
-        windowManager.defaultDisplay.getRealMetrics(dm)
-        updateWebViewScale(dm.widthPixels, dm.heightPixels)
-
         wv.addJavascriptInterface(LuminaAndroidBridge(), "LuminaAndroidBridge")
 
         val assetLoader = WebViewAssetLoader.Builder()
@@ -219,11 +235,13 @@ class MainActivity : Activity() {
             .build()
 
         val defaultUa = settings.userAgentString
-        wv.webViewClient = LuminaWebViewClient(
+        val client = LuminaWebViewClient(
             assetLoader = assetLoader,
             defaultUserAgent = defaultUa,
             onAppReady = { hideNativeSplash() }
         )
+        webViewClientInstance = client
+        wv.webViewClient = client
 
         val cc = LuminaChromeClient(
             activity = this,
@@ -237,24 +255,12 @@ class MainActivity : Activity() {
         wv.requestFocus()
     }
 
-    private fun updateWebViewScale(widthPx: Int, heightPx: Int) {
-        val wv = webView ?: return
-        if (widthPx <= 0 || heightPx <= 0) return
-        val scaleRatio = min(widthPx / DESIGN_WIDTH, heightPx / DESIGN_HEIGHT)
-        val initialScalePercent = (scaleRatio * 100.0).roundToInt().coerceAtLeast(1)
-        wv.setInitialScale(initialScalePercent)
-        wv.evaluateJavascript(
-            "if(window.__luminaFitViewport){window.__luminaFitViewport();}",
-            null
-        )
-    }
-
     private fun hideNativeSplash() {
         runOnUiThread {
             if (splashImageView.visibility == View.VISIBLE) {
                 splashImageView.animate()
                     .alpha(0f)
-                    .setDuration(280L)
+                    .setDuration(260L)
                     .withEndAction {
                         splashImageView.visibility = View.GONE
                     }
@@ -264,6 +270,7 @@ class MainActivity : Activity() {
     }
 
     private fun showOutdatedWebViewScreen(detail: String) {
+        isOutdatedWebViewScreenShown = true
         val layout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
@@ -304,6 +311,14 @@ class MainActivity : Activity() {
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        // Permite sair pelo botão Voltar caso esteja na tela de WebView desatualizado (Seção 4.12a)
+        if (isOutdatedWebViewScreenShown && event.keyCode == KeyEvent.KEYCODE_BACK) {
+            if (event.action == KeyEvent.ACTION_UP) {
+                finish()
+            }
+            return true
+        }
+
         val cc = chromeClient
         if (cc != null && cc.isInCustomView() && event.keyCode == KeyEvent.KEYCODE_BACK) {
             if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
@@ -321,7 +336,9 @@ class MainActivity : Activity() {
 
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
-        // O botão Voltar já é tratado por KeyBridge.dispatchKeyEvent -> JS keyCode 27
+        if (isOutdatedWebViewScreenShown) {
+            finish()
+        }
     }
 
     override fun onResume() {
@@ -348,15 +365,14 @@ class MainActivity : Activity() {
                 """
                 (function(){
                   try {
+                    var v = document.getElementById('main-video');
+                    if (v && !v.paused) {
+                      window.LuminaAndroidBridge.notifyWasPlaying(true);
+                      v.pause();
+                    }
                     if (window.LuminaPlayer && window.LuminaPlayer.getState() === 'PLAYING') {
                       window.LuminaAndroidBridge.notifyWasPlaying(true);
                       window.LuminaPlayer.togglePlayPause();
-                    } else {
-                      var v = document.getElementById('main-video');
-                      if (v && !v.paused) {
-                        window.LuminaAndroidBridge.notifyWasPlaying(true);
-                        v.pause();
-                      }
                     }
                   } catch (e) {}
                 })();
@@ -446,17 +462,44 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun isNewerSemanticVersion(latestTag: String, currentVer: String): Boolean {
+        val cleanLatest = latestTag.trim().removePrefix("v").removePrefix("V")
+        val cleanCur = currentVer.trim().removePrefix("v").removePrefix("V")
+        val lParts = cleanLatest.split(".").map { it.toIntOrNull() ?: 0 }
+        val cParts = cleanCur.split(".").map { it.toIntOrNull() ?: 0 }
+        val maxLen = maxOf(lParts.size, cParts.size)
+        for (i in 0 until maxLen) {
+            val lv = lParts.getOrElse(i) { 0 }
+            val cv = cParts.getOrElse(i) { 0 }
+            if (lv > cv) return true
+            if (lv < cv) return false
+        }
+        return false
+    }
+
+    private fun sendJsCallback(script: String) {
+        runOnUiThread {
+            webView?.evaluateJavascript(script, null)
+        }
+    }
+
     inner class LuminaAndroidBridge {
         @JavascriptInterface
+        fun getAppVersion(): String = APP_VERSION_NAME
+
+        @JavascriptInterface
         fun exitApp() {
-            runOnUiThread {
-                finish()
-            }
+            runOnUiThread { finish() }
         }
 
         @JavascriptInterface
         fun notifyWasPlaying(playing: Boolean) {
             wasPlayingBeforePause = playing
+        }
+
+        @JavascriptInterface
+        fun registerStreamHeaders(url: String, userAgent: String, referer: String) {
+            webViewClientInstance?.registerStreamHeaders(url, userAgent, referer)
         }
 
         @JavascriptInterface
@@ -469,7 +512,7 @@ class MainActivity : Activity() {
                 runOnUiThread {
                     Toast.makeText(
                         this@MainActivity,
-                        "Backup salvo em: ${outFile.absolutePath}",
+                        "Salvo em: ${outFile.absolutePath}",
                         Toast.LENGTH_SHORT
                     ).show()
                 }
@@ -488,6 +531,192 @@ class MainActivity : Activity() {
                 if (inFile.exists()) inFile.readText(Charsets.UTF_8) else ""
             } catch (e: Exception) {
                 ""
+            }
+        }
+
+        @JavascriptInterface
+        fun canInstallUnknownApps(): Boolean {
+            return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                packageManager.canRequestPackageInstalls()
+            } else {
+                true
+            }
+        }
+
+        @JavascriptInterface
+        fun openUnknownAppsSettings() {
+            runOnUiThread {
+                try {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        val intent = Intent(
+                            Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                            Uri.parse("package:$packageName")
+                        )
+                        startActivity(intent)
+                    } else {
+                        startActivity(Intent(Settings.ACTION_SECURITY_SETTINGS))
+                    }
+                } catch (e: Exception) {
+                    Toast.makeText(
+                        this@MainActivity,
+                        "Ative 'Apps de fontes desconhecidas' nas Configurações da Fire TV.",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+            }
+        }
+
+        /**
+         * B6.2: Consulta https://api.github.com/repos/alencarmsophia-dev/lumina-tv-android/releases/latest
+         * fora da thread principal e devolve o resultado para window.__luminaOnUpdateCheckResult(...)
+         */
+        @JavascriptInterface
+        fun checkForUpdate() {
+            bgExecutor.execute {
+                val resObj = JSONObject()
+                resObj.put("supported", true)
+                resObj.put("currentVersion", APP_VERSION_NAME)
+                try {
+                    val apiUrl = "https://api.github.com/repos/$UPDATE_REPO/releases/latest"
+                    val req = Request.Builder()
+                        .url(apiUrl)
+                        .header("Accept", "application/vnd.github+json")
+                        .header("User-Agent", "LuminaTV-Android/$APP_VERSION_NAME")
+                        .build()
+
+                    updateHttpClient.newCall(req).execute().use { resp ->
+                        if (!resp.isSuccessful) {
+                            resObj.put("hasUpdate", false)
+                            resObj.put("message", "Atualização automática indisponível (HTTP ${resp.code}).")
+                        } else {
+                            val bodyStr = resp.body?.string() ?: "{}"
+                            val json = JSONObject(bodyStr)
+                            val tagName = json.optString("tag_name", APP_VERSION_NAME)
+                            val bodyNotes = json.optString("body", "").take(260)
+                            val assets = json.optJSONArray("assets")
+                            var apkUrl = ""
+                            var apkSize = 0L
+                            var sha256Hash = ""
+
+                            if (assets != null) {
+                                for (i in 0 until assets.length()) {
+                                    val asset = assets.getJSONObject(i)
+                                    val name = asset.optString("name", "")
+                                    if (name == "lumina-tv.apk" || (apkUrl.isEmpty() && name.endsWith(".apk"))) {
+                                        apkUrl = asset.optString("browser_download_url", "")
+                                        apkSize = asset.optLong("size", 0L)
+                                    }
+                                }
+                            }
+                            val shaMatch = Regex("(?i)sha256[:\\s]+([a-f0-9]{64})").find(bodyNotes)
+                            if (shaMatch != null) {
+                                sha256Hash = shaMatch.groupValues[1].lowercase()
+                            }
+
+                            val hasNew = isNewerSemanticVersion(tagName, APP_VERSION_NAME) && apkUrl.isNotEmpty()
+                            resObj.put("hasUpdate", hasNew)
+                            resObj.put("latestVersion", tagName)
+                            resObj.put("releaseNotes", bodyNotes)
+                            resObj.put("downloadUrl", apkUrl)
+                            resObj.put("assetSize", apkSize)
+                            resObj.put("sha256", sha256Hash)
+                        }
+                    }
+                } catch (e: Exception) {
+                    resObj.put("hasUpdate", false)
+                    resObj.put("message", "Atualização automática indisponível no momento.")
+                }
+
+                val safeJson = JSONObject.quote(resObj.toString())
+                sendJsCallback("if(window.__luminaOnUpdateCheckResult){window.__luminaOnUpdateCheckResult($safeJson);}")
+            }
+        }
+
+        /**
+         * B6.2: Baixa o APK da Release para cacheDir/updates/lumina-tv.apk com barra de progresso,
+         * valida tamanho e SHA-256 (se informado) e abre o instalador do Android via FileProvider.
+         */
+        @JavascriptInterface
+        fun downloadAndInstallUpdate(downloadUrl: String, expectedSize: Long, expectedSha256: String) {
+            bgExecutor.execute {
+                try {
+                    val updatesDir = File(cacheDir, "updates")
+                    if (!updatesDir.exists()) updatesDir.mkdirs()
+                    val apkFile = File(updatesDir, "lumina-tv.apk")
+                    if (apkFile.exists()) apkFile.delete()
+
+                    val req = Request.Builder()
+                        .url(downloadUrl)
+                        .header("User-Agent", "LuminaTV-Android/$APP_VERSION_NAME")
+                        .build()
+
+                    updateHttpClient.newCall(req).execute().use { resp ->
+                        if (!resp.isSuccessful) {
+                            throw Exception("Falha no download do APK (HTTP ${resp.code})")
+                        }
+                        val body = resp.body ?: throw Exception("Resposta vazia ao baixar APK")
+                        val totalBytes = if (body.contentLength() > 0) body.contentLength() else expectedSize
+                        val digest = MessageDigest.getInstance("SHA-256")
+
+                        body.byteStream().use { input ->
+                            FileOutputStream(apkFile).use { output ->
+                                val buffer = ByteArray(16 * 1024)
+                                var downloaded = 0L
+                                var read: Int
+                                var lastReportedPct = -1
+                                while (input.read(buffer).also { read = it } != -1) {
+                                    output.write(buffer, 0, read)
+                                    digest.update(buffer, 0, read)
+                                    downloaded += read
+                                    if (totalBytes > 0) {
+                                        val pct = ((downloaded * 100L) / totalBytes).toInt().coerceIn(0, 100)
+                                        if (pct != lastReportedPct) {
+                                            lastReportedPct = pct
+                                            val dlMb = String.format("%.1f", downloaded / 1048576.0)
+                                            val totMb = String.format("%.1f", totalBytes / 1048576.0)
+                                            sendJsCallback("if(window.__luminaOnUpdateProgress){window.__luminaOnUpdateProgress($pct,'$dlMb','$totMb');}")
+                                        }
+                                    }
+                                }
+                                output.flush()
+                            }
+                        }
+
+                        if (expectedSize > 0 && apkFile.length() != expectedSize) {
+                            throw Exception("Tamanho do APK baixado (${apkFile.length()}) difere do esperado ($expectedSize).")
+                        }
+
+                        if (expectedSha256.isNotBlank()) {
+                            val actualSha = digest.digest().joinToString("") { "%02x".format(it) }
+                            if (!actualSha.equals(expectedSha256.trim(), ignoreCase = true)) {
+                                apkFile.delete()
+                                throw Exception("Verificação SHA-256 falhou! Arquivo corrompido.")
+                            }
+                        }
+                    }
+
+                    runOnUiThread {
+                        val apkUri = FileProvider.getUriForFile(
+                            this@MainActivity,
+                            "$packageName.fileprovider",
+                            apkFile
+                        )
+                        val installIntent = Intent(Intent.ACTION_VIEW).apply {
+                            setDataAndType(apkUri, "application/vnd.android.package-archive")
+                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        }
+                        startActivity(installIntent)
+                    }
+
+                    val okJson = JSONObject.quote(JSONObject().put("ok", true).toString())
+                    sendJsCallback("if(window.__luminaOnUpdateResult){window.__luminaOnUpdateResult($okJson);}")
+                } catch (e: Exception) {
+                    val errJson = JSONObject.quote(
+                        JSONObject().put("ok", false).put("error", e.message ?: "Erro ao atualizar APK").toString()
+                    )
+                    sendJsCallback("if(window.__luminaOnUpdateResult){window.__luminaOnUpdateResult($errJson);}")
+                }
             }
         }
     }
