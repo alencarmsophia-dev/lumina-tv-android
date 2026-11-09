@@ -6,6 +6,7 @@ import android.os.Build
 import android.util.Log
 import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebResourceRequest
+import android.webkit.WebResourceError
 import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.net.Uri
@@ -28,7 +29,8 @@ class LuminaWebViewClient(
     private val assetLoader: WebViewAssetLoader,
     private val defaultUserAgent: String,
     private val onAppReady: () -> Unit,
-    private val onWebViewCrash: () -> Unit
+    private val onWebViewCrash: () -> Unit,
+    private val onMainFrameLoadError: (String) -> Unit = {}
 ) : WebViewClient() {
 
     data class StreamHeaderOverride(val userAgent: String, val referer: String)
@@ -382,6 +384,43 @@ class LuminaWebViewClient(
             "if(window.__luminaFitViewport){window.__luminaFitViewport();}",
             null
         )
+    }
+
+    override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {
+        super.onReceivedError(view, request, error)
+        if (request?.isForMainFrame == true) {
+            val desc = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                "${error?.description} (código ${error?.errorCode})"
+            } else {
+                "Erro de carregamento"
+            }
+            Log.e(TAG, "Falha ao carregar página principal: $desc em ${request.url}")
+            onMainFrameLoadError("Falha ao carregar página principal:
+URL: ${request.url}
+Erro: $desc")
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    override fun onReceivedError(view: WebView?, errorCode: Int, description: String?, failingUrl: String?) {
+        super.onReceivedError(view, errorCode, description, failingUrl)
+        if (failingUrl == null || failingUrl == MainActivity.APP_ENTRY_URL || failingUrl.startsWith("https://$ASSET_HOST")) {
+            Log.e(TAG, "Falha ao carregar página principal (legado): $description (código $errorCode)")
+            onMainFrameLoadError("Falha ao carregar página principal (legado):
+URL: $failingUrl
+Erro: $description (código $errorCode)")
+        }
+    }
+
+    override fun onReceivedHttpError(view: WebView?, request: WebResourceRequest?, errorResponse: WebResourceResponse?) {
+        super.onReceivedHttpError(view, request, errorResponse)
+        if (request?.isForMainFrame == true) {
+            val status = errorResponse?.statusCode ?: 0
+            Log.e(TAG, "Erro HTTP na página principal: $status em ${request.url}")
+            onMainFrameLoadError("Erro HTTP ao carregar página principal:
+URL: ${request.url}
+Status: $status")
+        }
     }
 
     override fun onPageFinished(view: WebView?, url: String?) {

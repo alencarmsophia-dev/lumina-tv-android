@@ -113,11 +113,182 @@ class MainActivity : Activity() {
         }
     }
 
+    private var diagnosticView: View? = null
+
+    private fun setupCrashHandler() {
+        val previousHandler = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
+            try {
+                val crashFile = File(filesDir, "last_crash.txt")
+                val nowStr = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.ROOT).format(java.util.Date())
+                val sb = StringBuilder()
+                sb.append("=== LUMINA TV CRASH REPORT ===\n")
+                sb.append("Data: ").append(nowStr).append("\n")
+                sb.append("Versão: ").append(APP_VERSION_NAME).append(" (versionCode 2200)\n")
+                sb.append("Modelo: ").append(Build.MANUFACTURER).append(" ").append(Build.MODEL).append(" (").append(Build.DEVICE).append(")\n")
+                sb.append("Android: ").append(Build.VERSION.RELEASE).append(" (SDK ").append(Build.VERSION.SDK_INT).append(")\n")
+                sb.append("Thread: ").append(thread.name).append("\n")
+                sb.append("Stacktrace:\n")
+                sb.append(Log.getStackTraceString(throwable))
+                crashFile.writeText(sb.toString(), Charsets.UTF_8)
+            } catch (_: Exception) {}
+            previousHandler?.uncaughtException(thread, throwable)
+        }
+    }
+
+    private fun showNativeDiagnosticScreen(errorText: String) {
+        runOnUiThread {
+            hideNativeSplash()
+            if (diagnosticView != null) {
+                (diagnosticView?.parent as? ViewGroup)?.removeView(diagnosticView)
+                diagnosticView = null
+            }
+
+            val scrollView = ScrollView(this).apply {
+                layoutParams = FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT
+                )
+                setBackgroundColor(Color.parseColor("#0B0F17"))
+                isFillViewport = true
+            }
+
+            val layout = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(48, 48, 48, 48)
+                layoutParams = ViewGroup.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                )
+            }
+
+            val titleView = TextView(this).apply {
+                text = "Lumina TV — Diagnóstico de Abertura"
+                setTextColor(Color.parseColor("#38BDF8"))
+                textSize = 22f
+                typeface = Typeface.DEFAULT_BOLD
+                setPadding(0, 0, 0, 16)
+            }
+
+            val hintView = TextView(this).apply {
+                text = "O aplicativo não conseguiu exibir a tela principal. Os detalhes técnicos estão descritos abaixo para cópia e envio:"
+                setTextColor(Color.parseColor("#94A3B8"))
+                textSize = 14f
+                setPadding(0, 0, 0, 24)
+            }
+
+            val errorBox = TextView(this).apply {
+                text = errorText
+                setTextColor(Color.parseColor("#F1F5F9"))
+                setBackgroundColor(Color.parseColor("#131B2E"))
+                textSize = 13f
+                typeface = Typeface.MONOSPACE
+                setPadding(24, 24, 24, 24)
+                setTextIsSelectable(true)
+            }
+
+            val buttonsLayout = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(0, 32, 0, 0)
+            }
+
+            val copyButton = Button(this).apply {
+                text = "Copiar"
+                setTextColor(Color.parseColor("#0B0F17"))
+                setBackgroundColor(Color.parseColor("#E8B954"))
+                setPadding(32, 16, 32, 16)
+                setOnClickListener {
+                    try {
+                        val cm = getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                        val clip = ClipData.newPlainText("Lumina Crash Report", errorText)
+                        cm?.setPrimaryClip(clip)
+                        Toast.makeText(this@MainActivity, "Copiado para a área de transferência!", Toast.LENGTH_SHORT).show()
+                    } catch (e: Exception) {
+                        Toast.makeText(this@MainActivity, "Falha ao copiar: ${e.message}", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
+
+            val retryButton = Button(this).apply {
+                text = "Tentar de novo"
+                setTextColor(Color.WHITE)
+                setBackgroundColor(Color.parseColor("#232B3A"))
+                setPadding(32, 16, 32, 16)
+                setOnClickListener {
+                    try {
+                        val f = File(filesDir, "last_crash.txt")
+                        if (f.exists()) f.delete()
+                    } catch (_: Exception) {}
+                    hideNativeDiagnosticScreen()
+                    recreate()
+                }
+            }
+
+            val clearDataButton = Button(this).apply {
+                text = "Limpar dados e tentar"
+                setTextColor(Color.WHITE)
+                setBackgroundColor(Color.parseColor("#EF4444"))
+                setPadding(32, 16, 32, 16)
+                setOnClickListener {
+                    try {
+                        val f = File(filesDir, "last_crash.txt")
+                        if (f.exists()) f.delete()
+                        bootPrefs.edit().clear().apply()
+                        cacheDir.deleteRecursively()
+                        webView?.clearCache(true)
+                    } catch (_: Exception) {}
+                    hideNativeDiagnosticScreen()
+                    recreate()
+                }
+            }
+
+            val btnParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply {
+                setMargins(0, 0, 24, 0)
+            }
+
+            buttonsLayout.addView(copyButton, btnParams)
+            buttonsLayout.addView(retryButton, btnParams)
+            buttonsLayout.addView(clearDataButton, btnParams)
+
+            layout.addView(titleView)
+            layout.addView(hintView)
+            layout.addView(errorBox)
+            layout.addView(buttonsLayout)
+            scrollView.addView(layout)
+
+            diagnosticView = scrollView
+            rootContainer.addView(scrollView)
+        }
+    }
+
+    private fun hideNativeDiagnosticScreen() {
+        runOnUiThread {
+            diagnosticView?.let { v ->
+                (v.parent as? ViewGroup)?.removeView(v)
+                diagnosticView = null
+            }
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
+        setupCrashHandler()
         super.onCreate(savedInstanceState)
 
         bootPrefs = getSharedPreferences(BOOT_PREFS_NAME, Context.MODE_PRIVATE)
         recordBootStart()
+
+        val crashFile = File(filesDir, "last_crash.txt")
+        if (crashFile.exists()) {
+            val report = try { crashFile.readText(Charsets.UTF_8) } catch (_: Exception) { "" }
+            if (report.isNotBlank()) {
+                showNativeDiagnosticScreen("Falha na execução anterior do aplicativo:\n\n$report")
+            }
+        }
+
 
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         window.decorView.setBackgroundColor(Color.parseColor("#0B0F17"))
@@ -352,11 +523,20 @@ class MainActivity : Activity() {
             assetLoader = assetLoader,
             defaultUserAgent = defaultUa,
             onAppReady = {
+                Log.i("LuminaBoot", "LUMINA_APP_STABLE_READY: Tela principal carregada com sucesso.")
+                hideNativeDiagnosticScreen()
+                val f = File(filesDir, "last_crash.txt")
+                if (f.exists()) {
+                    try { f.delete() } catch (_: Exception) {}
+                }
                 wv.evaluateJavascript("if(window.__luminaFitViewport){window.__luminaFitViewport();}", null)
                 hideNativeSplash()
             },
             onWebViewCrash = {
                 handleWebViewRenderCrash()
+            },
+            onMainFrameLoadError = { errorDetail ->
+                showNativeDiagnosticScreen("Erro ao carregar tela inicial:\n\n$errorDetail")
             }
         )
         webViewClientInstance = client
@@ -611,6 +791,15 @@ class MainActivity : Activity() {
     }
 
     inner class LuminaAndroidBridge {
+        @JavascriptInterface
+        fun recordJsError(errorDetails: String) {
+            Log.e("LuminaJsError", errorDetails)
+            try {
+                val crashFile = File(filesDir, "last_crash.txt")
+                crashFile.writeText("=== LUMINA TV JS ERROR ===\n$errorDetails", Charsets.UTF_8)
+            } catch (_: Exception) {}
+        }
+
         @JavascriptInterface
         fun getAppVersion(): String = APP_VERSION_NAME
 

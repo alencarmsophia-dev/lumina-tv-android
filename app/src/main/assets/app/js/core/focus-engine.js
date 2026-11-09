@@ -155,7 +155,7 @@
     global.LuminaEventBus.emit('focus:select', currentEl);
   }
 
-  global.LuminaFocus = {
+  var focusApi = {
     init: function () {
       if (typeof document !== 'undefined') {
         document.addEventListener('mouseover', function (e) {
@@ -174,6 +174,25 @@
       global.LuminaEventBus.on('key:OK', triggerOk);
     },
     setFocus: setFocus,
+    focusElement: function (el) { return setFocus(el); },
+    setZone: function (zone) {
+      if (typeof document === 'undefined') return;
+      if (zone === 'content') {
+        trapContainer = null;
+        var list = getFocusableList();
+        if (list.length) setFocus(list[0]);
+      } else if (zone === 'modal') {
+        var m = document.getElementById('modal-backdrop') || document.getElementById('modal-root');
+        if (m) trapContainer = m;
+        var ml = getFocusableList();
+        if (ml.length) setFocus(ml[0]);
+      } else if (zone === 'sidebar') {
+        var s = document.getElementById('side-nav') || document.getElementById('sidebar-nav');
+        if (s) trapContainer = s;
+        var sl = getFocusableList();
+        if (sl.length) setFocus(sl[0]);
+      }
+    },
     restoreOrDefault: restoreOrDefault,
     setTrap: function (el) { trapContainer = el; },
     getCurrent: function () { return currentEl; },
@@ -181,4 +200,11 @@
       if (scopeKey && elId) memoryByScope[scopeKey] = elId;
     }
   };
+
+  global.LuminaFocus = focusApi;
+  global.FocusEngine = focusApi;
+  if (typeof window !== 'undefined') {
+    window.LuminaFocus = focusApi;
+    window.FocusEngine = focusApi;
+  }
 })(typeof window !== 'undefined' ? window : global);

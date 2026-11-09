@@ -1,6 +1,17 @@
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
+  <script>
+    window.onerror = function(msg, url, line, col, err) {
+      var details = "JS Error: " + msg + "\nURL: " + url + ":" + line + ":" + col + "\nStack: " + (err && err.stack ? err.stack : "");
+      console.error(details);
+      try {
+        if (window.LuminaAndroidBridge && window.LuminaAndroidBridge.recordJsError) {
+          window.LuminaAndroidBridge.recordJsError(details);
+        }
+      } catch (e) {}
+    };
+  </script>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>Lumina TV</title>
@@ -210,5 +221,15 @@
   <script src="js/ui/onscreen-keyboard.js"></script>
   <script src="js/ui/app-ui.js"></script>
   <script src="js/main.js"></script>
+  <script>
+    // Garantia de segurança de abertura: oculta a splash screen após 2,5s caso ocorra qualquer atraso
+    setTimeout(function() {
+      var splash = document.getElementById("boot-splash");
+      if (splash && !splash.classList.contains("is-dismissed")) {
+        splash.classList.add("is-dismissed");
+        setTimeout(function() { if (splash && splash.parentNode) splash.style.display = "none"; }, 250);
+      }
+    }, 2500);
+  </script>
 </body>
 </html>

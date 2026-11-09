@@ -307,11 +307,31 @@ var LuminaUI = (function () {
         probe.src = task.url;
     }
 
+    function dismissBootSplash() {
+        if (typeof document === 'undefined') return;
+        var splash = document.getElementById('boot-splash');
+        if (splash && !splash.classList.contains('is-dismissed')) {
+            splash.classList.remove('is-animating');
+            splash.classList.add('is-dismissed');
+            setTimeout(function () {
+                if (splash && splash.parentNode) splash.style.display = 'none';
+            }, 250);
+        }
+    }
+
+    function isBootSplashVisible() {
+        if (typeof document === 'undefined') return false;
+        var splash = document.getElementById('boot-splash');
+        return !!(splash && !splash.classList.contains('is-dismissed') && splash.style.display !== 'none');
+    }
+
     function init() {
-        elSidebar = document.getElementById('sidebar-nav');
-        elMain = document.getElementById('screen-container');
-        elModalRoot = document.getElementById('modal-root');
-        elToastRoot = document.getElementById('toast-root');
+        elSidebar = document.getElementById('side-nav') || document.getElementById('sidebar-nav');
+        elMain = document.getElementById('screen-viewport') || document.getElementById('screen-container');
+        elModalRoot = document.getElementById('modal-backdrop') || document.getElementById('modal-root');
+        elToastRoot = document.getElementById('toast-container') || document.getElementById('toast-root');
+
+        dismissBootSplash();
 
         renderSidebar();
 
@@ -462,6 +482,7 @@ var LuminaUI = (function () {
     }
 
     function renderRoute(route, params) {
+        dismissBootSplash();
         if (!elMain) return;
         cancelOffscreenImageLoads();
 
@@ -1860,11 +1881,19 @@ var LuminaUI = (function () {
         getGreetingByHour: getGreetingByHour,
         computeIntroTimeline: computeIntroTimeline,
         computeMonogramData: computeMonogramData,
+        dismissBootSplash: dismissBootSplash,
+        isBootSplashVisible: isBootSplashVisible,
         getTabState: function (section) { return tabStates[section] || null; },
         resetAllTabCaches: resetAllTabCaches
     };
 })();
 
+if (typeof global !== 'undefined') {
+    global.LuminaUI = LuminaUI;
+}
+if (typeof window !== 'undefined') {
+    window.LuminaUI = LuminaUI;
+}
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = LuminaUI;
 }

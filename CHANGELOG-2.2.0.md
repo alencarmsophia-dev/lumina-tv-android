@@ -35,3 +35,4 @@
 - Correção A3 (Segurança): restrição de certificados de usuário para `<debug-overrides>` em `network_security_config.xml`.
 - Correção A4 (Aparelhos Fracos): buffer do ExoPlayer ajustado dinamicamente para 16 MB em dispositivos com pouca memória (`isLowRamDevice()` ou `memoryClass <= 96`).
 - Implementação da bateria de testes automatizados com matriz de emuladores no GitHub Actions (`.github/workflows/android-tests.yml`), ferramentas de teste sintético (`tools/gerar-lista-teste.py`, `tools/servidor-teste.py`, `tools/smoke.sh`), `RELATORIO-TESTES.md` e `ROTEIRO-MANUAL.md`.
+- Diagnóstico de abertura e correções: tela nativa de diagnóstico com captura de crashes, resolução de IDs de container, implementação de LuminaRouter.onChange, FocusEngine e fechamento da splash screen.

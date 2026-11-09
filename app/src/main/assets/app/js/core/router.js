@@ -2,7 +2,17 @@
   'use strict';
   var stack = ['home'];
 
-  function navigate(route) {
+  var currentParams = {};
+  var routeListeners = [];
+
+  function notifyRouteListeners(route) {
+    for (var i = 0; i < routeListeners.length; i++) {
+      try { routeListeners[i]({ route: route, params: currentParams }); } catch (e) {}
+    }
+  }
+
+  function navigate(route, params) {
+    currentParams = params || {};
     // Parte 7.9: Qualquer atalho antigo para a rota universal 'search' redireciona para o Início
     var targetRoute = (route === 'search') ? 'home' : route;
     var current = stack[stack.length - 1];
@@ -22,6 +32,7 @@
     global.LuminaStore.set('navDirection', 'forward');
     global.LuminaStore.set('currentRoute', targetRoute);
     global.LuminaEventBus.emit('route:changed', targetRoute);
+    notifyRouteListeners(targetRoute);
   }
 
   function back() {
@@ -115,10 +126,12 @@
       global.LuminaStore.set('navDirection', 'back');
       global.LuminaStore.set('currentRoute', target);
       global.LuminaEventBus.emit('route:changed', target);
+      notifyRouteListeners(target);
     } else if (current !== 'home') {
       stack = ['home'];
       global.LuminaStore.set('currentRoute', 'home');
       global.LuminaEventBus.emit('route:changed', 'home');
+      notifyRouteListeners('home');
     } else {
       global.LuminaEventBus.emit('app:confirm-exit');
     }
@@ -129,6 +142,14 @@
     navigate: navigate,
     back: back,
     getCurrent: function () { return stack[stack.length - 1]; },
-    getStack: function () { return stack.slice(); }
+    getCurrentRoute: function () { return stack[stack.length - 1]; },
+    getParams: function () { return currentParams; },
+    getStack: function () { return stack.slice(); },
+    onChange: function (fn) {
+      if (typeof fn === 'function') {
+        routeListeners.push(fn);
+        fn({ route: stack[stack.length - 1], params: currentParams });
+      }
+    }
   };
 })(typeof window !== 'undefined' ? window : global);
