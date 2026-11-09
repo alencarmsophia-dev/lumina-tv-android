@@ -7,7 +7,7 @@
     : '';
 
   var state = {
-    appVersion: '1.6.0',
+    appVersion: '2.0.0',
     currentRoute: 'home',
     searchQuery: '',
     searchHistory: [],
@@ -15,10 +15,10 @@
     pairingBaseUrl: 'https://surubim-player-pairing.vercel.app',
     pairingStep: 'cards', // 'cards' | 'phone-qr'
     xtreamCreds: null,
-    accountInfo: null, // { status, expDate, daysRemaining, isExpiringSoon, activeCons, maxConnections, allowedOutputFormats }
-    source: null, // { type: 'm3u'|'xtream', name, url | creds, etag, lastModified }
-    lastUpdateInfo: null, // { updatedAt, stats, diff, stepReport }
-    recentAddedIds: {}, // mapa de IDs adicionados na última atualização
+    accountInfo: null,
+    source: null,
+    lastUpdateInfo: null,
+    recentAddedIds: {},
     pairingError: null,
     parental: {
       enabled: true,
@@ -65,7 +65,11 @@
     watchProgress: {},
     aspectRatioByContent: {},
     defaultAspectRatio: 'auto',
+    screenSafeMargin: 0,
     performanceMode: 'auto', // 'auto' | 'normal' | 'lite'
+    motionLevel: 'Completas', // 'Completas' | 'Reduzidas' | 'Desligadas'
+    navDirection: 'forward', // 'forward' | 'back'
+    sleepTimerMinutes: 0,
     autoUpdateHours: 12,
     preferOutputFormat: 'auto',
     includeCredentialsInBackup: false,
@@ -74,7 +78,7 @@
     currentChannelId: null,
     playerState: 'IDLE',
     nextEpisodePrompt: null,
-    appUpdateInfo: null, // { supported, hasUpdate, latestVersion, releaseNotes, downloadUrl, assetSize, sha256 }
+    appUpdateInfo: null,
     appUpdateProgress: null,
     diagnosticsVisible: false,
     diagnostics: {
@@ -89,11 +93,24 @@
     }
   };
 
+  function applyMotionClasses() {
+    if (typeof document === 'undefined' || !document.body) return;
+    document.body.classList.remove('motion-reduced', 'motion-off');
+    var m = state.motionLevel || 'Completas';
+    var perfDowngraded = !!(global.__luminaPerf && global.__luminaPerf.downgraded);
+    if (m === 'Desligadas') {
+      document.body.classList.add('motion-off');
+    } else if (m === 'Reduzidas' || state.liteModeActive || perfDowngraded) {
+      document.body.classList.add('motion-reduced');
+    }
+  }
+
   function applyLiteModeClass(isLite) {
     state.liteModeActive = !!isLite;
     if (typeof document !== 'undefined' && document.body) {
       if (state.liteModeActive) document.body.classList.add('lite-mode');
       else document.body.classList.remove('lite-mode');
+      applyMotionClasses();
     }
   }
 
@@ -101,8 +118,10 @@
     if (!global.LuminaSettings || !global.LuminaSettings.saveCurrentSettings) return;
     if (
       key === 'performanceMode' ||
+      key === 'motionLevel' ||
       key === 'defaultAspectRatio' ||
       key === 'aspectRatioByContent' ||
+      key === 'screenSafeMargin' ||
       key === 'parental' ||
       key === 'tmdb' ||
       key === 'autoUpdateHours' ||
@@ -119,6 +138,9 @@
     getState: function () { return state; },
     set: function (key, val) {
       state[key] = val;
+      if (key === 'motionLevel') {
+        applyMotionClasses();
+      }
       if (key === 'performanceMode') {
         if (val === 'lite') applyLiteModeClass(true);
         else if (val === 'normal') applyLiteModeClass(false);
@@ -176,7 +198,7 @@
         }
       }
       var backup = {
-        version: '1.6.0',
+        version: '2.0.0',
         exportedAt: new Date().toISOString(),
         includesCredentials: withSecrets,
         pairingBaseUrl: state.pairingBaseUrl,
@@ -187,6 +209,7 @@
         watchProgress: state.watchProgress,
         defaultAspectRatio: state.defaultAspectRatio,
         aspectRatioByContent: state.aspectRatioByContent,
+        screenSafeMargin: state.screenSafeMargin,
         performanceMode: state.performanceMode,
         autoUpdateHours: state.autoUpdateHours,
         parental: {
@@ -226,6 +249,12 @@
       }
       if (data.defaultAspectRatio) state.defaultAspectRatio = data.defaultAspectRatio;
       if (data.aspectRatioByContent) state.aspectRatioByContent = data.aspectRatioByContent;
+      if (typeof data.screenSafeMargin === 'number') {
+        state.screenSafeMargin = global.LuminaSettings
+          ? global.LuminaSettings.sanitizeSafeMargin(data.screenSafeMargin)
+          : data.screenSafeMargin;
+        if (typeof global.__luminaFitViewport === 'function') global.__luminaFitViewport();
+      }
       if (data.performanceMode) {
         state.performanceMode = data.performanceMode;
         applyLiteModeClass(data.performanceMode === 'lite');

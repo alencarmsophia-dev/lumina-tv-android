@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <title>Lumina TV v1.7.0 — Propostas de Identidade Visual (A, B, C)</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: #0B0F17;
+      color: #F8FAFC;
+      font-family: Inter, 'Noto Sans', Roboto, sans-serif;
+      padding: 44px 64px;
+      line-height: 1.35;
+    }
+    h1 { font-size: 40px; font-weight: 800; margin-bottom: 8px; }
+    p.lead { font-size: 22px; color: #94A3B8; margin-bottom: 32px; }
+    .proposals-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 28px;
+    }
+    .proposal-card {
+      background: #131B2E;
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 24px;
+      padding: 28px;
+    }
+    .proposal-card.is-default {
+      border: 3px solid #38BDF8;
+    }
+    .proposal-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+    .proposal-title { font-size: 26px; font-weight: 800; }
+    .badge-default {
+      background: #22C55E;
+      color: #052E16;
+      font-size: 18px;
+      font-weight: 800;
+      padding: 4px 12px;
+      border-radius: 8px;
+    }
+    .proposal-desc { font-size: 20px; color: #94A3B8; margin-bottom: 20px; }
+    .surface-box {
+      border-radius: 16px;
+      padding: 24px;
+      margin-bottom: 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-around;
+      border: 1px solid rgba(255,255,255,0.10);
+    }
+    .surface-dark { background: #0B0F17; color: #F8FAFC; }
+    .surface-light { background: #F8FAFC; color: #0B0F17; }
+    .size-col {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 10px;
+    }
+    .size-lbl { font-size: 18px; font-weight: 700; opacity: 0.75; }
+  </style>
+</head>
+<body>
+  <h1>Lumina TV v1.7.0 — Propostas de Identidade Visual</h1>
+  <p class="lead">Comparativo das 3 propostas (A, B, C) em 48px, 96px e 192px sobre fundo escuro (#0B0F17) e claro (#F8FAFC). Troque em <code>BRAND_LOGO</code> em <code>app/js/ui/app-ui.js</code>.</p>
+
+  <div class="proposals-grid">
+    <!-- PROPOSTA A (PADRÃO) -->
+    <div class="proposal-card is-default">
+      <div class="proposal-head">
+        <span class="proposal-title">Proposta A · Prisma Lumina</span>
+        <span class="badge-default">PADRÃO ATIVO</span>
+      </div>
+      <p class="proposal-desc">Haste em L ciano/azul combinada ao prisma de Play branco puro dentro de moldura de tela 10-foot (5 formas geométricas).</p>
+      <div class="surface-box surface-dark">
+        <div class="size-col">
+          <svg width="48" height="48" viewBox="0 0 128 128"><rect width="128" height="128" rx="32" fill="#0284C7"/><rect x="14" y="14" width="100" height="100" rx="22" fill="#0B0F17"/><rect x="30" y="28" width="20" height="72" rx="6" fill="#38BDF8"/><rect x="30" y="80" width="54" height="20" rx="6" fill="#0284C7"/><polygon points="58,32 98,54 58,76" fill="#F8FAFC"/></svg>
+          <span class="size-lbl">48px</span>
+        </div>
+        <div class="size-col">
+          <svg width="96" height="96" viewBox="0 0 128 128"><rect width="128" height="128" rx="32" fill="#0284C7"/><rect x="14" y="14" width="100" height="100" rx="22" fill="#0B0F17"/><rect x="30" y="28" width="20" height="72" rx="6" fill="#38BDF8"/><rect x="30" y="80" width="54" height="20" rx="6" fill="#0284C7"/><polygon points="58,32 98,54 58,76" fill="#F8FAFC"/></svg>
+          <span class="size-lbl">96px</span>
+        </div>
+        <div class="size-col">
+          <svg width="192" height="192" viewBox="0 0 128 128"><rect width="128" height="128" rx="32" fill="#0284C7"/><rect x="14" y="14" width="100" height="100" rx="22" fill="#0B0F17"/><rect x="30" y="28" width="20" height="72" rx="6" fill="#38BDF8"/><rect x="30" y="80" width="54" height="20" rx="6" fill="#0284C7"/><polygon points="58,32 98,54 58,76" fill="#F8FAFC"/></svg>
+          <span class="size-lbl">192px</span>
+        </div>
+      </div>
+      <div class="surface-box surface-light">
+        <div class="size-col">
+          <svg width="48" height="48" viewBox="0 0 128 128"><rect width="128" height="128" rx="32" fill="#0284C7"/><rect x="14" y="14" width="100" height="100" rx="22" fill="#0B0F17"/><rect x="30" y="28" width="20" height="72" rx="6" fill="#38BDF8"/><rect x="30" y="80" width="54" height="20" rx="6" fill="#0284C7"/><polygon points="58,32 98,54 58,76" fill="#F8FAFC"/></svg>
+          <span class="size-lbl">48px</span>
+        </div>
+        <div class="size-col">
+          <svg width="96" height="96" viewBox="0 0 128 128"><rect width="128" height="128" rx="32" fill="#0284C7"/><rect x="14" y="14" width="100" height="100" rx="22" fill="#0B0F17"/><rect x="30" y="28" width="20" height="72" rx="6" fill="#38BDF8"/><rect x="30" y="80" width="54" height="20" rx="6" fill="#0284C7"/><polygon points="58,32 98,54 58,76" fill="#F8FAFC"/></svg>
+          <span class="size-lbl">96px</span>
+        </div>
+        <div class="size-col">
+          <svg width="192" height="192" viewBox="0 0 128 128"><rect width="128" height="128" rx="32" fill="#0284C7"/><rect x="14" y="14" width="100" height="100" rx="22" fill="#0B0F17"/><rect x="30" y="28" width="20" height="72" rx="6" fill="#38BDF8"/><rect x="30" y="80" width="54" height="20" rx="6" fill="#0284C7"/><polygon points="58,32 98,54 58,76" fill="#F8FAFC"/></svg>
+          <span class="size-lbl">192px</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- PROPOSTA B -->
+    <div class="proposal-card">
+      <div class="proposal-head">
+        <span class="proposal-title">Proposta B · Janela Cinema</span>
+      </div>
+      <p class="proposal-desc">Tela panorâmica com feixe angular ciano/azul e botão Play centralizado (4 formas geométricas).</p>
+      <div class="surface-box surface-dark">
+        <div class="size-col">
+          <svg width="48" height="48" viewBox="0 0 128 128"><rect width="128" height="128" rx="32" fill="#121A2C"/><rect x="16" y="24" width="96" height="68" rx="14" fill="#0284C7"/><polygon points="54,42 84,58 54,74" fill="#38BDF8"/><rect x="40" y="100" width="48" height="8" rx="4" fill="#38BDF8"/></svg>
+          <span class="size-lbl">48px</span>
+        </div>
+        <div class="size-col">
+          <svg width="96" height="96" viewBox="0 0 128 128"><rect width="128" height="128" rx="32" fill="#121A2C"/><rect x="16" y="24" width="96" height="68" rx="14" fill="#0284C7"/><polygon points="54,42 84,58 54,74" fill="#38BDF8"/><rect x="40" y="100" width="48" height="8" rx="4" fill="#38BDF8"/></svg>
+          <span class="size-lbl">96px</span>
+        </div>
+        <div class="size-col">
+          <svg width="192" height="192" viewBox="0 0 128 128"><rect width="128" height="128" rx="32" fill="#121A2C"/><rect x="16" y="24" width="96" height="68" rx="14" fill="#0284C7"/><polygon points="54,42 84,58 54,74" fill="#38BDF8"/><rect x="40" y="100" width="48" height="8" rx="4" fill="#38BDF8"/></svg>
+          <span class="size-lbl">192px</span>
+        </div>
+      </div>
+      <div class="surface-box surface-light">
+        <div class="size-col">
+          <svg width="48" height="48" viewBox="0 0 128 128"><rect width="128" height="128" rx="32" fill="#121A2C"/><rect x="16" y="24" width="96" height="68" rx="14" fill="#0284C7"/><polygon points="54,42 84,58 54,74" fill="#38BDF8"/><rect x="40" y="100" width="48" height="8" rx="4" fill="#38BDF8"/></svg>
+          <span class="size-lbl">48px</span>
+        </div>
+        <div class="size-col">
+          <svg width="96" height="96" viewBox="0 0 128 128"><rect width="128" height="128" rx="32" fill="#121A2C"/><rect x="16" y="24" width="96" height="68" rx="14" fill="#0284C7"/><polygon points="54,42 84,58 54,74" fill="#38BDF8"/><rect x="40" y="100" width="48" height="8" rx="4" fill="#38BDF8"/></svg>
+          <span class="size-lbl">96px</span>
+        </div>
+        <div class="size-col">
+          <svg width="192" height="192" viewBox="0 0 128 128"><rect width="128" height="128" rx="32" fill="#121A2C"/><rect x="16" y="24" width="96" height="68" rx="14" fill="#0284C7"/><polygon points="54,42 84,58 54,74" fill="#38BDF8"/><rect x="40" y="100" width="48" height="8" rx="4" fill="#38BDF8"/></svg>
+          <span class="size-lbl">192px</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- PROPOSTA C -->
+    <div class="proposal-card">
+      <div class="proposal-head">
+        <span class="proposal-title">Proposta C · Horizonte Play</span>
+      </div>
+      <p class="proposal-desc">Arco luminoso ciano sobre base azul profunda com seta Play geométrica (4 formas geométricas).</p>
+      <div class="surface-box surface-dark">
+        <div class="size-col">
+          <svg width="48" height="48" viewBox="0 0 128 128"><rect width="128" height="128" rx="32" fill="#0B0F17"/><circle cx="64" cy="64" r="48" fill="#0284C7"/><circle cx="64" cy="64" r="36" fill="#0B0F17"/><polygon points="54,44 86,64 54,84" fill="#38BDF8"/></svg>
+          <span class="size-lbl">48px</span>
+        </div>
+        <div class="size-col">
+          <svg width="96" height="96" viewBox="0 0 128 128"><rect width="128" height="128" rx="32" fill="#0B0F17"/><circle cx="64" cy="64" r="48" fill="#0284C7"/><circle cx="64" cy="64" r="36" fill="#0B0F17"/><polygon points="54,44 86,64 54,84" fill="#38BDF8"/></svg>
+          <span class="size-lbl">96px</span>
+        </div>
+        <div class="size-col">
+          <svg width="192" height="192" viewBox="0 0 128 128"><rect width="128" height="128" rx="32" fill="#0B0F17"/><circle cx="64" cy="64" r="48" fill="#0284C7"/><circle cx="64" cy="64" r="36" fill="#0B0F17"/><polygon points="54,44 86,64 54,84" fill="#38BDF8"/></svg>
+          <span class="size-lbl">192px</span>
+        </div>
+      </div>
+      <div class="surface-box surface-light">
+        <div class="size-col">
+          <svg width="48" height="48" viewBox="0 0 128 128"><rect width="128" height="128" rx="32" fill="#0B0F17"/><circle cx="64" cy="64" r="48" fill="#0284C7"/><circle cx="64" cy="64" r="36" fill="#0B0F17"/><polygon points="54,44 86,64 54,84" fill="#38BDF8"/></svg>
+          <span class="size-lbl">48px</span>
+        </div>
+        <div class="size-col">
+          <svg width="96" height="96" viewBox="0 0 128 128"><rect width="128" height="128" rx="32" fill="#0B0F17"/><circle cx="64" cy="64" r="48" fill="#0284C7"/><circle cx="64" cy="64" r="36" fill="#0B0F17"/><polygon points="54,44 86,64 54,84" fill="#38BDF8"/></svg>
+          <span class="size-lbl">96px</span>
+        </div>
+        <div class="size-col">
+          <svg width="192" height="192" viewBox="0 0 128 128"><rect width="128" height="128" rx="32" fill="#0B0F17"/><circle cx="64" cy="64" r="48" fill="#0284C7"/><circle cx="64" cy="64" r="36" fill="#0B0F17"/><polygon points="54,44 86,64 54,84" fill="#38BDF8"/></svg>
+          <span class="size-lbl">192px</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

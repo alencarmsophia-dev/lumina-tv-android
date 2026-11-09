@@ -2,9 +2,13 @@
   'use strict';
 
   var hideTimer = null;
+  var fadeOutTimer = null;
+  var sleepTimerId = null;
   var osdEl = null;
   var quickListOpen = false;
   var quickListOffset = 0;
+
+  var SLEEP_OPTIONS = [0, 15, 30, 60, 90, 120];
 
   function escHtml(t) {
     return String(t == null ? '' : t)
@@ -23,22 +27,93 @@
     var rem = s % 60;
     var mm = (m < 10 ? '0' + m : String(m));
     var ss = (rem < 10 ? '0' + rem : String(rem));
-    return h > 0 ? (h + ':' + mm + ':' + ss) : (mm + ':' + ss);
+    return h > 0 ? (h + ':' + mm + ':' + ss) : (m + ':' + ss);
+  }
+
+  function svgIcon(name) {
+    if (name === 'play') {
+      return '<svg viewBox="0 0 24 24" fill="currentColor"><polygon points="6 4 20 12 6 20 6 4"/></svg>';
+    }
+    if (name === 'pause') {
+      return '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>';
+    }
+    if (name === 'rew') {
+      return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="11 19 2 12 11 5"/><polyline points="22 19 13 12 22 5"/></svg>';
+    }
+    if (name === 'ff') {
+      return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="13 19 22 12 13 5"/><polyline points="2 19 11 12 2 5"/></svg>';
+    }
+    if (name === 'subs') {
+      return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="20" height="14" rx="2"/><line x1="6" y1="12" x2="12" y2="12"/><line x1="15" y1="12" x2="18" y2="12"/><line x1="6" y1="16" x2="18" y2="16"/></svg>';
+    }
+    if (name === 'ratio') {
+      return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"/><polyline points="15 8 19 8 19 12"/><polyline points="9 16 5 16 5 12"/></svg>';
+    }
+    if (name === 'sleep') {
+      return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>';
+    }
+    if (name === 'prev-ch') {
+      return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 14 4 9 9 4"/><path d="M20 20v-7a4 4 0 0 0-4-4H4"/></svg>';
+    }
+    return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/></svg>';
   }
 
   function showOsd() {
     if (!osdEl && typeof document !== 'undefined') osdEl = document.getElementById('player-osd');
     if (!osdEl) return;
-    osdEl.classList.remove('hidden');
+    clearTimeout(fadeOutTimer);
+    osdEl.classList.remove('hidden', 'is-hiding');
     clearTimeout(hideTimer);
     var st = global.LuminaPlayer.getState();
     if (st !== 'FAILED' && st !== 'RETRYING' && !quickListOpen && !global.LuminaStore.get('nextEpisodePrompt')) {
       hideTimer = setTimeout(function () {
         if (global.LuminaRouter.getCurrent() === 'player-fullscreen') {
-          osdEl.classList.add('hidden');
+          osdEl.classList.add('is-hiding');
+          fadeOutTimer = setTimeout(function () {
+            if (osdEl && osdEl.classList.contains('is-hiding')) {
+              osdEl.classList.add('hidden');
+            }
+          }, 180);
         }
       }, 4500);
     }
+  }
+
+  function cycleSleepTimer() {
+    var cur = Number(global.LuminaStore.get('sleepTimerMinutes') || 0);
+    var idx = SLEEP_OPTIONS.indexOf(cur);
+    var next = SLEEP_OPTIONS[(idx + 1) % SLEEP_OPTIONS.length];
+    global.LuminaStore.set('sleepTimerMinutes', next);
+    clearTimeout(sleepTimerId);
+    if (next > 0) {
+      sleepTimerId = setTimeout(function () {
+        global.LuminaStore.set('sleepTimerMinutes', 0);
+        if (global.LuminaPlayer && global.LuminaPlayer.stop) global.LuminaPlayer.stop();
+        if (global.LuminaRouter && global.LuminaRouter.getCurrent() === 'player-fullscreen') {
+          global.LuminaRouter.back();
+        }
+        if (global.LuminaUI && global.LuminaUI.toast) {
+          global.LuminaUI.toast('Reprodução encerrada pelo temporizador Dormir.');
+        }
+      }, next * 60 * 1000);
+      if (global.LuminaUI && global.LuminaUI.toast) {
+        global.LuminaUI.toast('Dormir: desligar em ' + next + ' min');
+      }
+    } else if (global.LuminaUI && global.LuminaUI.toast) {
+      global.LuminaUI.toast('Dormir: Desligado');
+    }
+    renderOsd();
+  }
+
+  function renderSquareBtn(id, action, iconKey, label, isPrimary) {
+    return (
+      '<div class="osd-sq-item">' +
+        '<button id="' + escHtml(id) + '" class="osd-sq-btn' + (isPrimary ? ' is-primary' : '') + ' focusable" data-osd-action="' + escHtml(action) + '" data-scope="osd">' +
+          svgIcon(iconKey) +
+        '</button>' +
+        '<span class="osd-sq-label">' + escHtml(label) + '</span>' +
+      '</div>'
+    );
   }
 
   function renderOsd(statePayload) {
@@ -50,22 +125,22 @@
 
     var extra = (statePayload && statePayload.extra) || null;
     var isLive = item.kind === 'live';
-    var isFav = global.LuminaStore.isFavorite(item.id);
     var progMap = global.LuminaStore.get('watchProgress') || {};
     var savedProg = progMap[item.id] || { position: 0, duration: 0, percent: 0 };
     var nextPrompt = global.LuminaStore.get('nextEpisodePrompt');
     var diag = global.LuminaStore.get('diagnostics') || {};
     var engineName = diag.engine || 'NativeEngine';
+    var sleepMin = Number(global.LuminaStore.get('sleepTimerMinutes') || 0);
 
     var nextEpBanner = '';
     if (nextPrompt && nextPrompt.nextEpisode) {
       var ne = nextPrompt.nextEpisode;
       nextEpBanner =
-        '<div class="osd-banner-box">' +
-          '<div><strong>Próximo Episódio em ' + Number(nextPrompt.secondsLeft || 5) + 's:</strong> ' + escHtml(ne.cleanTitle) + ' (T' + Number(ne.season || 1) + ':E' + Number(ne.episode || 1) + ')</div>' +
-          '<div>' +
-            '<button id="osd-btn-next-now" class="osd-btn focusable" data-osd-action="next-ep-now" data-scope="osd">▶ Reproduzir Agora</button>' +
-            '<button id="osd-btn-next-cancel" class="osd-btn focusable" data-osd-action="next-ep-cancel" data-scope="osd">Cancelar</button>' +
+        '<div style="margin-bottom:16px;padding:18px 24px;background:var(--bg-panel);border:2px solid var(--accent);border-radius:var(--radius);display:flex;justify-content:space-between;align-items:center;">' +
+          '<div style="font-size:24px;"><strong>Próximo Episódio em ' + Number(nextPrompt.secondsLeft || 5) + 's:</strong> ' + escHtml(ne.cleanTitle) + ' (T' + Number(ne.season || 1) + ' \u00B7 E' + Number(ne.episode || 1) + ')</div>' +
+          '<div style="display:flex;gap:12px;">' +
+            '<button id="osd-btn-next-now" class="btn btn-primary btn-modal focusable" data-osd-action="next-ep-now" data-scope="osd">Assistir agora</button>' +
+            '<button id="osd-btn-next-cancel" class="btn btn-secondary btn-modal focusable" data-osd-action="next-ep-cancel" data-scope="osd">Cancelar</button>' +
           '</div>' +
         '</div>';
     }
@@ -74,23 +149,22 @@
     if (st === 'RETRYING') {
       var retryMsg = (extra && extra.message) ? extra.message : 'Reconectando ao fluxo de mídia...';
       statusBanner =
-        '<div class="osd-banner-box osd-banner-warn">' +
-          '<div><strong>⟳ ' + escHtml(retryMsg) + '</strong> · Motor: ' + escHtml(engineName) + '</div>' +
-          '<div><button id="osd-btn-switch-eng" class="osd-btn focusable" data-osd-action="switch-engine" data-scope="osd">⚙ Trocar Motor</button></div>' +
+        '<div style="margin-bottom:16px;padding:18px 24px;background:var(--bg-panel);border:2px solid var(--amber);border-radius:var(--radius);display:flex;justify-content:space-between;align-items:center;">' +
+          '<div style="font-size:24px;"><strong>' + escHtml(retryMsg) + '</strong> \u00B7 Motor: ' + escHtml(engineName) + '</div>' +
+          '<div><button id="osd-btn-switch-eng" class="btn btn-secondary btn-modal focusable" data-osd-action="switch-engine" data-scope="osd">Trocar Motor</button></div>' +
         '</div>';
     } else if (st === 'FAILED') {
       var errTitle = (extra && extra.title) ? extra.title : 'Falha ao abrir este conteúdo';
       var errMsg = (extra && extra.message) ? extra.message : (diag.lastError || 'Verifique sua conexão ou tente outro motor.');
       statusBanner =
-        '<div class="osd-banner-box osd-banner-danger">' +
+        '<div style="margin-bottom:16px;padding:18px 24px;background:var(--bg-panel);border:2px solid var(--danger);border-radius:var(--radius);display:flex;justify-content:space-between;align-items:center;">' +
           '<div style="max-width:980px;">' +
-            '<div style="font-size:24px;font-weight:700;color:#FCA5A5;margin-bottom:4px;">⚠ ' + escHtml(errTitle) + '</div>' +
-            '<div style="font-size:19px;color:#E2E8F0;">' + escHtml(errMsg) + '</div>' +
+            '<div style="font-size:26px;font-weight:700;color:var(--text);margin-bottom:4px;">' + escHtml(errTitle) + '</div>' +
+            '<div style="font-size:22px;color:var(--text-2);">' + escHtml(errMsg) + '</div>' +
           '</div>' +
-          '<div style="display:flex;align-items:center;">' +
-            '<button id="osd-btn-err-retry" class="osd-btn focusable" data-osd-action="retry" data-scope="osd">↻ Tentar de Novo</button>' +
-            '<button id="osd-btn-err-engine" class="osd-btn focusable" data-osd-action="switch-engine" data-scope="osd">⚙ Outro Motor</button>' +
-            (isLive ? '<button id="osd-btn-err-nextch" class="osd-btn focusable" data-osd-action="ff" data-scope="osd">Próximo Canal ▶▶</button>' : '') +
+          '<div style="display:flex;gap:12px;">' +
+            '<button id="osd-btn-err-retry" class="btn btn-primary btn-modal focusable" data-osd-action="retry" data-scope="osd">Tentar de Novo</button>' +
+            '<button id="osd-btn-err-engine" class="btn btn-secondary btn-modal focusable" data-osd-action="switch-engine" data-scope="osd">Outro Motor</button>' +
           '</div>' +
         '</div>';
     }
@@ -104,80 +178,85 @@
       var qRows = '';
       for (var q = 0; q < winSize && (quickListOffset + q) < allCh.length; q++) {
         var cItem = allCh[quickListOffset + q];
-        var isCur = cItem.id === item.id;
         qRows +=
-          '<button id="osd-qch-' + q + '" class="osd-btn focusable' + (isCur ? ' is-active-target' : '') + '" data-osd-ch-id="' + escHtml(cItem.id) + '" data-scope="osd" style="margin-bottom:8px;justify-content:flex-start;width:270px;overflow:hidden;">' +
-            '<span style="color:var(--accent-cyan);font-family:var(--font-mono);margin-right:10px;">#' + Number(cItem.channelNumber || (quickListOffset + q + 1)) + '</span>' +
+          '<button id="osd-qch-' + q + '" class="btn btn-secondary btn-modal focusable" data-osd-ch-id="' + escHtml(cItem.id) + '" data-scope="osd" style="justify-content:flex-start;width:270px;overflow:hidden;">' +
+            '<span style="color:var(--accent);margin-right:10px;">#' + Number(cItem.channelNumber || (quickListOffset + q + 1)) + '</span>' +
             '<span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + escHtml(cItem.cleanTitle) + '</span>' +
           '</button>';
       }
       quickChannelDrawer =
-        '<div style="margin-bottom:14px;padding:14px 18px;background:rgba(11,15,23,0.92);border:1px solid rgba(56,189,248,0.35);border-radius:var(--radius-md);">' +
-          '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">' +
-            '<strong style="font-size:20px;color:var(--accent-cyan);">Troca Rápida de Canais (' + (quickListOffset + 1) + '–' + Math.min(allCh.length, quickListOffset + winSize) + ' de ' + allCh.length + ')</strong>' +
-            '<div>' +
-              '<button id="osd-qch-prev" class="osd-btn focusable" data-osd-action="qch-prev" data-scope="osd" style="height:42px;padding:0 14px;">◀ Ant.</button>' +
-              '<button id="osd-qch-next" class="osd-btn focusable" data-osd-action="qch-next" data-scope="osd" style="height:42px;padding:0 14px;">Próx. ▶</button>' +
-              '<button id="osd-qch-close" class="osd-btn focusable" data-osd-action="toggle-qch" data-scope="osd" style="height:42px;padding:0 14px;">Fechar</button>' +
+        '<div style="margin-bottom:16px;padding:18px 24px;background:var(--bg-panel);border:1px solid var(--line);border-radius:var(--radius);">' +
+          '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">' +
+            '<strong style="font-size:24px;color:var(--accent);">Canais Ao Vivo</strong>' +
+            '<div style="display:flex;gap:10px;">' +
+              '<button id="osd-qch-prev" class="btn btn-secondary btn-modal focusable" data-osd-action="qch-prev" data-scope="osd">\u2039 Ant.</button>' +
+              '<button id="osd-qch-next" class="btn btn-secondary btn-modal focusable" data-osd-action="qch-next" data-scope="osd">Próx. \u203A</button>' +
+              '<button id="osd-qch-close" class="btn btn-secondary btn-modal focusable" data-osd-action="toggle-qch" data-scope="osd">Fechar</button>' +
             '</div>' +
           '</div>' +
-          '<div style="display:flex;flex-wrap:wrap;">' + qRows + '</div>' +
+          '<div style="display:flex;flex-wrap:wrap;gap:10px;">' + qRows + '</div>' +
         '</div>';
     }
 
-    var progressBlock = '';
+    var timelineBlock = '';
     if (isLive) {
-      progressBlock =
-        '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">' +
-          '<div>' +
-            '<div style="font-size:24px;font-weight:600;">Agora: ' + escHtml(item.epgNow || ('Programação Ao Vivo (' + (item.groupDisplay || item.groupOriginal) + ')')) + '</div>' +
-            '<div style="font-size:19px;color:var(--text-secondary);">A seguir: ' + escHtml(item.epgNext || 'Programação Contínua') + ' · Use CH+/CH- para zapping</div>' +
+      timelineBlock =
+        '<div style="display:flex;align-items:center;justify-content:space-between;margin:16px 0 22px;">' +
+          '<div style="display:flex;align-items:center;gap:16px;">' +
+            '<span class="badge-live-red">AO VIVO</span>' +
+            '<span style="font-size:24px;color:var(--text);">Agora: ' + escHtml(item.epgNow || (item.groupDisplay || item.groupOriginal || 'Transmissão contínua')) + '</span>' +
           '</div>' +
-          '<div style="font-size:21px;color:var(--accent-success);">● AO VIVO · ' + escHtml(item.quality || 'HD') + ' · ' + escHtml(engineName) + '</div>' +
+          '<span class="badge-quality">' + escHtml(item.quality || 'HD') + '</span>' +
         '</div>';
     } else {
       var videoEl = global.LuminaPlayer.getVideoElement();
-      var liveDur = (videoEl && isFinite(videoEl.duration) && videoEl.duration > 0) ? Math.floor(videoEl.duration) : (savedProg.duration || item.durationSecs || 0);
+      var liveDur = (videoEl && isFinite(videoEl.duration) && videoEl.duration > 0) ? Math.floor(videoEl.duration) : (savedProg.duration || item.durationSecs || 6485);
       var livePos = (videoEl && videoEl.currentTime > 0) ? Math.floor(videoEl.currentTime) : (savedProg.position || 0);
       var pct = liveDur > 0 ? Math.min(100, Math.round((livePos / liveDur) * 100)) : (savedProg.percent || 0);
-      progressBlock =
-        '<div class="osd-progress-row">' +
-          '<div class="osd-seek-bar"><div class="osd-seek-fill" style="width:' + pct + '%;"></div></div>' +
-          '<div style="font-family:var(--font-mono);font-size:21px;">' + formatTime(livePos) + ' / ' + formatTime(liveDur) + ' (' + pct + '%)</div>' +
+      timelineBlock =
+        '<div id="osd-timeline-seek" class="osd-timeline-row focusable" data-osd-action="ff" data-scope="osd">' +
+          '<span class="osd-time-label">' + formatTime(livePos) + '</span>' +
+          '<div class="osd-seek-track">' +
+            '<div class="osd-seek-fill" style="width:' + pct + '%;">' +
+              '<div class="osd-seek-thumb"></div>' +
+            '</div>' +
+          '</div>' +
+          '<span class="osd-time-label">' + formatTime(liveDur) + '</span>' +
         '</div>';
     }
 
-    var chNumPrefix = (isLive && item.channelNumber) ? ('#' + item.channelNumber + ' · ') : '';
+    var chNumPrefix = (isLive && item.channelNumber) ? ('#' + item.channelNumber + ' \u00B7 ') : '';
+    var metaText = (item.groupDisplay || item.groupOriginal || 'Catálogo') + ' \u00B7 ' + (item.quality || 'FHD') + (item.lang ? (' \u00B7 ' + item.lang) : '');
+    var sleepLabel = sleepMin > 0 ? ('Dormir (' + sleepMin + 'm)') : 'Dormir';
+
+    var deckButtons =
+      renderSquareBtn('osd-ctrl-play', 'play', st === 'PAUSED' ? 'play' : 'pause', st === 'PAUSED' ? 'Reproduzir' : 'Pausar', true) +
+      renderSquareBtn('osd-ctrl-rew', 'rew', 'rew', '-10 s', false) +
+      renderSquareBtn('osd-ctrl-ff', 'ff', 'ff', '+10 s', false) +
+      renderSquareBtn('osd-ctrl-sub', 'audio-sub', 'subs', 'Áudio e legendas', false) +
+      renderSquareBtn('osd-ctrl-ratio', 'ratio', 'ratio', 'Proporção', false) +
+      renderSquareBtn('osd-ctrl-sleep', 'sleep', 'sleep', sleepLabel, false);
+
+    if (isLive) {
+      deckButtons +=
+        renderSquareBtn('osd-ctrl-prevch', 'prev-ch', 'prev-ch', 'Anterior', false) +
+        renderSquareBtn('osd-ctrl-qch', 'toggle-qch', 'channels', 'Canais', false);
+    }
 
     osdEl.innerHTML =
-      '<div class="osd-top-bar">' +
-        '<div class="osd-channel-badge">' +
-          '<div style="font-size:32px;font-weight:700;">' + escHtml(chNumPrefix + item.cleanTitle) + '</div>' +
-          '<div style="font-size:20px;color:var(--text-secondary);">' + escHtml(item.groupDisplay || item.groupOriginal) + ' · ' + escHtml(item.quality || 'HD') + ' · ' + escHtml(item.lang || 'DUB') + ' · Motor: ' + escHtml(engineName) + '</div>' +
-        '</div>' +
-      '</div>' +
-      '<div class="osd-bottom-panel">' +
+      '<div class="osd-scrim-top"></div>' +
+      '<div class="osd-scrim-bottom"></div>' +
+      '<div class="osd-top-layer"></div>' +
+      '<div class="osd-bottom-layer">' +
         statusBanner +
         nextEpBanner +
         quickChannelDrawer +
-        progressBlock +
-        '<div class="osd-controls-row">' +
-          '<div class="osd-btn-group">' +
-            '<button id="osd-ctrl-rew" class="osd-btn focusable" data-osd-action="rew" data-scope="osd">' + (isLive ? '◀◀ Canal Ant.' : '◀◀ -10s') + '</button>' +
-            '<button id="osd-ctrl-play" class="osd-btn focusable" data-osd-action="play" data-scope="osd">' + (st === 'PAUSED' ? '▶ Reproduzir' : '❚❚ Pausar') + '</button>' +
-            '<button id="osd-ctrl-ff" class="osd-btn focusable" data-osd-action="ff" data-scope="osd">' + (isLive ? 'Próx. Canal ▶▶' : '▶▶ +10s') + '</button>' +
-            (isLive ? '<button id="osd-ctrl-qch" class="osd-btn focusable" data-osd-action="toggle-qch" data-scope="osd">☰ Canais</button>' : '') +
-          '</div>' +
-          '<div class="osd-btn-group">' +
-            '<button id="osd-ctrl-audio" class="osd-btn focusable" data-osd-action="audio" data-scope="osd">Áudio</button>' +
-            '<button id="osd-ctrl-sub" class="osd-btn focusable" data-osd-action="sub" data-scope="osd">Legenda</button>' +
-            '<button id="osd-ctrl-ratio" class="osd-btn focusable" data-osd-action="ratio" data-scope="osd">Tela</button>' +
-            (!isLive ? '<button id="osd-ctrl-speed" class="osd-btn focusable" data-osd-action="speed" data-scope="osd">Velocidade</button>' : '') +
-            '<button id="osd-ctrl-engine" class="osd-btn focusable" data-osd-action="switch-engine" data-scope="osd">Motor</button>' +
-            '<button id="osd-ctrl-fav" class="osd-btn focusable" data-osd-action="fav" data-scope="osd">' + (isFav ? '♥ Favorito' : '♡ Favoritar') + '</button>' +
-            '<button id="osd-ctrl-back" class="osd-btn focusable" data-osd-action="back" data-scope="osd">Voltar</button>' +
-          '</div>' +
+        '<div>' +
+          '<div class="osd-main-title">' + escHtml(chNumPrefix + item.cleanTitle) + '</div>' +
+          '<div class="osd-main-meta">' + escHtml(metaText) + '</div>' +
         '</div>' +
+        timelineBlock +
+        '<div class="osd-square-deck">' + deckButtons + '</div>' +
       '</div>';
 
     if (global.LuminaRouter.getCurrent() === 'player-fullscreen') {
@@ -194,7 +273,7 @@
 
   function handleAction(action, targetEl) {
     var nowT = Date.now();
-    if (action === lastAction && nowT - lastActionAt < 280) return;
+    if (action === lastAction && nowT - lastActionAt < 240) return;
     lastAction = action;
     lastActionAt = nowT;
 
@@ -230,6 +309,8 @@
     } else if (action === 'ff') {
       if (item.kind === 'live') global.LuminaPlayer.zapNext();
       else global.LuminaPlayer.seekRelative(10);
+    } else if (action === 'prev-ch') {
+      global.LuminaPlayer.zapLastChannel();
     } else if (action === 'toggle-qch') {
       quickListOpen = !quickListOpen;
       if (quickListOpen) {
@@ -251,21 +332,15 @@
       if (quickListOffset + 6 < totalCh) quickListOffset += 6;
       renderOsd();
       global.LuminaFocus.setFocus(document.getElementById('osd-qch-next'), 'osd');
-    } else if (action === 'audio') {
+    } else if (action === 'audio-sub') {
       var a = global.LuminaTracks.cycleAudioTrack(videoEl, activeEngine);
-      global.LuminaUI.toast('Áudio: ' + a.label);
-    } else if (action === 'sub') {
       var s = global.LuminaTracks.cycleSubtitleTrack(videoEl, activeEngine);
-      global.LuminaUI.toast('Legenda: ' + s.label);
+      global.LuminaUI.toast('Áudio: ' + a.label + ' \u00B7 Legenda: ' + s.label);
     } else if (action === 'ratio') {
       var r = global.LuminaTracks.cycleAspectRatio(videoEl, item.id);
       global.LuminaUI.toast('Proporção: ' + r.label);
-    } else if (action === 'speed') {
-      var sp = global.LuminaTracks.cyclePlaybackSpeed(videoEl);
-      global.LuminaUI.toast('Velocidade: ' + sp.label);
-    } else if (action === 'fav') {
-      global.LuminaStore.toggleFavorite(item.id);
-      renderOsd();
+    } else if (action === 'sleep') {
+      cycleSleepTimer();
     } else if (action === 'next-ep-now') {
       var pr = global.LuminaStore.get('nextEpisodePrompt');
       if (pr && pr.nextEpisode) {
@@ -274,7 +349,7 @@
       }
     } else if (action === 'next-ep-cancel') {
       global.LuminaPlayer.cancelNextEpisode();
-      global.LuminaUI.toast('Reprodução automática do próximo episódio cancelada');
+      global.LuminaUI.toast('Reprodução automática do próximo episódio cancelada.');
     } else if (action === 'back') {
       quickListOpen = false;
       global.LuminaRouter.back();

@@ -5,6 +5,7 @@ import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ApplicationInfo
+import android.content.res.Configuration
 import android.graphics.Color
 import android.media.AudioAttributes
 import android.media.AudioFocusRequest
@@ -45,7 +46,7 @@ class MainActivity : Activity() {
     companion object {
         const val APP_ENTRY_URL = "https://appassets.androidplatform.net/assets/app/index.html"
         const val UPDATE_REPO = "alencarmsophia-dev/lumina-tv-android"
-        const val APP_VERSION_NAME = "1.6.0"
+        const val APP_VERSION_NAME = "2.0.0"
         private const val MIN_CHROMIUM_MAJOR = 50
     }
 
@@ -105,6 +106,12 @@ class MainActivity : Activity() {
 
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         window.decorView.setBackgroundColor(Color.parseColor("#0B0F17"))
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            window.attributes = window.attributes.apply {
+                layoutInDisplayCutoutMode =
+                    WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+            }
+        }
         applyImmersiveFullscreen()
 
         audioManager = getSystemService(Context.AUDIO_SERVICE) as? AudioManager
@@ -214,8 +221,9 @@ class MainActivity : Activity() {
         @Suppress("DEPRECATION")
         settings.allowUniversalAccessFromFileURLs = false
         settings.cacheMode = WebSettings.LOAD_DEFAULT
-        settings.useWideViewPort = true
-        settings.loadWithOverviewMode = true
+        // T6: Escala 1920x1080 passa a ser feita exclusivamente pelo JS (js/core/viewport-fit.js)
+        settings.useWideViewPort = false
+        settings.loadWithOverviewMode = false
         settings.setSupportZoom(false)
         settings.builtInZoomControls = false
         settings.displayZoomControls = false
@@ -238,7 +246,10 @@ class MainActivity : Activity() {
         val client = LuminaWebViewClient(
             assetLoader = assetLoader,
             defaultUserAgent = defaultUa,
-            onAppReady = { hideNativeSplash() }
+            onAppReady = {
+                wv.evaluateJavascript("if(window.__luminaFitViewport){window.__luminaFitViewport();}", null)
+                hideNativeSplash()
+            }
         )
         webViewClientInstance = client
         wv.webViewClient = client
@@ -255,12 +266,21 @@ class MainActivity : Activity() {
         wv.requestFocus()
     }
 
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        applyImmersiveFullscreen()
+        webView?.evaluateJavascript(
+            "if(window.__luminaFitViewport){window.__luminaFitViewport();}",
+            null
+        )
+    }
+
     private fun hideNativeSplash() {
         runOnUiThread {
             if (splashImageView.visibility == View.VISIBLE) {
                 splashImageView.animate()
                     .alpha(0f)
-                    .setDuration(260L)
+                    .setDuration(120L)
                     .withEndAction {
                         splashImageView.visibility = View.GONE
                     }
@@ -311,7 +331,6 @@ class MainActivity : Activity() {
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
-        // Permite sair pelo botão Voltar caso esteja na tela de WebView desatualizado (Seção 4.12a)
         if (isOutdatedWebViewScreenShown && event.keyCode == KeyEvent.KEYCODE_BACK) {
             if (event.action == KeyEvent.ACTION_UP) {
                 finish()
@@ -348,6 +367,10 @@ class MainActivity : Activity() {
         webView?.let { wv ->
             wv.onResume()
             wv.resumeTimers()
+            wv.evaluateJavascript(
+                "if(window.__luminaFitViewport){window.__luminaFitViewport();}",
+                null
+            )
             if (wasPlayingBeforePause) {
                 wasPlayingBeforePause = false
                 wv.evaluateJavascript(
@@ -403,7 +426,13 @@ class MainActivity : Activity() {
         super.onWindowFocusChanged(hasFocus)
         if (hasFocus) {
             applyImmersiveFullscreen()
-            webView?.requestFocus()
+            webView?.let { wv ->
+                wv.requestFocus()
+                wv.evaluateJavascript(
+                    "if(window.__luminaFitViewport){window.__luminaFitViewport();}",
+                    null
+                )
+            }
         }
     }
 
@@ -566,10 +595,6 @@ class MainActivity : Activity() {
             }
         }
 
-        /**
-         * B6.2: Consulta https://api.github.com/repos/alencarmsophia-dev/lumina-tv-android/releases/latest
-         * fora da thread principal e devolve o resultado para window.__luminaOnUpdateCheckResult(...)
-         */
         @JavascriptInterface
         fun checkForUpdate() {
             bgExecutor.execute {
@@ -632,10 +657,6 @@ class MainActivity : Activity() {
             }
         }
 
-        /**
-         * B6.2: Baixa o APK da Release para cacheDir/updates/lumina-tv.apk com barra de progresso,
-         * valida tamanho e SHA-256 (se informado) e abre o instalador do Android via FileProvider.
-         */
         @JavascriptInterface
         fun downloadAndInstallUpdate(downloadUrl: String, expectedSize: Long, expectedSha256: String) {
             bgExecutor.execute {

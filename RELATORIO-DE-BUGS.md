@@ -18,3 +18,33 @@
 | **S4.3** | Títulos com vírgula no M3U (ex.: `"O Bom, o Mau e o Feio"`) ficavam cortados | `parseExtInfLine` usava `line.lastIndexOf(',')`, cortando na última vírgula dentro do próprio título. | `app/js/data/m3u-parser.js` | Função `findTitleCommaIndex` percorre os atributos ignorando vírgulas dentro de aspas e divide exatamente na primeira vírgula separadora do `#EXTINF`. | `tests/parser.test.js` (`"O Bom, o Mau e o Feio (1966)"` e `"Rick, Morty e Cia"`) |
 | **S4.4** | Busca mutava cada item com `_searchKey`, inflando memória e IndexedDB | `matchListFast` gravava `it._searchKey = ...` diretamente nos objetos do catálogo. | `app/js/data/xtream-client.js` | Índice separado em memória (`searchTokenCache`) com ordenação por relevância (prefixo exato > prefixo de palavra > substring) e limpeza ao atualizar catálogo. | `tests/xtream-search.test.js` (`assert.strictEqual(hasOwnProperty('_searchKey'), false)`) |
 | **S4.5** | Polling de pareamento não tratava HTTP 429 (`rate_limit`) nem expiração local | `schedulePoll` em `mobile-pairing.js` continuava consultando a cada 2,5s mesmo após 429 ou 10 min. | `app/js/data/mobile-pairing.js` | Controle local de `expiresAt` (10 min), backoff automático para 10s em caso de HTTP 429 e parada imediata ao sair da tela de pareamento. | `tests/fase4-pairing-settings.test.js` |
+| **B7** | Interface do app aparece cortada (apenas canto superior esquerdo visível) na Fire TV ligada a projetor; card de pareamento corta frases | `base.css` fixava `html, body` em `1920x1080px`, `index.html` usava `meta viewport width=1920`, `MainActivity.kt` ligava `useWideViewPort/loadWithOverviewMode` e chamava `window.__luminaFitViewport()` que não existia em nenhum `.js` do app | `app/js/core/viewport-fit.js`, `app/css/base.css`, `app/css/components.css`, `app/css/screens.css`, `app/index.html`, `app/js/core/settings.js`, `app/js/core/store.js`, `app/js/core/focus-engine.js`, `app/js/ui/app-ui.js`, `MainActivity.kt`, `LuminaWebViewClient.kt` | Criado `viewport-fit.js` (`computeFit` + `applyFit` + `__luminaViewportInfo`), `html/body` 100%, `useWideViewPort=false`, preferência `screenSafeMargin` (0%–10% ao vivo com setas ESQ/DIR), cabeçalho com `TELA W×H • ESCALA S%`, `overflow-wrap:anywhere` no card de pareamento e normalização de escala no `focus-engine.js` | `tests/viewport-fit.test.js` (9 cenários exatos de resolução, proporção, overscan 10% e fallback `0`/`NaN`) |
+
+---
+
+## 9. Bug / Defeito de Usabilidade B8 (v1.7.0): Elementos Pequenos a 3 Metros, Excesso de Chips no Topo e Animação de Largura no Menu
+
+### Causa Raiz Confirmada
+1. Nas versões `1.6.x`, as telas de Filmes, Séries e Novelas acumulavam três barras horizontais no topo (chips de categorias `20px`, chips de ordenação e barra A–Z com 27 botões de `18px`), exigindo dezenas de toques no controle remoto para chegar aos pôsteres e ficando ilegíveis a 3 metros de distância.
+2. O menu lateral animava a propriedade `width` (`108px` → `330px`), provocando *reflow/re-layout* na WebView da Fire TV, e continha 11 itens de `22px`.
+3. A barra fixa inferior de dicas do controle remoto ocupava área útil em todas as telas e usava fonte de `19px`.
+
+### Correção Implementada na v1.7.0
+- **Tipografia mínima de `22px` (`--fs-min`)** auditada automaticamente por `tests/design-tokens.test.js` em todos os arquivos CSS.
+- **Coluna Lateral de Filtros de `360px`** em Filmes e Séries/Novelas (seletores `Tipo`, `Ordenar`, `Idioma` e `Letra` condicional + lista vertical de `Categorias`), combinada à grade virtualizada de **4 colunas** com cartões grandes de `301×452px`.
+- **Menu lateral sobreposto (`360px`)** com apenas 6 itens principais (`Início`, `Busca`, `Canais`, `Filmes`, `Séries`, `Favoritos`) + `Ajustes` no rodapé, animado exclusivamente via `transform: translateX` e `opacity` em `180ms`.
+- **Consolidação em Ajustes**: 8 abas sem numeração (`Fonte e Pareamento`, `Reprodução`, `Tela e Desempenho`, `Organizar Lista`, `Controle Parental`, `Atualizações`, `Backup e Dados`, `Sobre`), movendo os atalhos do controle remoto para a aba `Sobre`.
+
+---
+
+## 10. Refinamento Visual e de Abertura B9 (v1.9.0): Identidade Visual Genérica, Salto no Splash e Falta de Coreografia de Entrada
+
+### Diagnóstico Confirmado
+1. O logo provisório era um quadrado arredondado azul com um `"L"` e um triângulo dentro, sem relação conceitual com o nome *Lumina* (luz).
+2. O splash nativo (`splash.png`) tinha fundo chapado e transição abrupta para a abertura web (`#boot-splash`), que apenas aplicava um fade simples sem profundidade, sem controle de orçamento de quadros na Fire TV e sem continuidade espacial com o logo do menu lateral.
+
+### Solução Implementada na v1.9.0
+- **Nova Identidade Visual ("A Luz Acende a Tela")**: criado o símbolo *Facho* (3 lâminas refratadas de luz + centelha `#FDE68A` sobre grade óptica `64×64` sem contêiner) e wordmark `"LUMINA TV"` 100% em `<path>` SVG geométricos na pasta `brand/`.
+- **Continuidade Perfeita Splash Nativo → Abertura Web → Menu Lateral (FLIP)**: o splash composto (`1920×1080`) e o primeiro frame (`0–250ms`) de `#boot-splash` compartilham exatamente o mesmo fundo (`#0B0F17` → `#0A1426` + brilho radial central) e o símbolo de `176px` em `(960, 540)`, encerrando aos `3000–3500ms` com transição FLIP calculada pela escala real de `viewport-fit.js` até o canto superior esquerdo do menu (`64×64`).
+- **Benchmark Adaptativo de Quadros (`window.__luminaPerf`)**: medição via `requestAnimationFrame` nos primeiros `500ms` que rebaixa automaticamente para a variação `REDUZIDA` caso a mediana de tempo de quadro supere `24ms`.
+

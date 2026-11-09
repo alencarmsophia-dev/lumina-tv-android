@@ -42,7 +42,7 @@
       : src;
     global.LuminaPairing.applyMobilePayload(payload, function (err, list) {
       if (!err && list && list.length && global.LuminaUI) {
-        global.LuminaUI.toast('✔ Catálogo completo sincronizado (' + list.length + ' itens).');
+        global.LuminaUI.toast('Catálogo sincronizado (' + list.length + ' itens).');
         global.LuminaUI.renderCurrentRoute();
       }
     });
@@ -58,7 +58,7 @@
         if (!err && info) {
           global.LuminaStore.set('appUpdateInfo', info);
           if (info.hasUpdate && global.LuminaUI && global.LuminaUI.toast) {
-            global.LuminaUI.toast('🎉 Nova versão ' + info.latestVersion + ' disponível em Ajustes → Atualizações!');
+            global.LuminaUI.toast('Nova versão ' + info.latestVersion + ' disponível em Ajustes > Atualizações.');
             global.LuminaUI.renderCurrentRoute();
           }
         }
@@ -77,8 +77,10 @@
     global.LuminaPlayer.init();
     global.LuminaOSD.init();
 
-    // 1. Carrega todas as configurações persistidas (PIN com hash, modo de desempenho, proporção, autoUpdateHours)
+    // Inicia a interface e a abertura coreografada imediatamente enquanto os dados carregam em paralelo (Seção 12)
     global.LuminaSettings.loadAndApplySettings(function () {
+      global.LuminaUI.init();
+
       global.LuminaStorage.loadMeta('favorites', {}, function (favs) {
         global.LuminaStore.set('favorites', favs || {});
         global.LuminaStorage.loadMeta('watchProgress', {}, function (prog) {
@@ -95,9 +97,7 @@
                     if (src.type === 'xtream' && src.creds) global.LuminaStore.set('xtreamCreds', src.creds);
                   }
 
-                  // 2. Carrega o catálogo persistido (v2 com verificação de integridade ou migração v1)
                   global.LuminaStorage.loadCatalog(function (err, storedItems, metaInfo) {
-                    global.LuminaUI.init();
                     var info = metaInfo || {};
                     var diag = global.LuminaStore.get('diagnostics') || {};
                     diag.catalogGeneration = info.generation || (info.migratedFromV1 ? 'v1-migrated' : 'empty');
@@ -107,32 +107,36 @@
                       info.classifierVersion === global.LuminaClassifier.CLASSIFIER_VERSION;
 
                     if (storedItems && storedItems.length) {
-                      global.LuminaUI.showLoading('Abrindo seu catálogo');
                       global.LuminaRepository.rebuildCatalogFromRawAsync(
                         storedItems,
-                        function (f) {
-                          global.LuminaUI.setLoading('Montando catálogo... ' + Math.round(f * 100) + '%', Math.round(f * 100));
-                        },
+                        function () {},
                         function () {
-                          global.LuminaUI.hideLoading();
                           global.LuminaUI.renderCurrentRoute();
+                          if (global.LuminaUI.notifyCatalogReadyForIntro) {
+                            global.LuminaUI.notifyCatalogReadyForIntro();
+                          }
 
                           if (!info.integrityOk && src) {
-                            triggerBackgroundCatalogRefresh(src, '⚠ Catálogo incompleto detectado. Atualizando sua lista em segundo plano...');
+                            triggerBackgroundCatalogRefresh(src, 'Atualizando lista em segundo plano...');
                           } else if (info.migratedFromV1 && src) {
-                            triggerBackgroundCatalogRefresh(src, '⟳ Migrando para v1.6: baixando seu catálogo completo sem limite de 25 mil itens...');
+                            triggerBackgroundCatalogRefresh(src, 'Sincronizando catálogo completo...');
                           } else if (src) {
                             var autoHours = global.LuminaStore.get('autoUpdateHours');
                             var lastTs = (lastUpd && lastUpd.updatedAt) || info.updatedAt || 0;
                             if (typeof autoHours === 'number' && autoHours > 0 && lastTs > 0) {
                               if (Date.now() - lastTs >= autoHours * 3600 * 1000) {
-                                triggerBackgroundCatalogRefresh(src, '⟳ Atualizando sua lista automaticamente em segundo plano...');
+                                triggerBackgroundCatalogRefresh(src, 'Atualizando sua lista automaticamente...');
                               }
                             }
                           }
                         },
                         alreadyClassified
                       );
+                    } else {
+                      global.LuminaUI.renderCurrentRoute();
+                      if (global.LuminaUI.notifyCatalogReadyForIntro) {
+                        global.LuminaUI.notifyCatalogReadyForIntro();
+                      }
                     }
 
                     checkAutoAppUpdateIfAndroid();

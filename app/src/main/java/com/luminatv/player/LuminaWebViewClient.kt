@@ -64,19 +64,16 @@ class LuminaWebViewClient(
 
         val host = uri.host?.lowercase(Locale.ROOT) ?: return null
 
-        // 1. Arquivos estáticos embutidos do app (https://appassets.androidplatform.net/assets/app/...)
         if (host == ASSET_HOST) {
             return assetLoader.shouldInterceptRequest(uri)
         }
 
-        // 2. Servidor de pareamento Vercel (já envia Access-Control-Allow-Origin: * e usa POST com body)
         if (host == PAIRING_HOST || uri.encodedPath?.startsWith("/api/pair/") == true) {
             return null
         }
 
         val method = req.method?.uppercase(Locale.ROOT) ?: "GET"
 
-        // 3. Responde preflight CORS OPTIONS imediatamente com 204
         if (method == "OPTIONS") {
             return WebResourceResponse(
                 "text/plain",
@@ -88,7 +85,6 @@ class LuminaWebViewClient(
             )
         }
 
-        // 4. Não intercepta POST/PUT externos para não perder o corpo da requisição
         if (method != "GET" && method != "HEAD") {
             return null
         }
@@ -101,8 +97,6 @@ class LuminaWebViewClient(
         val secFetchMode = headers["Sec-Fetch-Mode"]?.lowercase(Locale.ROOT) ?: ""
         val hasRange = headers.keys.any { it.equals("Range", ignoreCase = true) }
 
-        // 5. Se não houver #EXTVLCOPT customizado para esta URL, deixa a tag <video> e imagens
-        // carregarem direto pelo pipeline C++ do Chromium em modo no-cors.
         if (!hasCustomStreamHeaders) {
             if (secFetchDest == "video" || secFetchDest == "audio" || secFetchDest == "image") {
                 return null
@@ -117,7 +111,6 @@ class LuminaWebViewClient(
             }
         }
 
-        // 6. Proxy CORS via OkHttp com streaming direto de InputStream (sem carregar tudo na RAM)
         return executeCorsProxyRequest(req)
     }
 
@@ -229,66 +222,18 @@ class LuminaWebViewClient(
 
     override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
         super.onPageStarted(view, url, favicon)
-        view?.let { injectViewportShim(it) }
+        view?.evaluateJavascript(
+            "if(window.__luminaFitViewport){window.__luminaFitViewport();}",
+            null
+        )
     }
 
     override fun onPageFinished(view: WebView?, url: String?) {
         super.onPageFinished(view, url)
-        view?.let {
-            injectViewportShim(it)
-            onAppReady()
-        }
-    }
-
-    /**
-     * Ajusta a escala 1920x1080 exatamente para qualquer resolução/densidade (720p, 1080p, 4K, mobile)
-     * sem usar setInitialScale duplicado.
-     */
-    private fun injectViewportShim(webView: WebView) {
-        val js = """
-        (function() {
-          if (window.__luminaAndroidShimInstalled) {
-            if (window.__luminaFitViewport) window.__luminaFitViewport();
-            return;
-          }
-          window.__luminaAndroidShimInstalled = true;
-
-          window.__luminaFitViewport = function() {
-            try {
-              var meta = document.querySelector('meta[name="viewport"]');
-              if (meta) {
-                meta.setAttribute('content', 'width=1920, height=1080, user-scalable=no');
-              }
-              var root = document.getElementById('app-root');
-              if (!root) return;
-              var vw = window.innerWidth || document.documentElement.clientWidth || 1920;
-              var vh = window.innerHeight || document.documentElement.clientHeight || 1080;
-              if (Math.abs(vw - 1920) <= 2 && Math.abs(vh - 1080) <= 2) {
-                root.style.transform = '';
-                root.style.transformOrigin = '';
-                root.style.left = '0px';
-                root.style.top = '0px';
-                return;
-              }
-              var scale = Math.min(vw / 1920, vh / 1080);
-              var offsetX = Math.max(0, Math.round((vw - 1920 * scale) / 2));
-              var offsetY = Math.max(0, Math.round((vh - 1080 * scale) / 2));
-              document.documentElement.style.width = vw + 'px';
-              document.documentElement.style.height = vh + 'px';
-              document.body.style.width = vw + 'px';
-              document.body.style.height = vh + 'px';
-              root.style.transformOrigin = '0 0';
-              root.style.transform = 'translate(' + offsetX + 'px, ' + offsetY + 'px) scale(' + scale + ')';
-            } catch (e) {}
-          };
-
-          window.addEventListener('resize', window.__luminaFitViewport);
-          window.__luminaFitViewport();
-          setTimeout(window.__luminaFitViewport, 150);
-          setTimeout(window.__luminaFitViewport, 600);
-        })();
-        """.trimIndent()
-
-        webView.evaluateJavascript(js, null)
+        view?.evaluateJavascript(
+            "if(window.__luminaFitViewport){window.__luminaFitViewport();}",
+            null
+        )
+        onAppReady()
     }
 }

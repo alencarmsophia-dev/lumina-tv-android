@@ -1,4 +1,4 @@
-name: Build & Release Lumina TV APK (v1.6.0)
+name: Build & Release Lumina TV APK (v2.0.0)
 
 on:
   push:
@@ -61,6 +61,12 @@ jobs:
             echo "Usando app/src/main/assets/app já versionado no repositório."
           fi
 
+      - name: Validar SVGs da marca (brand/) e atualizar PNGs via rsvg-convert (opcional se alterar SVGs)
+        run: |
+          if [ -f "brand/logo-mark.svg" ] && command -v rsvg-convert >/dev/null 2>&1; then
+            echo "rsvg-convert disponível para regeneração a partir de brand/*.svg"
+          fi
+
       - name: Validar e configurar Keystore de Assinatura
         run: |
           if [ -z "${{ secrets.KEYSTORE_BASE64 }}" ] || [ -z "${{ secrets.KEYSTORE_PASSWORD }}" ] || [ -z "${{ secrets.KEY_ALIAS }}" ] || [ -z "${{ secrets.KEY_PASSWORD }}" ]; then
@@ -84,7 +90,7 @@ jobs:
       - name: Publicar APK de Release como Artefato
         uses: actions/upload-artifact@v4
         with:
-          name: lumina-tv-v1.6.0-firetv-release-apk
+          name: lumina-tv-v2.0.0-firetv-release-apk
           path: |
             app/build/outputs/apk/release/lumina-tv.apk
             app/build/outputs/apk/release/lumina-tv.apk.sha256

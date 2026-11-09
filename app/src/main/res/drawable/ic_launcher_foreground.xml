@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group
+        android:translateX="22"
+        android:translateY="22">
+        <!-- Lâmina 1 (luz fria #67E8F9) -->
+        <path
+            android:fillColor="#67E8F9"
+            android:pathData="M 14 14.5 Q 14 10.5 17.6 12.6 L 25.5 17.1 L 19.5 51.1 L 17.6 52.2 Q 14 54.3 14 50.3 Z" />
+        <!-- Lâmina 2 (feixe principal #38BDF8) -->
+        <path
+            android:fillColor="#38BDF8"
+            android:pathData="M 29.2 19.2 L 40.2 25.5 L 36.2 41.5 L 23.2 49.0 Z" />
+        <!-- Lâmina 3 (ponta direita #0284C7) -->
+        <path
+            android:fillColor="#0284C7"
+            android:pathData="M 43.8 27.6 L 51.8 32.2 Q 55.2 34.1 51.8 36.0 L 39.8 42.9 Z" />
+        <!-- Centelha quente única (#FDE68A) -->
+        <path
+            android:fillColor="#FDE68A"
+            android:pathData="M 15.8,6.0 A 2.2,2.2 0 1,1 15.79,6.0 Z" />
+    </group>
+</vector>

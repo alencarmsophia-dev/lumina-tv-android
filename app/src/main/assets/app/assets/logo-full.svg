@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 292 64" width="292" height="64">
+  <defs>
+    <linearGradient id="fachoBlade1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#67E8F9"/>
+      <stop offset="100%" stop-color="#38BDF8"/>
+    </linearGradient>
+    <linearGradient id="fachoBlade2" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#38BDF8"/>
+      <stop offset="100%" stop-color="#0284C7"/>
+    </linearGradient>
+    <linearGradient id="fachoBlade3" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0284C7"/>
+      <stop offset="100%" stop-color="#6D5BFF"/>
+    </linearGradient>
+  </defs>
+  <linearGradient id="wordmarkCyanGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+    <stop offset="0%" stop-color="#67E8F9"/>
+    <stop offset="55%" stop-color="#38BDF8"/>
+    <stop offset="100%" stop-color="#0284C7"/>
+  </linearGradient>
+  <!-- Símbolo Facho (64x64) -->
+  <path class="brand-part brand-blade-1" d="M 14 14.5 Q 14 10.5 17.6 12.6 L 25.5 17.1 L 19.5 51.1 L 17.6 52.2 Q 14 54.3 14 50.3 Z" fill="url(#fachoBlade1)"/>
+  <path class="brand-part brand-blade-2" d="M 29.2 19.2 L 40.2 25.5 L 36.2 41.5 L 23.2 49.0 Z" fill="url(#fachoBlade2)"/>
+  <path class="brand-part brand-blade-3" d="M 43.8 27.6 L 51.8 32.2 Q 55.2 34.1 51.8 36.0 L 39.8 42.9 Z" fill="url(#fachoBlade3)"/>
+  <circle class="brand-part brand-spark-dot" cx="15.8" cy="8.2" r="2.2" fill="#FDE68A"/>
+  <!-- Wordmark LUMINA em Paths SVG (#F8FAFC) + Centelha no I (#FDE68A) + TV em peso leve (degradê ciano) -->
+  <path class="wm-letter wm-l1" d="M 76 18 H 80.2 V 41.8 H 93 V 46 H 76 Z" fill="#F8FAFC"/>
+  <path class="wm-letter wm-l2" d="M 98 18 H 102.2 V 36.5 C 102.2 40.2 104.6 42.2 108.5 42.2 C 112.4 42.2 114.8 40.2 114.8 36.5 V 18 H 119 V 36.8 C 119 42.8 114.8 46.2 108.5 46.2 C 102.2 46.2 98 42.8 98 36.8 Z" fill="#F8FAFC"/>
+  <path class="wm-letter wm-l3" d="M 125 46 V 18 H 129.4 L 137.5 34.2 L 145.6 18 H 150 V 46 H 145.8 V 26.8 L 139.1 40.0 H 135.9 L 129.2 26.8 V 46 Z" fill="#F8FAFC"/>
+  <path class="wm-letter wm-l4" d="M 157 24 H 161.2 V 46 H 157 Z" fill="#F8FAFC"/>
+  <circle class="wm-spark" cx="159.1" cy="18.2" r="2.5" fill="#FDE68A"/>
+  <path class="wm-letter wm-l5" d="M 168 46 V 18 H 172.2 L 184.8 38.2 V 18 H 189 V 46 H 184.8 L 172.2 25.8 V 46 Z" fill="#F8FAFC"/>
+  <path class="wm-letter wm-l6" d="M 204.2 18 H 208.8 L 219 46 H 214.4 L 211.9 38.8 H 201.1 L 198.6 46 H 194 Z M 202.5 34.8 H 210.5 L 206.5 23.2 Z" fill="#F8FAFC"/>
+  <path class="wm-letter wm-tv" d="M 233 18 H 253 V 20.6 H 244.3 V 46 H 241.7 V 20.6 H 233 Z M 257 18 H 259.8 L 267.5 42.2 L 275.2 18 H 278 L 268.9 46 H 266.1 Z" fill="url(#wordmarkCyanGrad)"/>
+</svg>

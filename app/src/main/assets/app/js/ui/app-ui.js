@@ -1,44 +1,93 @@
 (function (global) {
   'use strict';
 
+  // Variável única de controle da identidade visual ('A' | 'B' | 'C') — Seção 11
+  var BRAND_LOGO = 'A';
+
+  var MENU_ITEMS = [
+    { route: 'home', label: 'Início', iconId: 'icon-home' },
+    { route: 'search', label: 'Busca', iconId: 'icon-search' },
+    { route: 'live', label: 'Canais', iconId: 'icon-live' },
+    { route: 'movies', label: 'Filmes', iconId: 'icon-movies' },
+    { route: 'series', label: 'Séries', iconId: 'icon-series' },
+    { route: 'favorites', label: 'Favoritos', iconId: 'icon-favorites' }
+  ];
+
+  var SETTINGS_TABS = [
+    { id: 'source', label: 'Fonte e Pareamento' },
+    { id: 'playback', label: 'Reprodução' },
+    { id: 'screen', label: 'Tela e Desempenho' },
+    { id: 'organizer', label: 'Organizar Lista' },
+    { id: 'parental', label: 'Controle Parental' },
+    { id: 'updates', label: 'Atualizações' },
+    { id: 'backup', label: 'Backup e Dados' },
+    { id: 'about', label: 'Sobre' }
+  ];
+
+  // Seção 3: 12 paletas de degradê determinísticas (topo -> base) + 6 motivos geométricos planos
+  var POSTER_PALETTES = [
+    ['#1D3A8A', '#0B1130'],
+    ['#6D28D9', '#2E1065'],
+    ['#0F766E', '#022C22'],
+    ['#C2410C', '#431407'],
+    ['#0369A1', '#082F49'],
+    ['#334155', '#0F172A'],
+    ['#0D9488', '#042F2E'],
+    ['#7C3AED', '#1E1B4B'],
+    ['#B45309', '#451A03'],
+    ['#1E40AF', '#172554'],
+    ['#BE185D', '#500724'],
+    ['#4D7C0F', '#1A2E05']
+  ];
+
+  var POSTER_MOTIFS = ['moon', 'sun', 'mountains', 'city', 'forest', 'waves'];
+
   var selectedLiveCat = 'Todos os Canais';
   var selectedMovieCat = 'Todos os Filmes';
   var selectedSeriesCat = 'Todas as Séries';
   var selectedNovelaCat = 'Todas as Novelas';
-  var currentSort = 'recent'; // 'recent' | 'name' | 'rating' | 'year'
-  var currentLangFilter = 'ALL'; // 'ALL' | 'DUB' | 'LEG'
-  var currentQualityFilter = 'ALL'; // 'ALL' | '4K' | 'FHD' | 'HD'
-  var currentLetterFilter = 'ALL'; // 'ALL' | 'A'..'Z'
-  var activeSettingsTab = 'account'; // 'account' | 'playback' | 'appearance' | 'parental' | 'updates' | 'backup' | 'about'
-  var organizerSearchQuery = '';
+  var currentSeriesKind = 'series'; // 'series' | 'novelas' (controlado pelo seletor "Tipo" em Séries)
+  var currentSort = 'recent'; // 'recent' | 'name' | 'rating'
+  var currentLangFilter = 'Todos'; // 'Todos' | idiomas existentes
+  var currentLetterFilter = 'Todas'; // 'Todas' | 'A'..'Z'
+  var activeSettingsTab = 'source';
 
-  // Estados de janelas virtualizadas (permitem navegar em listas de 100.000+ itens mantendo < 150 nós no DOM)
+  // Estados de janelas virtualizadas
   var liveCatWindowStart = 0;
-  var LIVE_CAT_WIN_SIZE = 9;
+  var LIVE_CAT_WIN_SIZE = 10;
   var liveChWindowStart = 0;
-  var LIVE_CH_WIN_SIZE = 8;
+  var LIVE_CH_WIN_SIZE = 9;
   var focusedLiveChannelId = null;
 
+  var filterCatWindowStart = { movies: 0, series: 0, novelas: 0 };
+  var FILTER_CAT_WIN_SIZE = 8;
+
   var posterWindowStart = { movies: 0, series: 0, novelas: 0 };
-  var POSTER_COLS = 6;
+  var POSTER_COLS = 4;
   var POSTER_ROWS = 2;
-  var POSTER_WIN_SIZE = POSTER_COLS * POSTER_ROWS; // 12 cartões visíveis por janela, rolando suavemente
+  var POSTER_WIN_SIZE = POSTER_COLS * POSTER_ROWS; // 8 cartões 301x452 visíveis por janela (4x2)
 
   var detailEpWindowStart = 0;
-  var DETAIL_EP_WIN_SIZE = 6;
+  var DETAIL_EP_WIN_SIZE = 3;
 
   var orgGroupWindowStart = 0;
-  var ORG_GROUP_WIN_SIZE = 7;
+  var ORG_GROUP_WIN_SIZE = 5;
 
   var favWindowStart = 0;
   var FAV_WIN_SIZE = 8;
 
-  var contWindowStart = 0;
-  var CONT_WIN_SIZE = 6;
+  var sideMenuOpen = false;
+  var lastFocusedBeforeMenuId = null;
+  var lastRouteRendered = null;
+
+  var bootCompleted = false;
+  var introAnimationFinished = false;
+  var introWaitTimer = null;
+  var introFinishTimer = null;
 
   var pairingStarting = false;
   var pinDraft = '';
-  var pinModalMode = 'unlock'; // 'unlock' | 'change-current' | 'change-new' | 'change-confirm'
+  var pinModalMode = 'unlock';
   var pinChangeTempCurrent = '';
   var pinChangeTempNew = '';
   var pendingPinCallback = null;
@@ -52,9 +101,8 @@
     '4','5','6','7','8','9'
   ];
 
-  var LETTERS_BAR = ['ALL', 'A','B','C','D','E','F','G','H','I','J','K','L','M','N','O','P','Q','R','S','T','U','V','W','X','Y','Z'];
+  var LETTERS_LIST = ['Todas','A','B','C','D','E','F','G','H','I','J','K','L','M','N','O','P','Q','R','S','T','U','V','W','X','Y','Z'];
 
-  // Escape rigoroso de HTML e de Atributos (corrige vulnerabilidade/quebra de layout da Seção 4.2)
   function escHtml(t) {
     return String(t == null ? '' : t)
       .replace(/&/g, '&amp;')
@@ -68,21 +116,216 @@
     return escHtml(t);
   }
 
+  function fmtCountPt(n) {
+    var num = Math.max(0, parseInt(n || 0, 10));
+    return String(num).replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+  }
+
+  function fmtRatingPt(r) {
+    if (!r && r !== 0) return '';
+    var num = parseFloat(String(r).replace(',', '.'));
+    if (isNaN(num) || num <= 0) return '';
+    return num.toFixed(1).replace('.', ',');
+  }
+
   function fmtDateBr(ts) {
     if (!ts) return 'Nunca';
     try {
       var d = new Date(ts);
+      var now = new Date();
+      if (d.getDate() === now.getDate() && d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear()) {
+        return 'Atualizada hoje';
+      }
       var dd = ('0' + d.getDate()).slice(-2);
       var mm = ('0' + (d.getMonth() + 1)).slice(-2);
-      var hh = ('0' + d.getHours()).slice(-2);
-      var mi = ('0' + d.getMinutes()).slice(-2);
-      return dd + '/' + mm + '/' + d.getFullYear() + ' às ' + hh + ':' + mi;
+      return 'Atualizada em ' + dd + '/' + mm;
     } catch (e) {
-      return String(ts);
+      return 'Atualizada';
     }
   }
 
-  // ── Tela de progresso (carregamento de lista com opção de Cancelar) ──
+  function getBrandLogoSvg(variant, idSuffix) {
+    var v = variant || BRAND_LOGO || 'A';
+    var sfx = idSuffix || Math.floor(Math.random() * 100000);
+    if (v === 'B') {
+      return (
+        '<svg viewBox="0 0 64 64">' +
+          '<defs><linearGradient id="ldeluz_' + sfx + '" x1="0%" y1="0%" x2="100%" y2="100%">' +
+            '<stop offset="0%" stop-color="#67E8F9"/><stop offset="55%" stop-color="#38BDF8"/><stop offset="100%" stop-color="#0284C7"/>' +
+          '</linearGradient></defs>' +
+          '<path class="brand-part brand-blade-1" d="M 16 15 C 16 12.2 18.2 10 21 10 C 23.8 10 26 12.2 26 15 V 40 H 38 V 33.5 L 52 43.5 L 38 53.5 V 47 H 21 C 18.2 47 16 44.8 16 42 Z" fill="url(#ldeluz_' + sfx + ')"/>' +
+          '<path class="brand-part brand-blade-2" d="M 30 20 L 46 30 L 30 36 Z" fill="#38BDF8" opacity="0.45"/>' +
+          '<circle class="brand-part brand-spark-dot" cx="21" cy="6.2" r="2.4" fill="#FDE68A"/>' +
+        '</svg>'
+      );
+    }
+    if (v === 'C') {
+      return (
+        '<svg viewBox="0 0 64 64">' +
+          '<defs><linearGradient id="horiz_' + sfx + '" x1="0%" y1="0%" x2="100%" y2="100%">' +
+            '<stop offset="0%" stop-color="#67E8F9"/><stop offset="100%" stop-color="#0284C7"/>' +
+          '</linearGradient></defs>' +
+          '<path class="brand-part brand-blade-1" fill-rule="evenodd" d="M 10 44 A 22 22 0 0 1 54 44 H 46 A 14 14 0 0 0 18 44 Z M 28 27 L 40 34.5 L 28 42 Z" fill="url(#horiz_' + sfx + ')"/>' +
+          '<path class="brand-part brand-blade-2" d="M 16 22 A 24 24 0 0 1 48 22 L 45 25.5 A 19 19 0 0 0 19 25.5 Z" fill="#38BDF8"/>' +
+          '<rect class="brand-part brand-blade-3" x="10" y="48" width="44" height="5" rx="2.5" fill="#38BDF8"/>' +
+          '<circle class="brand-part brand-spark-dot" cx="32" cy="11.5" r="2.2" fill="#FDE68A"/>' +
+        '</svg>'
+      );
+    }
+    return (
+      '<svg viewBox="0 0 64 64">' +
+        '<defs>' +
+          '<linearGradient id="fb1_' + sfx + '" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#67E8F9"/><stop offset="100%" stop-color="#38BDF8"/></linearGradient>' +
+          '<linearGradient id="fb2_' + sfx + '" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#38BDF8"/><stop offset="100%" stop-color="#0284C7"/></linearGradient>' +
+          '<linearGradient id="fb3_' + sfx + '" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#0284C7"/><stop offset="100%" stop-color="#6D5BFF"/></linearGradient>' +
+        '</defs>' +
+        '<path class="brand-part brand-blade-1" d="M 14 14.5 Q 14 10.5 17.6 12.6 L 25.5 17.1 L 19.5 51.1 L 17.6 52.2 Q 14 54.3 14 50.3 Z" fill="url(#fb1_' + sfx + ')"/>' +
+        '<path class="brand-part brand-blade-2" d="M 29.2 19.2 L 40.2 25.5 L 36.2 41.5 L 23.2 49.0 Z" fill="url(#fb2_' + sfx + ')"/>' +
+        '<path class="brand-part brand-blade-3" d="M 43.8 27.6 L 51.8 32.2 Q 55.2 34.1 51.8 36.0 L 39.8 42.9 Z" fill="url(#fb3_' + sfx + ')"/>' +
+        '<circle class="brand-part brand-spark-dot" cx="15.8" cy="8.2" r="2.2" fill="#FDE68A"/>' +
+      '</svg>'
+    );
+  }
+
+  function computeTitleHash(title) {
+    var s = String(title || 'Lumina');
+    var h = 2166136261;
+    for (var i = 0; i < s.length; i++) {
+      h ^= s.charCodeAt(i);
+      h = Math.imul ? Math.imul(h, 16777619) : ((h * 16777619) | 0);
+    }
+    return Math.abs(h | 0);
+  }
+
+  function getTitlePalette(title) {
+    var h = computeTitleHash(title);
+    return POSTER_PALETTES[h % POSTER_PALETTES.length];
+  }
+
+  function getTitleGradient(title) {
+    var pair = getTitlePalette(title);
+    return 'linear-gradient(180deg, ' + pair[0] + ' 0%, ' + pair[1] + ' 100%)';
+  }
+
+  function getTitleMotif(title) {
+    var h = computeTitleHash(String(title || '') + ':motif');
+    return POSTER_MOTIFS[h % POSTER_MOTIFS.length];
+  }
+
+  function generateDeterministicArtSvg(title) {
+    var pair = getTitlePalette(title);
+    var baseColor = pair[1];
+    var motif = getTitleMotif(title);
+    var shapes = '';
+
+    if (motif === 'moon') {
+      shapes =
+        '<circle cx="222" cy="84" r="34" fill="#FDE68A" opacity="0.88"/>' +
+        '<polygon points="0,336 0,210 72,148 148,218 228,132 301,196 301,336" fill="' + baseColor + '" opacity="0.55"/>' +
+        '<polygon points="0,336 0,250 96,192 184,262 254,188 301,238 301,336" fill="' + baseColor + '"/>';
+    } else if (motif === 'sun') {
+      shapes =
+        '<circle cx="214" cy="96" r="42" fill="#FDBA74" opacity="0.90"/>' +
+        '<circle cx="214" cy="96" r="62" fill="#FDBA74" opacity="0.18"/>' +
+        '<polygon points="0,336 0,232 88,176 176,244 252,168 301,220 301,336" fill="' + baseColor + '" opacity="0.65"/>' +
+        '<rect x="0" y="276" width="301" height="60" fill="' + baseColor + '"/>';
+    } else if (motif === 'mountains') {
+      shapes =
+        '<polygon points="-10,336 -10,185 68,68 132,208 202,38 268,195 312,110 312,336" fill="' + baseColor + '" opacity="0.55"/>' +
+        '<polygon points="-10,336 -10,236 92,135 174,256 248,122 312,224 312,336" fill="' + baseColor + '"/>';
+    } else if (motif === 'city') {
+      shapes =
+        '<circle cx="226" cy="78" r="28" fill="#FDE68A" opacity="0.82"/>' +
+        '<rect x="6" y="190" width="40" height="146" fill="' + baseColor + '" opacity="0.92"/>' +
+        '<rect x="52" y="164" width="48" height="172" fill="' + baseColor + '" opacity="0.92"/>' +
+        '<rect x="106" y="224" width="38" height="112" fill="' + baseColor + '" opacity="0.92"/>' +
+        '<rect x="150" y="142" width="46" height="194" fill="' + baseColor + '" opacity="0.92"/>' +
+        '<rect x="202" y="178" width="42" height="158" fill="' + baseColor + '" opacity="0.92"/>' +
+        '<rect x="250" y="152" width="46" height="184" fill="' + baseColor + '" opacity="0.92"/>';
+    } else if (motif === 'forest') {
+      shapes =
+        '<ellipse cx="150" cy="72" rx="115" ry="30" fill="#67E8F9" opacity="0.20"/>' +
+        '<polygon points="32,162 68,336 -4,336" fill="' + baseColor + '"/>' +
+        '<polygon points="84,132 124,336 44,336" fill="' + baseColor + '"/>' +
+        '<polygon points="138,174 176,336 100,336" fill="' + baseColor + '"/>' +
+        '<polygon points="194,124 236,336 152,336" fill="' + baseColor + '"/>' +
+        '<polygon points="252,154 292,336 212,336" fill="' + baseColor + '"/>';
+    } else {
+      shapes =
+        '<circle cx="220" cy="82" r="34" fill="#E8EEFF" opacity="0.88"/>' +
+        '<path d="M 0 228 Q 75 196 150 228 T 301 228 L 301 336 L 0 336 Z" fill="' + baseColor + '" opacity="0.58"/>' +
+        '<path d="M 0 268 Q 75 240 150 268 T 301 268 L 301 336 L 0 336 Z" fill="' + baseColor + '"/>';
+    }
+
+    return '<svg class="poster-motif-svg" viewBox="0 0 301 336" preserveAspectRatio="none">' + shapes + '</svg>';
+  }
+
+  function formatDurationHuman(secondsOrMins) {
+    var sec = Number(secondsOrMins || 0);
+    if (!sec || sec <= 0) return '2 h 05 min';
+    var totalMin = sec > 300 ? Math.round(sec / 60) : Math.round(sec);
+    var h = Math.floor(totalMin / 60);
+    var m = totalMin % 60;
+    if (h > 0) {
+      return h + ' h ' + ('0' + m).slice(-2) + ' min';
+    }
+    return m + ' min';
+  }
+
+  function formatResumeClock(sec) {
+    var s = Math.max(0, Math.floor(Number(sec || 0)));
+    var h = Math.floor(s / 3600);
+    var m = Math.floor((s % 3600) / 60);
+    var r = s % 60;
+    var mm = ('0' + m).slice(-2);
+    var ss = ('0' + r).slice(-2);
+    return h > 0 ? (h + ':' + mm + ':' + ss) : (mm + ':' + ss);
+  }
+
+  function getClockStringNow() {
+    var d = new Date();
+    var hh = ('0' + d.getHours()).slice(-2);
+    var mm = ('0' + d.getMinutes()).slice(-2);
+    return hh + ':' + mm;
+  }
+
+  function getGreetingByHour(hour) {
+    var h = (typeof hour === 'number') ? hour : (new Date()).getHours();
+    if (h >= 5 && h < 12) return 'Bom dia';
+    if (h >= 12 && h < 18) return 'Boa tarde';
+    return 'Boa noite';
+  }
+
+  function renderSwitchControl(isOn) {
+    var cls = isOn ? ' is-on' : '';
+    var txt = isOn ? 'Ligado' : 'Desligado';
+    return (
+      '<div class="switch-wrap' + cls + '">' +
+        '<span class="switch-label-state">' + txt + '</span>' +
+        '<div class="switch-track"><div class="switch-thumb"></div></div>' +
+      '</div>'
+    );
+  }
+
+  function getMonogram(title) {
+    var clean = String(title || 'TV').replace(/[^a-zA-Z0-9À-ÿ ]/g, ' ').trim();
+    if (!clean) return 'TV';
+    var parts = clean.split(/\s+/);
+    if (parts.length >= 2) {
+      return (parts[0].charAt(0) + parts[1].charAt(0)).toUpperCase();
+    }
+    return clean.slice(0, 2).toUpperCase();
+  }
+
+  function svgChevLeft() {
+    return '<svg class="i" viewBox="0 0 24 24"><use href="#icon-chev-left"/></svg>';
+  }
+
+  function svgChevRight() {
+    return '<svg class="i" viewBox="0 0 24 24"><use href="#icon-chev-right"/></svg>';
+  }
+
+  // ── Carregamento de Lista ──
   function showLoading(title) {
     global.LuminaStore.set('loading', true);
     if (typeof document === 'undefined') return;
@@ -125,22 +368,6 @@
     setLoading(p.status, p.percent);
   }
 
-  var hintTimer = null;
-  var lastHintRoute = null;
-  function updateRemoteHints(route) {
-    if (typeof document === 'undefined') return;
-    var el = document.querySelector('.remote-hints');
-    if (!el || route === lastHintRoute) return;
-    lastHintRoute = route;
-    clearTimeout(hintTimer);
-    if (route === 'player-fullscreen') {
-      el.classList.add('is-hidden');
-      return;
-    }
-    el.classList.remove('is-hidden');
-    hintTimer = setTimeout(function () { el.classList.add('is-hidden'); }, 7000);
-  }
-
   function toast(msg) {
     if (typeof document === 'undefined') return;
     var box = document.getElementById('toast-container');
@@ -149,7 +376,12 @@
     el.className = 'toast';
     el.textContent = String(msg || '');
     box.appendChild(el);
-    setTimeout(function () { if (el.parentNode) el.parentNode.removeChild(el); }, 3400);
+    setTimeout(function () {
+      el.classList.add('is-leaving');
+      setTimeout(function () {
+        if (el.parentNode) el.parentNode.removeChild(el);
+      }, 140);
+    }, 3000);
   }
 
   function isItemLockedByParental(item) {
@@ -174,7 +406,7 @@
     return out;
   }
 
-  // ── Modal de PIN Parental (Desbloqueio + Troca de PIN com confirmação e bloqueio por tentativas) ──
+  // ── Modal de PIN Parental ──
   function openParentalPinModal(onUnlocked, mode) {
     pinDraft = '';
     pinModalMode = mode || 'unlock';
@@ -217,56 +449,50 @@
       padHtml += '<div id="pin-key-' + dg + '" class="pin-key focusable" data-pin-digit="' + dg + '" data-scope="pin-modal">' + dg + '</div>';
     }
 
-    var heading = 'Digite o PIN de 4 dígitos';
-    var subtitle = 'Conteúdo restrito (+18). Digite o seu PIN Parental (padrão inicial: 0000).';
+    var heading = 'Controle Parental';
+    var subtitle = 'Digite o seu PIN de 4 dígitos (padrão inicial: 0000).';
     if (pinModalMode === 'change-current') {
       heading = 'Alterar PIN · Passo 1 de 3';
-      subtitle = 'Digite o seu PIN ATUAL de 4 dígitos para continuar.';
+      subtitle = 'Digite o seu PIN atual de 4 dígitos.';
     } else if (pinModalMode === 'change-new') {
       heading = 'Alterar PIN · Passo 2 de 3';
-      subtitle = 'Digite o NOVO PIN de 4 dígitos que deseja salvar.';
+      subtitle = 'Digite o novo PIN de 4 dígitos.';
     } else if (pinModalMode === 'change-confirm') {
       heading = 'Alterar PIN · Passo 3 de 3';
-      subtitle = 'Confirme digitando novamente o NOVO PIN de 4 dígitos.';
+      subtitle = 'Confirme o novo PIN de 4 dígitos.';
     }
 
     modal.innerHTML =
-      '<div class="pin-modal-box">' +
-        '<div style="color:var(--accent-amber);font-size:19px;font-weight:700;letter-spacing:1.5px;">🔒 CONTROLE PARENTAL (+18)</div>' +
-        '<h2 style="font-size:32px;margin:8px 0;">' + escHtml(heading) + '</h2>' +
-        '<p style="color:var(--text-secondary);font-size:20px;">' + escHtml(statusText || subtitle) + '</p>' +
+      '<div class="modal-card" style="width:680px;text-align:center;">' +
+        '<div class="modal-title">' + escHtml(heading) + '</div>' +
+        '<div class="modal-body">' + escHtml(statusText || subtitle) + '</div>' +
         '<div class="pin-dots-display">' + masked + '</div>' +
         '<div class="pin-pad-grid">' + padHtml + '</div>' +
-        '<div style="margin-top:16px;">' +
-          '<button id="pin-btn-clear" class="btn btn-sm focusable" data-pin-action="clear" data-scope="pin-modal">Limpar</button>' +
-          '<button id="pin-btn-cancel" class="btn btn-sm focusable" data-pin-action="cancel" data-scope="pin-modal">Cancelar</button>' +
+        '<div class="modal-actions" style="justify-content:center;margin-top:24px;">' +
+          '<button id="pin-btn-clear" class="btn btn-secondary btn-modal focusable" data-pin-action="clear" data-scope="pin-modal">Limpar</button>' +
+          '<button id="pin-btn-cancel" class="btn btn-primary btn-modal focusable" data-pin-action="cancel" data-scope="pin-modal">Cancelar</button>' +
         '</div>' +
       '</div>';
 
     global.LuminaFocus.setFocus(document.getElementById('pin-key-0'), 'pin-modal');
   }
 
-  // ── Painel de Diagnóstico Multiplataforma (Seção 4.13 e 6.10) ──
+  // ── Painel de Diagnóstico ──
   function buildDiagnosticsReportText() {
     var diag = global.LuminaStore.get('diagnostics') || {};
     var domCount = (typeof document !== 'undefined' && document.getElementsByTagName) ? document.getElementsByTagName('*').length : 0;
     var plat = global.LuminaPlatform ? global.LuminaPlatform.getPlatformLabel() : 'Web';
-    var ver = global.LuminaPlatform ? global.LuminaPlatform.getAppVersion() : '1.6.0';
+    var ver = global.LuminaPlatform ? global.LuminaPlatform.getAppVersion() : '2.0.0';
     var items = global.LuminaStore.get('items') || [];
     var unclass = global.LuminaStore.get('unclassifiedList') || [];
     var estMemMb = Math.round(((items.length * 320) / (1024 * 1024)) * 10) / 10;
 
     return [
-      '=== RELATÓRIO DE DIAGNÓSTICO LUMINA TV v' + ver + ' ===',
-      'Plataforma: ' + plat,
-      'Motor Ativo: ' + (diag.engine || 'NativeEngine'),
-      'Cadeia Tentada: ' + (diag.attemptedChain || '-'),
-      'TTFF (1º Quadro): ' + (diag.ttffMs || 0) + ' ms',
-      'Reconexões: ' + (diag.reconnections || 0) + ' | Quadros Perdidos: ' + (diag.droppedFrames || 0),
-      'Nós no DOM: ' + domCount + ' | Memória Catálogo Est.: ~' + estMemMb + ' MB',
-      'Itens Visíveis: ' + items.length + ' | Não Classificados: ' + unclass.length,
-      'Geração Catálogo: ' + (diag.catalogGeneration || '-'),
-      'Último Erro: ' + (diag.lastError || '-')
+      'LUMINA TV v' + ver + ' · ' + plat,
+      'Motor Ativo: ' + (diag.engine || 'NativeEngine') + ' (' + (diag.attemptedChain || '-') + ')',
+      'TTFF: ' + (diag.ttffMs || 0) + ' ms · Reconexões: ' + (diag.reconnections || 0),
+      'Nós no DOM: ' + domCount + ' · Memória Catálogo: ~' + estMemMb + ' MB',
+      'Itens: ' + items.length + ' · Não classificados: ' + unclass.length
     ].join('\n');
   }
 
@@ -283,29 +509,19 @@
     var diag = global.LuminaStore.get('diagnostics') || {};
     var domCount = document.getElementsByTagName('*').length;
     diag.domNodes = domCount;
-    var isLite = global.LuminaStore.get('liteModeActive');
+    var appVer = global.LuminaPlatform ? global.LuminaPlatform.getAppVersion() : '2.0.0';
     var platLabel = global.LuminaPlatform ? global.LuminaPlatform.getPlatformLabel() : 'Smart TV';
-    var appVer = global.LuminaPlatform ? global.LuminaPlatform.getAppVersion() : '1.6.0';
     var itemsCount = (global.LuminaStore.get('items') || []).length;
-    var estMemMb = Math.round(((itemsCount * 320) / (1024 * 1024)) * 10) / 10;
-    var logs = (global.LuminaLog && global.LuminaLog.getRecent) ? global.LuminaLog.getRecent().slice(-3) : [];
-    var logHtml = '';
-    for (var i = 0; i < logs.length; i++) {
-      logHtml += '<div style="font-size:15px;color:#94A3B8;margin-top:3px;">[' + escHtml(logs[i].ts) + '] ' + escHtml(logs[i].tag) + ': ' + escHtml(logs[i].msg) + '</div>';
-    }
 
     box.innerHTML =
-      '<div style="display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid rgba(56,189,248,0.3);padding-bottom:8px;margin-bottom:10px;">' +
-        '<strong style="color:var(--accent-cyan);font-size:18px;">DIAGNÓSTICO LUMINA TV v' + escHtml(appVer) + '</strong>' +
-        '<span class="badge-pill">R·G·Y·B / MENU 2s</span>' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--line);padding-bottom:10px;margin-bottom:12px;">' +
+        '<strong style="color:var(--accent);font-size:24px;">Diagnóstico Lumina TV v' + escHtml(appVer) + '</strong>' +
+        '<span class="badge-quality">MENU 2s</span>' +
       '</div>' +
-      '<div>Plataforma: <strong>' + escHtml(platLabel) + '</strong></div>' +
-      '<div>Motor Ativo: <strong style="color:#38BDF8;">' + escHtml(diag.engine || 'NativeEngine') + '</strong> (' + escHtml(diag.attemptedChain || '-') + ')</div>' +
-      '<div>TTFF (1º Quadro): <strong>' + Number(diag.ttffMs || 0) + ' ms</strong> · Reconexões: <strong>' + Number(diag.reconnections || 0) + '</strong></div>' +
-      '<div>Nós no DOM: <strong style="color:#22C55E;">' + domCount + '</strong> · RAM Catálogo: <strong>~' + estMemMb + ' MB</strong> (' + itemsCount + ' itens)</div>' +
-      '<div>Geração IDB: <strong>' + escHtml(diag.catalogGeneration || '-') + '</strong> · Desempenho: <strong style="color:' + (isLite ? '#F59E0B' : '#22C55E') + ';">' + (isLite ? 'MODO LEVE' : 'PADRÃO 60fps') + '</strong></div>' +
-      '<div style="color:#FCA5A5;font-size:15px;margin-top:4px;">Último erro: ' + escHtml(diag.lastError || 'Nenhum') + '</div>' +
-      '<div style="margin-top:8px;border-top:1px solid rgba(255,255,255,0.08);padding-top:6px;">' + (logHtml || '<div style="font-size:15px;color:#94A3B8;">Log limpo · Sem erros recentes</div>') + '</div>';
+      '<div style="font-size:22px;margin-bottom:6px;">Plataforma: <strong>' + escHtml(platLabel) + '</strong></div>' +
+      '<div style="font-size:22px;margin-bottom:6px;">Motor: <strong style="color:var(--accent);">' + escHtml(diag.engine || 'NativeEngine') + '</strong></div>' +
+      '<div style="font-size:22px;margin-bottom:6px;">Nós DOM: <strong style="color:var(--green);">' + domCount + '</strong> · Catálogo: <strong>' + fmtCountPt(itemsCount) + '</strong></div>' +
+      '<div style="font-size:22px;color:var(--text-2);">Último erro: ' + escHtml(diag.lastError || 'Nenhum') + '</div>';
   }
 
   function sortItems(list, mode) {
@@ -313,9 +529,7 @@
     if (mode === 'name') {
       copy.sort(function (a, b) { return (a.cleanTitle || '').localeCompare(b.cleanTitle || ''); });
     } else if (mode === 'rating') {
-      copy.sort(function (a, b) { return (b.rating || 0) - (a.rating || 0); });
-    } else if (mode === 'year') {
-      copy.sort(function (a, b) { return (b.year || 0) - (a.year || 0); });
+      copy.sort(function (a, b) { return (parseFloat(b.rating) || 0) - (parseFloat(a.rating) || 0); });
     } else {
       copy.sort(function (a, b) { return (b.addedAt || 0) - (a.addedAt || 0); });
     }
@@ -343,85 +557,222 @@
     return result;
   }
 
-  // Renderiza capa/logo com lazy-load e fallback automático para monograma em caso de erro de imagem (Seção 4.3)
-  function renderPosterVisual(item, themeCls) {
-    var mono = escHtml((item.cleanTitle || 'TV').slice(0, 2).toUpperCase());
-    var badgeRight = item.totalEpisodes ? (item.totalEpisodes + ' eps') : escHtml(item.quality || 'FHD');
-    var recentMap = global.LuminaStore.get('recentAddedIds') || {};
-    var isNew = !!recentMap[item.id];
-    var progMap = global.LuminaStore.get('watchProgress') || {};
-    var pr = progMap[item.id];
-    var progStrip = (pr && pr.percent > 0 && !pr.completed)
-      ? '<div class="poster-progress-strip"><div class="poster-progress-fill" style="width:' + Math.min(100, Number(pr.percent || 0)) + '%;"></div></div>'
-      : '';
-
-    var imgTag = item.logo
-      ? '<img class="poster-img" src="' + escAttr(item.logo) + '" alt="" loading="lazy" onerror="this.style.display=\'none\'">'
-      : '';
-
-    return (
-      '<div class="poster-art ' + themeCls + '">' +
-        imgTag +
-        '<div class="poster-badge-top">' +
-          '<span>' + (isNew ? '<span class="badge-new" style="margin-right:6px;">NOVO</span>' : '') + '<span class="badge-pill">' + badgeRight + '</span></span>' +
-          (item.rating ? '<span class="badge-rating">★ ' + escHtml(item.rating) + '</span>' : '') +
-        '</div>' +
-        '<div class="poster-monogram">' + mono + '</div>' +
-        '<div style="font-size:17px;color:rgba(255,255,255,0.78);">' + escHtml(item.year || 2024) + ' · ' + escHtml(item.lang || 'DUB') + '</div>' +
-        progStrip +
-      '</div>'
-    );
+  // ── Menu Lateral Recolhido (120px) e Painel Sobreposto Aberto (360px) — Seção 5 ──
+  function getActiveNavRoute(route) {
+    if (route === 'novelas') return 'series';
+    if (route === 'onboarding' || route === 'organizer') return 'settings';
+    return route;
   }
 
   function renderSideNav(activeRoute) {
     if (typeof document === 'undefined') return;
-    var nav = document.getElementById('side-nav');
-    if (!nav) return;
+    var rail = document.getElementById('side-nav');
+    var drawer = document.getElementById('side-nav-drawer');
+    var backdrop = document.getElementById('nav-backdrop');
+    if (!rail || !drawer || !backdrop) return;
+
     if (activeRoute === 'player-fullscreen') {
-      nav.classList.add('hidden');
+      rail.classList.add('hidden');
+      drawer.classList.add('hidden');
+      backdrop.classList.add('hidden');
       return;
     }
-    nav.classList.remove('hidden');
+    rail.classList.remove('hidden');
+    drawer.classList.remove('hidden');
+    backdrop.classList.remove('hidden');
 
-    var unclassCount = (global.LuminaStore.get('unclassifiedList') || []).length;
-    var hasAppUpdate = !!(global.LuminaStore.get('appUpdateInfo') && global.LuminaStore.get('appUpdateInfo').hasUpdate);
+    var navActive = getActiveNavRoute(activeRoute);
+    var logoSvg = getBrandLogoSvg(BRAND_LOGO);
 
-    var items = [
-      { route: 'home', label: 'Início', iconId: 'icon-home' },
-      { route: 'search', label: 'Busca', iconId: 'icon-search' },
-      { route: 'live', label: 'Canais', iconId: 'icon-live' },
-      { route: 'movies', label: 'Filmes', iconId: 'icon-movies' },
-      { route: 'series', label: 'Séries', iconId: 'icon-series' },
-      { route: 'novelas', label: 'Novelas', iconId: 'icon-novelas' },
-      { route: 'continue', label: 'Continuar', iconId: 'icon-continue' },
-      { route: 'favorites', label: 'Favoritos', iconId: 'icon-favorites' },
-      { route: 'organizer', label: unclassCount > 0 ? ('Organizar (' + unclassCount + ')') : 'Organizar', iconId: 'icon-organizer' },
-      { route: 'onboarding', label: 'Parear / Fontes', iconId: 'icon-phone' },
-      { route: 'settings', label: hasAppUpdate ? 'Ajustes ●' : 'Ajustes', iconId: 'icon-settings' }
-    ];
-
-    var html =
-      '<div>' +
-        '<div class="brand-header">' +
-          '<div class="brand-mark">L</div>' +
-          '<div class="brand-title">Lumina TV</div>' +
-        '</div>' +
-        '<div class="nav-list">';
-
-    for (var i = 0; i < items.length; i++) {
-      var it = items[i];
-      var activeCls = (activeRoute === it.route) ? ' is-active' : '';
-      html +=
-        '<div id="nav-' + it.route + '" class="nav-item focusable' + activeCls + '" data-nav="' + escAttr(it.route) + '" data-scope="nav">' +
-          '<span style="width:28px;display:inline-flex;align-items:center;justify-content:center;"><svg class="ui-icon"><use href="#' + escAttr(it.iconId) + '"/></svg></span>' +
-          '<span class="nav-label">' + escHtml(it.label) + '</span>' +
+    // 1. Barra recolhida (120px): logo 64x64 no topo, itens de 72px com ícone 38px sem texto, Ajustes no rodapé
+    var awaitingCls = isBootSplashVisible() ? ' is-awaiting-flip' : '';
+    var railHtml = '<div id="side-nav-logo" class="brand-logo-box' + awaitingCls + '">' + getBrandLogoSvg(BRAND_LOGO, 'rail') + '</div><div class="nav-list">';
+    for (var i = 0; i < MENU_ITEMS.length; i++) {
+      var it = MENU_ITEMS[i];
+      var actCls = (navActive === it.route) ? ' is-active' : '';
+      railHtml +=
+        '<div class="nav-item-rail' + actCls + '">' +
+          '<svg class="i" viewBox="0 0 24 24"><use href="#' + escAttr(it.iconId) + '"/></svg>' +
         '</div>';
     }
-    html += '</div></div>';
-    nav.innerHTML = html;
+    railHtml += '</div><div class="nav-spacer"></div><div class="nav-list-bottom">';
+    railHtml +=
+      '<div class="nav-item-rail' + (navActive === 'settings' ? ' is-active' : '') + '">' +
+        '<svg class="i" viewBox="0 0 24 24"><use href="#icon-settings"/></svg>' +
+      '</div></div>';
+    rail.innerHTML = railHtml;
+
+    // 2. Painel aberto sobreposto (360px): logo + "Lumina TV" (34px/800), itens de 76px com ícone 38px + rótulo 28px/600
+    var drawerHtml =
+      '<div class="brand-row"><div class="brand-logo-box">' + logoSvg + '</div><b>Lumina TV</b></div>' +
+      '<div class="nav-list">';
+    for (var j = 0; j < MENU_ITEMS.length; j++) {
+      var m = MENU_ITEMS[j];
+      var mAct = (navActive === m.route) ? ' is-active' : '';
+      drawerHtml +=
+        '<div id="nav-' + m.route + '" class="nav-item focusable' + mAct + '" data-nav="' + escAttr(m.route) + '" data-scope="nav">' +
+          '<svg class="i" viewBox="0 0 24 24"><use href="#' + escAttr(m.iconId) + '"/></svg>' +
+          '<span>' + escHtml(m.label) + '</span>' +
+        '</div>';
+    }
+    drawerHtml += '</div><div class="nav-spacer"></div><div class="nav-list-bottom">';
+    drawerHtml +=
+      '<div id="nav-settings" class="nav-item focusable' + (navActive === 'settings' ? ' is-active' : '') + '" data-nav="settings" data-scope="nav">' +
+        '<svg class="i" viewBox="0 0 24 24"><use href="#icon-settings"/></svg>' +
+        '<span>Ajustes</span>' +
+      '</div></div>';
+    drawer.innerHTML = drawerHtml;
+
+    if (sideMenuOpen) {
+      drawer.classList.add('is-open');
+      backdrop.classList.add('is-open');
+    } else {
+      drawer.classList.remove('is-open');
+      backdrop.classList.remove('is-open');
+    }
   }
 
-  // ── 1. Tela Inicial (Hero + Carrosséis Horizontais) ──
+  function openSideMenu() {
+    if (typeof document === 'undefined') return false;
+    var route = global.LuminaRouter.getCurrent();
+    if (route === 'player-fullscreen') return false;
+    var cur = global.LuminaFocus.getCurrent();
+    if (cur && cur.id && cur.getAttribute('data-scope') !== 'nav') {
+      lastFocusedBeforeMenuId = cur.id;
+    }
+    sideMenuOpen = true;
+    var drawer = document.getElementById('side-nav-drawer');
+    var backdrop = document.getElementById('nav-backdrop');
+    if (drawer) drawer.classList.add('is-open');
+    if (backdrop) backdrop.classList.add('is-open');
+    global.LuminaFocus.setTrap(drawer);
+    var activeNavId = 'nav-' + getActiveNavRoute(route);
+    var targetEl = document.getElementById(activeNavId) || document.getElementById('nav-home');
+    if (targetEl) global.LuminaFocus.setFocus(targetEl, 'nav');
+    return true;
+  }
+
+  function closeSideMenu(restoreFocus) {
+    if (typeof document === 'undefined') return false;
+    sideMenuOpen = false;
+    var drawer = document.getElementById('side-nav-drawer');
+    var backdrop = document.getElementById('nav-backdrop');
+    if (drawer) drawer.classList.remove('is-open');
+    if (backdrop) backdrop.classList.remove('is-open');
+    global.LuminaFocus.setTrap(null);
+    if (restoreFocus) {
+      if (lastFocusedBeforeMenuId) {
+        var prevEl = document.getElementById(lastFocusedBeforeMenuId);
+        if (prevEl && global.LuminaFocus.setFocus(prevEl)) return true;
+      }
+      var route = global.LuminaRouter.getCurrent() || 'home';
+      global.LuminaFocus.restoreOrDefault(route);
+    }
+    return true;
+  }
+
+  function isSideMenuOpen() {
+    return !!sideMenuOpen;
+  }
+
+  // ── Cabeçalho Técnico da Viewport (mantém T4 compatível com viewport-fit.js) ──
+  function buildHomeViewportHeaderHtml() {
+    var platName = global.LuminaPlatform ? global.LuminaPlatform.getPlatformLabel() : 'Smart TV';
+    var appVer = global.LuminaPlatform ? global.LuminaPlatform.getAppVersion() : '2.0.0';
+    var baseText = 'LUMINA TV v' + appVer + ' \u2022 ' + platName.toUpperCase();
+    var vInfo = (typeof global.__luminaViewportInfo === 'function')
+      ? global.__luminaViewportInfo()
+      : { viewW: 1920, viewH: 1080, scale: 1 };
+    var scalePct = (Number(vInfo.scale || 1) * 100).toFixed(1).replace('.', ',');
+    var fullText = baseText + ' \u2022 TELA ' + Math.round(vInfo.viewW || 1920) + '\u00D7' + Math.round(vInfo.viewH || 1080) + ' \u2022 ESCALA ' + scalePct + '%';
+    return '<div id="home-viewport-header" class="hidden" data-base-header="' + escAttr(baseText) + '">' + escHtml(fullText) + '</div>';
+  }
+
+  // ── 1. Tela Início v2.0.0 (Seção 4: Saudação, Relógio 30s, Carrossel 8s Ken Burns, "Ver tudo" e 1º Cartão Continuar 420x236) ──
+  var homeCarouselTimer = null;
+  var homeClockTimer = null;
+
+  function isFocusInsideHeroBanner() {
+    if (typeof document === 'undefined') return false;
+    var cur = global.LuminaFocus && global.LuminaFocus.getCurrent ? global.LuminaFocus.getCurrent() : null;
+    if (!cur) return false;
+    var banner = document.getElementById('home-hero-banner');
+    return !!(banner && banner.contains && banner.contains(cur));
+  }
+
+  function scheduleHomeCarouselTick() {
+    clearTimeout(homeCarouselTimer);
+    if (typeof document === 'undefined') return;
+    if (global.LuminaRouter.getCurrent() !== 'home') return;
+    homeCarouselTimer = setTimeout(function () {
+      if (global.LuminaRouter.getCurrent() !== 'home') return;
+      if (!isFocusInsideHeroBanner() && !sideMenuOpen) {
+        var curIdx = global.LuminaStore.get('heroBannerIndex') || 0;
+        global.LuminaStore.set('heroBannerIndex', curIdx + 1);
+        renderCurrentRoute();
+      } else {
+        scheduleHomeCarouselTick();
+      }
+    }, 8000);
+  }
+
+  function startHomeClockUpdater() {
+    clearInterval(homeClockTimer);
+    if (typeof document === 'undefined') return;
+    homeClockTimer = setInterval(function () {
+      var el = document.getElementById('home-clock-display');
+      if (el) el.textContent = getClockStringNow();
+    }, 30000);
+  }
+
+  function getScreenEnterClass() {
+    var dir = global.LuminaStore ? global.LuminaStore.get('navDirection') : 'forward';
+    return dir === 'back' ? 'screen-enter-back' : 'screen-enter-forward';
+  }
+
+  function renderHomeTile(item, tileId, progressPct, actionAttr, isLeadContinue) {
+    var grad = getTitleGradient(item.cleanTitle);
+    var motifSvg = generateDeterministicArtSvg(item.cleanTitle);
+    var mono = escHtml(getMonogram(item.cleanTitle));
+    var imgTag = item.logo
+      ? '<img class="home-tile-img lazy-fade" src="' + escAttr(item.logo) + '" alt="" loading="lazy" decoding="async" onload="this.classList.add(\'is-loaded\')" onerror="this.style.display=\'none\'">'
+      : '';
+    var progHtml = (typeof progressPct === 'number' && progressPct > 0)
+      ? '<div class="progress-track"><b class="progress-fill" style="width:' + Math.min(100, Math.round(progressPct)) + '%"></b></div>'
+      : '';
+    var leadCls = isLeadContinue ? ' is-lead-continue' : '';
+
+    return (
+      '<div id="' + escAttr(tileId) + '" class="home-tile' + leadCls + ' focusable" style="background:' + grad + ';" ' + actionAttr + ' data-scope="home">' +
+        motifSvg +
+        imgTag +
+        '<div class="card-focus-sheen"></div>' +
+        '<div class="home-tile-mono">' + mono + '</div>' +
+        '<div class="home-tile-shade"></div>' +
+        '<div class="home-tile-title">' + escHtml(item.cleanTitle) + '</div>' +
+        progHtml +
+      '</div>'
+    );
+  }
+
+  function renderEmptyListIllustrationSvg() {
+    return (
+      '<svg width="240" height="160" viewBox="0 0 240 160" style="flex-shrink:0;">' +
+        '<defs>' +
+          '<linearGradient id="empScreenGrad" x1="0%" y1="0%" x2="100%" y2="100%">' +
+            '<stop offset="0%" stop-color="#172554"/><stop offset="100%" stop-color="#0B0F17"/>' +
+          '</linearGradient>' +
+        '</defs>' +
+        '<rect x="12" y="16" width="146" height="96" rx="14" fill="url(#empScreenGrad)" stroke="#38BDF8" stroke-width="2"/>' +
+        '<polygon points="74,48 104,64 74,80" fill="#38BDF8"/>' +
+        '<rect x="56" y="120" width="58" height="6" rx="3" fill="#334155"/>' +
+        '<rect x="174" y="28" width="54" height="96" rx="10" fill="#131B2E" stroke="#67E8F9" stroke-width="2"/>' +
+        '<rect x="186" y="46" width="30" height="30" rx="4" fill="rgba(56,189,248,0.18)" stroke="#38BDF8" stroke-width="1.5"/>' +
+        '<circle cx="201" cy="106" r="4" fill="#FDE68A"/>' +
+      '</svg>'
+    );
+  }
+
   function renderHome(viewport) {
     var allItems = global.LuminaStore.get('items') || [];
     var allChannels = global.LuminaStore.get('channels') || [];
@@ -430,218 +781,236 @@
     var novelas = global.LuminaStore.get('novelasList') || [];
     var unclass = global.LuminaStore.get('unclassifiedList') || [];
 
-    var items = allItems.length ? filterAdultForPublicViews(allItems.slice(0, 30)) : [];
     var channels = allChannels.length ? filterAdultForPublicViews(allChannels.slice(0, 30)) : [];
     var movies = allMovies.length ? filterAdultForPublicViews(allMovies.slice(0, 30)) : [];
     var publicSeries = series.length ? filterAdultForPublicViews(series.slice(0, 20)) : [];
     var publicNovelas = novelas.length ? filterAdultForPublicViews(novelas.slice(0, 20)) : [];
 
-    var platName = global.LuminaPlatform ? global.LuminaPlatform.getPlatformLabel() : 'Smart TV';
-    var accInfo = global.LuminaStore.get('accountInfo');
-    var expBanner = '';
-    if (accInfo && accInfo.isExpiringSoon && accInfo.daysRemaining != null) {
-      expBanner =
-        '<div style="background:rgba(245,158,11,0.18);border:1px solid var(--accent-amber);border-radius:var(--radius-md);padding:10px 18px;margin-bottom:14px;font-size:19px;color:#FDE68A;">' +
-          '⚠ Sua assinatura Xtream vence em <strong>' + Number(accInfo.daysRemaining) + ' dia(s)</strong> (' + escHtml(accInfo.expDate || '') + '). Confira em Ajustes → Minha Conta.' +
-        '</div>';
-    }
+    var greetingText = getGreetingByHour();
+    var clockText = getClockStringNow();
+    var enterCls = getScreenEnterClass();
 
+    // Estado vazio (sem lista — Seção 4): ilustração, título "Vamos colocar sua lista aqui" (36px/800), texto 26px #94A3B8 sem corte e botão "Parear agora"
     if (!allItems.length && !unclass.length) {
       viewport.innerHTML =
-        '<div style="display:flex;flex-direction:column;justify-content:center;height:840px;max-width:1380px;">' +
-          '<div style="font-size:20px;color:var(--accent-cyan);font-weight:700;letter-spacing:2px;margin-bottom:10px;">LUMINA TV v1.6.0 · ' + escHtml(platName.toUpperCase()) + '</div>' +
-          '<div class="empty-state-panel">' +
-            '<div class="empty-state-illustration">' +
-              '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 260 150" style="width:100%;height:100%;">' +
-                '<rect x="10" y="14" width="150" height="104" rx="14" fill="#131B2E" stroke="#38BDF8" stroke-width="2.5"/>' +
-                '<polygon points="74,50 106,66 74,82" fill="#38BDF8"/>' +
-                '<rect x="182" y="26" width="64" height="106" rx="10" fill="#131B2E" stroke="#F59E0B" stroke-width="2.5"/>' +
-                '<rect x="196" y="46" width="36" height="36" rx="4" fill="rgba(245,158,11,0.25)" stroke="#F59E0B" stroke-width="1.8"/>' +
-                '<circle cx="214" cy="116" r="4" fill="#F59E0B"/>' +
-                '<path d="M164 66 H178" stroke="#38BDF8" stroke-width="2.5" stroke-dasharray="4 4"/>' +
-              '</svg>' +
-            '</div>' +
+        '<div class="' + enterCls + '">' +
+          buildHomeViewportHeaderHtml() +
+          '<div class="home-top-bar">' +
+            '<div class="home-greeting">' + escHtml(greetingText) + '</div>' +
+            '<div id="home-clock-display" class="home-clock">' + escHtml(clockText) + '</div>' +
+          '</div>' +
+          '<div class="home-empty-card">' +
+            renderEmptyListIllustrationSvg() +
             '<div>' +
-              '<h1 style="font-size:42px;margin-bottom:12px;">Envie sua lista pelo Celular ou conecte uma fonte</h1>' +
-              '<p style="color:var(--text-secondary);font-size:22px;margin-bottom:26px;">Use o pareamento rápido por código/QR Code no celular (criptografia ponta-a-ponta via Surubim Pairing) para carregar sua lista M3U ou login Xtream Codes.</p>' +
-              '<div>' +
-                '<button id="home-btn-phone" class="btn btn-primary focusable" data-action="go-phone-pairing" data-scope="home">📱 Parear pelo Celular (Código / QR)</button>' +
-                '<button id="home-btn-xtream" class="btn focusable" data-action="go-onboarding" data-scope="home">Fontes & Atualização</button>' +
+              '<div class="home-empty-title">Vamos colocar sua lista aqui</div>' +
+              '<div class="home-empty-sub">Use o pareamento rápido por código ou QR Code para trazer seus canais, filmes e séries.</div>' +
+              '<div style="display:flex;gap:20px;">' +
+                '<button id="home-btn-phone" class="btn btn-primary focusable" data-action="go-phone-pairing" data-scope="home">' +
+                  '<svg class="i" viewBox="0 0 24 24"><use href="#icon-play"/></svg>Parear agora' +
+                '</button>' +
+                '<button id="home-btn-settings" class="btn btn-secondary focusable" data-nav="settings" data-scope="home">' +
+                  '<svg class="i" viewBox="0 0 24 24"><use href="#icon-settings"/></svg>Ajustes' +
+                '</button>' +
               '</div>' +
             '</div>' +
           '</div>' +
         '</div>';
+      startHomeClockUpdater();
       global.LuminaFocus.restoreOrDefault('home', '#home-btn-phone');
       return;
     }
 
-    var highlights = [].concat(movies.slice(0, 2), publicSeries.slice(0, 2), publicNovelas.slice(0, 1));
-    if (!highlights.length) highlights = items.slice(0, 3);
-    if (!highlights.length && unclass.length) highlights = unclass.slice(0, 1);
+    var favMap = global.LuminaStore.get('favorites') || {};
+    var byId = global.LuminaStore.get('itemByIdMap') || {};
+    var favItems = [];
+    var favKeys = Object.keys(favMap);
+    for (var fk = 0; fk < favKeys.length && favItems.length < 3; fk++) {
+      var fIt = byId[favKeys[fk]];
+      if (fIt && !isItemLockedByParental(fIt)) favItems.push(fIt);
+    }
 
-    var bIdx = (global.LuminaStore.get('heroBannerIndex') || 0) % highlights.length;
+    var highlights = [].concat(favItems.slice(0, 2), movies.slice(0, 3), publicSeries.slice(0, 2)).slice(0, 5);
+    if (!highlights.length) highlights = [].concat(channels.slice(0, 3), publicNovelas.slice(0, 2)).slice(0, 5);
+    if (!highlights.length) highlights = allItems.slice(0, 5);
+
+    var bIdx = ((global.LuminaStore.get('heroBannerIndex') || 0) % highlights.length + highlights.length) % highlights.length;
     var hero = highlights[bIdx];
     var isHeroFav = global.LuminaStore.isFavorite(hero.id);
 
     var dotsHtml = '';
     for (var d = 0; d < highlights.length; d++) {
-      dotsHtml += '<div class="hero-dot' + (d === bIdx ? ' is-active' : '') + '"></div>';
+      if (d === bIdx) {
+        dotsHtml += '<i class="home-banner-dot is-active"><b class="home-banner-dot-fill"></b></i>';
+      } else {
+        dotsHtml += '<i class="home-banner-dot"></i>';
+      }
     }
 
     var heroPlayAttr = (hero.kind === 'series-show' || hero.kind === 'novela-show')
       ? ('data-detail-id="' + escAttr(hero.id) + '"')
       : (hero.kind === 'live' ? ('data-play-id="' + escAttr(hero.id) + '"') : ('data-play-vod="' + escAttr(hero.id) + '"'));
 
-    var heroSynopsis = hero.synopsis
-      ? ('Sinopse: ' + hero.synopsis)
-      : ((hero.quality ? 'Qualidade ' + hero.quality + ' · ' : '') +
-         (hero.rating ? 'Nota ★ ' + hero.rating + ' · ' : '') +
-         (hero.lang ? 'Idioma ' + hero.lang + ' · ' : '') +
-         'Catálogo com ' + allChannels.length + ' canais, ' + allMovies.length + ' filmes, ' + series.length + ' séries e ' + novelas.length + ' novelas.');
+    var heroSub = hero.synopsis
+      ? hero.synopsis
+      : ((hero.year ? hero.year + ' \u00B7 ' : '') + (hero.groupDisplay || hero.groupOriginal || 'Destaque do seu catálogo'));
+
+    var heroGrad = getTitleGradient(hero.cleanTitle);
+    var heroMotif = generateDeterministicArtSvg(hero.cleanTitle);
+    var bannerImg = hero.logo
+      ? '<img class="home-banner-art lazy-fade" src="' + escAttr(hero.logo) + '" alt="" loading="lazy" decoding="async" onload="this.classList.add(\'is-loaded\')" onerror="this.style.display=\'none\'">'
+      : '';
 
     var html =
-      '<div class="home-scroll-area">' +
-        expBanner +
-        '<div class="hero-banner">' +
-          '<div class="hero-top-meta">' +
-            '<div style="color:var(--accent-cyan);font-size:19px;font-weight:700;letter-spacing:1.5px;">DESTAQUE (' + (bIdx + 1) + '/' + highlights.length + ') · ' + escHtml((hero.groupDisplay || hero.groupOriginal || '').toUpperCase()) + (hero.tmdbEnriched ? ' · ✓ TMDB' : '') + '</div>' +
-            '<div class="hero-dots">' + dotsHtml + '</div>' +
+      '<div class="' + enterCls + '">' +
+        buildHomeViewportHeaderHtml() +
+        '<div class="home-top-bar">' +
+          '<div class="home-greeting">' + escHtml(greetingText) + '</div>' +
+          '<div id="home-clock-display" class="home-clock">' + escHtml(clockText) + '</div>' +
+        '</div>' +
+        '<div id="home-hero-banner" class="home-banner">' +
+          '<div class="home-banner-bg-wrap">' +
+            '<div class="ken-burns-bg" style="background:' + heroGrad + ';">' +
+              heroMotif +
+              bannerImg +
+            '</div>' +
           '</div>' +
-          '<div>' +
-            '<h1 style="font-size:42px;margin-bottom:6px;">' + escHtml(hero.cleanTitle) + ' (' + escHtml(hero.year || 2024) + ')</h1>' +
-            '<p style="color:var(--text-secondary);font-size:21px;max-width:1240px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + escHtml(heroSynopsis) + '</p>' +
+          '<div class="home-banner-scrim-side"></div>' +
+          '<div class="home-banner-scrim-bottom"></div>' +
+          '<div class="home-banner-content">' +
+            '<span class="badge-new is-inline">NOVO</span>' +
+            '<div class="home-banner-title">' + escHtml(hero.cleanTitle) + '</div>' +
+            '<div class="home-banner-sub">' + escHtml(heroSub) + '</div>' +
+            '<div class="home-banner-actions">' +
+              '<button id="home-hero-play" class="btn btn-primary focusable" data-hero-control="play" ' + heroPlayAttr + ' data-scope="home">' +
+                '<svg class="i" viewBox="0 0 24 24"><use href="#icon-play"/></svg>Assistir' +
+              '</button>' +
+              '<button id="home-hero-fav" class="btn btn-secondary focusable" data-hero-control="fav" data-fav-id="' + escAttr(hero.id) + '" data-scope="home">' +
+                '<svg class="i" viewBox="0 0 24 24"><use href="#' + (isHeroFav ? 'icon-star' : 'icon-plus') + '"/></svg>' +
+                (isHeroFav ? 'Nos favoritos' : 'Favoritar') +
+              '</button>' +
+            '</div>' +
           '</div>' +
-          '<div>' +
-            '<button id="home-hero-play" class="btn btn-primary focusable" ' + heroPlayAttr + ' data-scope="home">▶ Assistir Agora</button>' +
-            '<button id="home-hero-info" class="btn focusable" data-detail-id="' + escAttr(hero.id) + '" data-scope="home">ℹ Mais Informações</button>' +
-            '<button id="home-hero-fav" class="btn focusable" data-fav-id="' + escAttr(hero.id) + '" data-scope="home">' + (isHeroFav ? '♥ Favorito' : '♡ Favoritar') + '</button>' +
-            '<button id="home-hero-next" class="btn focusable" data-action="next-banner" data-scope="home">Próximo ↻</button>' +
-          '</div>' +
+          '<div class="home-banner-dots">' + dotsHtml + '</div>' +
         '</div>';
 
     var continueList = getContinueWatchingItems();
-    var favMap = global.LuminaStore.get('favorites') || {};
-    var byId = global.LuminaStore.get('itemByIdMap') || {};
-    var favKeys = Object.keys(favMap);
-    var favItems = [];
-    for (var fk = 0; fk < favKeys.length && favItems.length < 10; fk++) {
-      var fIt = byId[favKeys[fk]];
-      if (fIt && !isItemLockedByParental(fIt)) favItems.push(fIt);
+    var favChannels = [];
+    for (var fc = 0; fc < channels.length && favChannels.length < 5; fc++) {
+      if (favMap[channels[fc].id]) favChannels.push(channels[fc]);
     }
 
-    var rowsSpec = [];
+    var rows = [];
     if (continueList.length) {
-      rowsSpec.push({
+      rows.push({
         id: 'continue',
-        title: 'Continuar Assistindo (' + continueList.length + ')',
-        cards: continueList.slice(0, 6).map(function (entry) {
+        title: 'Continuar assistindo',
+        seeAllRoute: 'movies',
+        leadFirst: true,
+        items: continueList.slice(0, 5).map(function (entry) {
           return {
-            id: entry.item.id,
-            title: entry.item.cleanTitle,
-            sub: 'Retomar em ' + Number(entry.progress.percent || 0) + '%',
-            badge: Number(entry.progress.percent || 0) + '%',
-            attr: 'data-play-vod="' + escAttr(entry.item.id) + '"',
-            cls: 'kind-continue'
-          };
-        })
-      });
-    }
-
-    if (favItems.length) {
-      rowsSpec.push({
-        id: 'favs',
-        title: 'Meus Favoritos ★ (' + favItems.length + ')',
-        cards: favItems.slice(0, 6).map(function (it) {
-          var attr = it.kind === 'live' ? ('data-play-id="' + escAttr(it.id) + '"') : ('data-detail-id="' + escAttr(it.id) + '"');
-          return {
-            id: it.id,
-            title: it.cleanTitle,
-            sub: it.groupMapped || it.groupDisplay || '',
-            badge: '★',
-            attr: attr,
-            cls: 'kind-novela'
-          };
-        })
-      });
-    }
-
-    if (channels.length) {
-      rowsSpec.push({
-        id: 'live',
-        title: 'Canais ao Vivo (' + allChannels.length + ')',
-        cards: channels.slice(0, 6).map(function (ch) {
-          return {
-            id: ch.id,
-            title: '#' + Number(ch.channelNumber || 1) + ' ' + ch.cleanTitle,
-            sub: ch.epgNow || ch.groupDisplay || ch.groupOriginal,
-            badge: ch.quality || 'HD',
-            attr: 'data-play-id="' + escAttr(ch.id) + '"',
-            cls: 'kind-movie'
+            item: entry.item,
+            progress: Number(entry.progress.percent || 30),
+            attr: 'data-play-vod="' + escAttr(entry.item.id) + '"'
           };
         })
       });
     }
 
     if (movies.length) {
-      rowsSpec.push({
+      var progMap = global.LuminaStore.get('watchProgress') || {};
+      rows.push({
         id: 'movies',
-        title: 'Filmes Adicionados Recentemente (' + allMovies.length + ')',
-        cards: movies.slice(0, 6).map(function (mv) {
+        title: 'Filmes recentes',
+        seeAllRoute: 'movies',
+        leadFirst: false,
+        items: movies.slice(0, 5).map(function (mv) {
+          var pr = progMap[mv.id];
           return {
-            id: mv.id,
-            title: mv.cleanTitle,
-            sub: (mv.year || 2024) + ' · ★ ' + mv.rating,
-            badge: mv.quality || 'FHD',
-            attr: 'data-detail-id="' + escAttr(mv.id) + '"',
-            cls: 'kind-movie'
+            item: mv,
+            progress: (pr && pr.percent > 0 && !pr.completed) ? Number(pr.percent) : 0,
+            attr: 'data-detail-id="' + escAttr(mv.id) + '"'
           };
         })
       });
     }
 
     if (publicSeries.length || publicNovelas.length) {
-      var combinedShows = publicSeries.slice(0, 4).concat(publicNovelas.slice(0, 2));
-      rowsSpec.push({
-        id: 'shows',
-        title: 'Séries & Novelas em Destaque (' + (series.length + novelas.length) + ')',
-        cards: combinedShows.map(function (sh) {
-          var epCountLabel = sh.needsSeriesInfo ? 'Sob demanda' : (Number(sh.totalEpisodes || 0) + ' eps');
+      var featuredShows = publicSeries.slice(0, 5);
+      if (featuredShows.length < 5) {
+        featuredShows = featuredShows.concat(publicNovelas.slice(0, 5 - featuredShows.length));
+      }
+      rows.push({
+        id: 'series',
+        title: 'Séries em destaque',
+        seeAllRoute: 'series',
+        leadFirst: false,
+        items: featuredShows.slice(0, 5).map(function (sh) {
           return {
-            id: sh.id,
-            title: sh.cleanTitle,
-            sub: (sh.isNovela ? 'Novela' : 'Série') + ' · ' + epCountLabel,
-            badge: '★ ' + sh.rating,
-            attr: 'data-detail-id="' + escAttr(sh.id) + '"',
-            cls: sh.isNovela ? 'kind-novela' : 'kind-series'
+            item: sh,
+            progress: 0,
+            attr: 'data-detail-id="' + escAttr(sh.id) + '"'
           };
         })
       });
     }
 
-    var visibleRows = rowsSpec.slice(0, 3);
-    for (var r = 0; r < visibleRows.length; r++) {
-      var row = visibleRows[r];
-      html += '<div class="home-row-block"><div class="home-row-title">' + escHtml(row.title) + '</div><div class="home-row-strip">';
-      for (var c = 0; c < row.cards.length; c++) {
-        var card = row.cards[c];
-        html +=
-          '<div id="home-row-' + escAttr(row.id) + '-' + c + '" class="mini-card ' + escAttr(card.cls) + ' focusable" ' + card.attr + ' data-scope="home">' +
-            '<div style="display:flex;justify-content:space-between;align-items:center;">' +
-              '<span style="font-size:21px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:185px;">' + escHtml(card.title) + '</span>' +
-              '<span class="badge-pill" style="font-size:15px;">' + escHtml(card.badge) + '</span>' +
-            '</div>' +
-            '<div style="font-size:18px;color:var(--text-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + escHtml(card.sub) + '</div>' +
-          '</div>';
+    if (favChannels.length) {
+      rows.push({
+        id: 'favchannels',
+        title: 'Canais favoritos',
+        seeAllRoute: 'live',
+        leadFirst: false,
+        items: favChannels.slice(0, 5).map(function (ch) {
+          return {
+            item: ch,
+            progress: 0,
+            attr: 'data-play-id="' + escAttr(ch.id) + '"'
+          };
+        })
+      });
+    } else if (channels.length && rows.length < 2) {
+      rows.push({
+        id: 'livechannels',
+        title: 'Canais ao vivo',
+        seeAllRoute: 'live',
+        leadFirst: false,
+        items: channels.slice(0, 5).map(function (ch) {
+          return {
+            item: ch,
+            progress: 0,
+            attr: 'data-play-id="' + escAttr(ch.id) + '"'
+          };
+        })
+      });
+    }
+
+    var maxVisibleRows = Math.min(rows.length, 2);
+    for (var r = 0; r < maxVisibleRows; r++) {
+      var row = rows[r];
+      var staggerCls = ' stagger-' + (r + 1);
+      html +=
+        '<div class="home-row-section' + staggerCls + '">' +
+          '<div class="home-row-header">' +
+            '<div class="home-row-heading">' + escHtml(row.title) + '</div>' +
+            '<div id="home-seeall-' + escAttr(row.id) + '" class="home-row-see-all focusable" data-nav="' + escAttr(row.seeAllRoute) + '" data-scope="home">Ver tudo</div>' +
+          '</div>' +
+          '<div class="home-tile-grid">';
+      var maxCardsInRow = row.leadFirst ? Math.min(row.items.length, 4) : Math.min(row.items.length, 5);
+      for (var c = 0; c < maxCardsInRow; c++) {
+        var entry = row.items[c];
+        html += renderHomeTile(entry.item, 'home-tile-' + row.id + '-' + c, entry.progress, entry.attr, row.leadFirst && c === 0);
       }
       html += '</div></div>';
     }
 
     html += '</div>';
     viewport.innerHTML = html;
+    startHomeClockUpdater();
+    scheduleHomeCarouselTick();
     global.LuminaFocus.restoreOrDefault('home', '#home-hero-play');
   }
 
-  // ── 2. Canais ao Vivo (3 Colunas com Virtualização + Logo + EPG + Mini-Preview) ──
+  // ── 2. Tela Canais (Seção 7 — Referência 02) ──
   function renderLive(viewport) {
     var channels = global.LuminaStore.get('channels') || [];
     var categories = global.LuminaStore.get('categories') || [];
@@ -659,7 +1028,6 @@
       }
     }
 
-    // Janela virtualizada de categorias (esquerda)
     var maxCatStart = Math.max(0, categories.length - LIVE_CAT_WIN_SIZE);
     if (liveCatWindowStart > maxCatStart) liveCatWindowStart = maxCatStart;
     if (liveCatWindowStart < 0) liveCatWindowStart = 0;
@@ -670,17 +1038,15 @@
       var cat = categories[k];
       var slotIdx = k - liveCatWindowStart;
       var selCls = (cat.name === selectedLiveCat) ? ' is-selected' : '';
-      var isAdultCat = /adult|\+18|xxx/i.test(cat.name);
       catHtml +=
-        '<div id="live-cat-slot-' + slotIdx + '" class="cat-item focusable' + selCls + '" ' +
-             'data-vlist="live-cats" data-vindex="' + k + '" data-vtotal="' + categories.length + '" ' +
+        '<div id="live-cat-slot-' + slotIdx + '" class="cat-row focusable' + selCls + '" ' +
+             'data-col="live-cats" data-vlist="live-cats" data-vindex="' + k + '" data-vtotal="' + categories.length + '" ' +
              'data-cat-name="' + escAttr(cat.name) + '" data-scope="live">' +
-          '<span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:220px;">' + (isAdultCat ? '🔒 ' : '') + escHtml(cat.name) + '</span>' +
-          '<span class="cat-count">' + Number(cat.count || 0) + '</span>' +
+          '<span class="cat-row-title">' + escHtml(cat.name) + '</span>' +
+          '<span class="count-pill">' + fmtCountPt(cat.count || 0) + '</span>' +
         '</div>';
     }
 
-    // Janela virtualizada de canais (centro)
     var maxChStart = Math.max(0, filtered.length - LIVE_CH_WIN_SIZE);
     if (liveChWindowStart > maxChStart) liveChWindowStart = maxChStart;
     if (liveChWindowStart < 0) liveChWindowStart = 0;
@@ -691,22 +1057,19 @@
       var item = filtered[j];
       var chSlot = j - liveChWindowStart;
       var isFav = global.LuminaStore.isFavorite(item.id);
-      var mono = escHtml((item.cleanTitle || 'TV').slice(0, 2).toUpperCase());
-      var logoInner = item.logo
-        ? '<img class="channel-logo-img" src="' + escAttr(item.logo) + '" alt="" loading="lazy" onerror="this.style.display=\'none\'">'
-        : mono;
+      var qBadge = (String(item.quality || 'HD').toUpperCase().indexOf('FHD') !== -1 || String(item.quality || '').indexOf('1080') !== -1) ? 'FHD' : 'HD';
+      var starHtml = isFav
+        ? '<span class="channel-star"><svg class="i" viewBox="0 0 24 24"><use href="#icon-star"/></svg></span>'
+        : '';
 
       chHtml +=
-        '<div id="live-ch-slot-' + chSlot + '" class="channel-row-item focusable" ' +
-             'data-vlist="live-channels" data-vindex="' + j + '" data-vtotal="' + filtered.length + '" ' +
+        '<div id="live-ch-slot-' + chSlot + '" class="channel-row focusable" ' +
+             'data-col="live-list" data-vlist="live-channels" data-vindex="' + j + '" data-vtotal="' + filtered.length + '" ' +
              'data-channel-id="' + escAttr(item.id) + '" data-scope="live">' +
-          '<div class="channel-num">#' + Number(item.channelNumber || (j + 1)) + '</div>' +
-          '<div class="channel-logo-box">' + logoInner + '</div>' +
-          '<div class="channel-info">' +
-            '<div class="channel-name">' + escHtml(item.cleanTitle) + '</div>' +
-            '<div class="channel-epg">' + escHtml(item.epgNow || (item.groupDisplay || item.groupOriginal)) + ' · ' + escHtml(item.quality || 'HD') + '</div>' +
-          '</div>' +
-          (isFav ? '<div class="fav-badge">★</div>' : '') +
+          '<span class="channel-num">#' + Number(item.channelNumber || (j + 1)) + '</span>' +
+          '<span class="channel-title">' + escHtml(item.cleanTitle) + '</span>' +
+          starHtml +
+          '<span class="badge-quality">' + qBadge + '</span>' +
         '</div>';
     }
 
@@ -722,36 +1085,36 @@
     var isPreviewFav = activeCh ? global.LuminaStore.isFavorite(activeCh.id) : false;
 
     viewport.innerHTML =
-      '<div>' +
-        '<div class="screen-header-row">' +
-          '<div>' +
-            '<h1 class="screen-title">Canais ao Vivo</h1>' +
-            '<p class="screen-subtitle" style="margin-bottom:0;">Categoria: ' + escHtml(selectedLiveCat) + ' · Use CH+/CH- para pular páginas de canais</p>' +
-          '</div>' +
-          '<div class="pagination-pill">Canais ' + (filtered.length ? (liveChWindowStart + 1) : 0) + '–' + chEnd + ' de ' + filtered.length + '</div>' +
+      '<div class="screen-enter">' +
+        '<div class="screen-head">' +
+          '<div class="screen-head-left"><h1>Canais</h1><span class="screen-count">' + fmtCountPt(filtered.length) + ' canais</span></div>' +
         '</div>' +
-        '<div class="live-layout">' +
-          '<div class="live-cats">' + catHtml + '</div>' +
-          '<div class="live-channels">' + (chHtml || '<p style="color:var(--text-secondary);">Nenhum canal nesta categoria.</p>') + '</div>' +
-          '<div class="live-preview-pane">' +
+        '<div class="live-columns">' +
+          '<div class="live-col-cats">' +
+            '<div class="col-label">Categorias</div>' +
+            catHtml +
+          '</div>' +
+          '<div class="live-col-list">' +
+            '<div class="col-label">Lista de Canais</div>' +
+            (chHtml || '<div class="cat-row"><span>Nenhum canal nesta categoria</span></div>') +
+          '</div>' +
+          '<div class="live-col-preview">' +
             (activeCh ? (
-              '<div class="preview-stage-box">' +
-                '<div style="font-size:20px;color:var(--accent-cyan);font-weight:700;margin-bottom:8px;">CANAL #' + Number(activeCh.channelNumber || 1) + ' · ' + escHtml(activeCh.quality || 'HD') + '</div>' +
-                '<div style="font-size:32px;font-weight:800;margin-bottom:10px;">' + escHtml(activeCh.cleanTitle) + '</div>' +
-                '<div style="color:var(--text-primary);font-size:21px;margin-bottom:6px;">Agora: ' + escHtml(activeCh.epgNow || 'Transmissão Ao Vivo') + '</div>' +
-                '<div style="color:var(--text-secondary);font-size:18px;">A seguir: ' + escHtml(activeCh.epgNext || 'Programação Contínua') + '</div>' +
-                '<div style="color:var(--text-muted);font-size:17px;margin-top:12px;">Grupo: ' + escHtml(activeCh.groupDisplay || activeCh.groupOriginal) + '</div>' +
-              '</div>' +
               '<div>' +
-                '<div style="display:flex;margin-bottom:10px;">' +
-                  '<button id="btn-fullscreen-live" class="btn btn-primary focusable" data-play-id="' + escAttr(activeCh.id) + '" data-scope="live">▶ Assistir Tela Cheia</button>' +
-                  '<button id="btn-fav-live" class="btn focusable" data-fav-id="' + escAttr(activeCh.id) + '" data-scope="live">' + (isPreviewFav ? '♥ Favorito' : '♡ Favoritar') + '</button>' +
+                '<div class="live-preview-stage" style="background:' + getTitleGradient(activeCh.cleanTitle) + ';">' +
+                  (activeCh.logo ? '<img class="poster-img" src="' + escAttr(activeCh.logo) + '" alt="" loading="lazy" decoding="async" style="object-fit:contain;padding:24px;" onerror="this.style.display=\'none\'">' : '') +
+                  '<div class="live-preview-play-icon"><svg viewBox="0 0 24 24"><use href="#icon-play"/></svg></div>' +
                 '</div>' +
-                '<div style="display:flex;">' +
-                  '<button id="btn-live-pgup" class="btn btn-sm focusable" data-action="live-page-prev" data-scope="live">▲ Página Anterior</button>' +
-                  '<button id="btn-live-pgdn" class="btn btn-sm focusable" data-action="live-page-next" data-scope="live">▼ Próxima Página</button>' +
-                  '<button id="btn-last-ch" class="btn btn-sm focusable" data-action="last-channel" data-scope="live">↺ Último Canal</button>' +
-                '</div>' +
+                '<div class="live-preview-title">' + escHtml(activeCh.cleanTitle) + '</div>' +
+                '<div class="live-preview-now">Agora: ' + escHtml(activeCh.epgNow || 'Programação Ao Vivo') + '</div>' +
+              '</div>' +
+              '<div class="live-preview-actions">' +
+                '<button id="btn-fullscreen-live" class="btn btn-primary focusable" data-col="live-preview" data-play-id="' + escAttr(activeCh.id) + '" data-scope="live">' +
+                  '<svg class="i" viewBox="0 0 24 24"><use href="#icon-play"/></svg>Assistir' +
+                '</button>' +
+                '<button id="btn-fav-live" class="btn btn-secondary focusable" data-col="live-preview" data-fav-id="' + escAttr(activeCh.id) + '" data-scope="live">' +
+                  '<svg class="i" viewBox="0 0 24 24"><use href="#icon-star"/></svg>' + (isPreviewFav ? 'Favorito' : 'Favoritar') +
+                '</button>' +
               '</div>'
             ) : '') +
           '</div>' +
@@ -761,39 +1124,111 @@
     global.LuminaFocus.restoreOrDefault('live', '#live-ch-slot-0');
   }
 
-  // ── 3. Grade Virtualizada de Filmes / Séries / Novelas (com Filtros + Barra A-Z + Capas Reais) ──
-  function renderPosterCatalog(viewport, sectionType) {
-    var title = 'Filmes';
-    var subtitle = 'Grade virtualizada 2:3 com capas, filtros e salto rápido A–Z (CH+/CH− pula página)';
+  // ── 3. Telas Filmes, Séries e Novelas com Coluna Lateral de Filtros de 360px + Grade 4 Colunas (Seção 8 — Referências 03 e 04) ──
+  function collectAvailableLanguages(list) {
+    var map = {};
+    var out = ['Todos'];
+    for (var i = 0; i < list.length; i++) {
+      var l = String(list[i].lang || '').trim();
+      if (l && !map[l]) {
+        map[l] = true;
+        out.push(l);
+      }
+    }
+    if (out.length === 1) {
+      out.push('Dublado', 'Legendado');
+    }
+    return out;
+  }
+
+  function renderPosterCard(item, slotId, sectionKey, vIndex, vTotal) {
+    var grad = getTitleGradient(item.cleanTitle);
+    var mono = escHtml(getMonogram(item.cleanTitle));
+    var recentMap = global.LuminaStore.get('recentAddedIds') || {};
+    var isNew = !!recentMap[item.id] || (Number(item.year || 0) >= 2024);
+    var ratingStr = fmtRatingPt(item.rating);
+    var isShow = (item.kind === 'series-show' || item.kind === 'novela-show');
+
+    var subLine = '';
+    if (isShow) {
+      var sCount = (item.seasons && item.seasons.length) ? item.seasons.length : 1;
+      subLine = sCount + (sCount === 1 ? ' temporada' : ' temporadas');
+    } else {
+      var yr = item.year || 2024;
+      var catLabel = String(item.groupDisplay || item.groupOriginal || 'Filme').replace(/^Filmes\s*\|\s*/i, '');
+      subLine = yr + ' \u00B7 ' + catLabel;
+    }
+
+    var motifSvg = generateDeterministicArtSvg(item.cleanTitle);
+    var imgTag = item.logo
+      ? '<img class="poster-img lazy-fade" src="' + escAttr(item.logo) + '" alt="" loading="lazy" decoding="async" onload="this.classList.add(\'is-loaded\')" onerror="this.style.display=\'none\'">'
+      : '';
+
+    return (
+      '<div id="' + escAttr(slotId) + '" class="poster-card focusable" ' +
+           'data-col="catalog-grid" data-grid-col="' + (vIndex % POSTER_COLS) + '" ' +
+           'data-vlist="poster-' + escAttr(sectionKey) + '" data-vindex="' + vIndex + '" data-vtotal="' + vTotal + '" ' +
+           'data-detail-id="' + escAttr(item.id) + '" data-scope="' + escAttr(sectionKey) + '">' +
+        '<div class="card-focus-sheen"></div>' +
+        (isNew ? '<span class="badge-new">NOVO</span>' : '') +
+        (ratingStr ? '<span class="badge-rate">\u2605 ' + escHtml(ratingStr) + '</span>' : '') +
+        '<div class="poster-art" style="background:' + grad + ';">' +
+          motifSvg +
+          imgTag +
+          '<span class="poster-monogram">' + mono + '</span>' +
+        '</div>' +
+        '<div class="poster-meta">' +
+          '<div class="poster-title">' + escHtml(item.cleanTitle) + '</div>' +
+          '<div class="poster-sub">' + escHtml(subLine) + '</div>' +
+        '</div>' +
+      '</div>'
+    );
+  }
+
+  function renderPosterCatalog(viewport, routeType) {
+    var effectiveType = routeType;
+    if (routeType === 'series') {
+      effectiveType = (currentSeriesKind === 'novelas') ? 'novelas' : 'series';
+    } else if (routeType === 'novelas') {
+      currentSeriesKind = 'novelas';
+      effectiveType = 'novelas';
+    }
+
+    var screenTitle = 'Filmes';
     var list = [];
     var cats = [];
     var activeCat = '';
     var allLabel = '';
-    var themeCls = 'theme-movie';
 
-    if (sectionType === 'movies') {
-      title = 'Filmes VOD';
+    if (effectiveType === 'movies') {
+      screenTitle = 'Filmes';
       list = global.LuminaStore.get('movies') || [];
       cats = global.LuminaStore.get('movieCategories') || [];
       allLabel = 'Todos os Filmes';
       activeCat = selectedMovieCat;
-      themeCls = 'theme-movie';
-    } else if (sectionType === 'series') {
-      title = 'Séries';
-      subtitle = 'Temporadas e episódios organizados automaticamente · CH+/CH− pula página';
+    } else if (effectiveType === 'series') {
+      screenTitle = 'Séries';
       list = global.LuminaStore.get('seriesList') || [];
       cats = global.LuminaStore.get('seriesCategories') || [];
       allLabel = 'Todas as Séries';
       activeCat = selectedSeriesCat;
-      themeCls = 'theme-series';
     } else {
-      title = 'Novelas';
-      subtitle = 'Coleção virtual dedicada a novelas e folhetins · CH+/CH− pula página';
+      screenTitle = 'Novelas';
       list = global.LuminaStore.get('novelasList') || [];
       cats = global.LuminaStore.get('novelaCategories') || [];
       allLabel = 'Todas as Novelas';
       activeCat = selectedNovelaCat;
-      themeCls = 'theme-novela';
+    }
+
+    // Garante que a primeira linha de categoria seja sempre "Todos os Filmes" / "Todas as Séries" / "Todas as Novelas"
+    var normalizedCats = [];
+    var hasAllRow = false;
+    for (var cIdx = 0; cIdx < cats.length; cIdx++) {
+      if (cats[cIdx].name === allLabel) hasAllRow = true;
+      normalizedCats.push(cats[cIdx]);
+    }
+    if (!hasAllRow) {
+      normalizedCats.unshift({ name: allLabel, count: list.length });
     }
 
     var filtered = [];
@@ -802,9 +1237,8 @@
       if (isItemLockedByParental(it)) continue;
       var g = it.groupDisplay || it.groupOriginal;
       if (activeCat !== allLabel && g !== activeCat) continue;
-      if (currentLangFilter !== 'ALL' && (it.lang || 'DUB') !== currentLangFilter) continue;
-      if (currentQualityFilter !== 'ALL' && (it.quality || 'FHD') !== currentQualityFilter) continue;
-      if (currentLetterFilter !== 'ALL') {
+      if (currentLangFilter !== 'Todos' && String(it.lang || '') !== currentLangFilter) continue;
+      if (currentSort === 'name' && currentLetterFilter !== 'Todas') {
         var firstCh = String(it.cleanTitle || '').trim().charAt(0).toUpperCase();
         if (firstCh !== currentLetterFilter) continue;
       }
@@ -812,80 +1246,103 @@
     }
     filtered = sortItems(filtered, currentSort);
 
-    var winStart = posterWindowStart[sectionType] || 0;
+    var winStart = posterWindowStart[effectiveType] || 0;
     var maxStart = Math.max(0, Math.floor((filtered.length - 1) / POSTER_COLS) * POSTER_COLS - POSTER_COLS);
     if (winStart > maxStart) winStart = maxStart;
     if (winStart < 0) winStart = 0;
-    posterWindowStart[sectionType] = winStart;
+    posterWindowStart[effectiveType] = winStart;
 
-    var catChips = '';
-    var maxCats = Math.min(cats.length, 6);
-    for (var c = 0; c < maxCats; c++) {
-      var cat = cats[c];
-      var sel = (cat.name === activeCat) ? ' is-selected' : '';
-      catChips +=
-        '<div id="cat-chip-' + c + '" class="chip focusable' + sel + '" data-cat-section="' + escAttr(sectionType) + '" data-cat-val="' + escAttr(cat.name) + '" data-scope="' + escAttr(sectionType) + '">' +
-          escHtml(cat.name) + ' (' + Number(cat.count || 0) + ')' +
+    var sortLabels = {
+      'recent': 'Recentes',
+      'name': 'A\u2013Z',
+      'rating': 'Nota \u2605'
+    };
+    var sortDisplay = sortLabels[currentSort] || 'Recentes';
+
+    var selectorsHtml = '';
+    if (routeType === 'series' || routeType === 'novelas') {
+      var tipoLabel = (effectiveType === 'novelas') ? 'Novelas' : 'Séries';
+      selectorsHtml +=
+        '<div id="flt-sel-kind" class="filter-select-row focusable" data-col="filter-col" data-lr-control="series-kind" data-action="cycle-series-kind" data-scope="' + escAttr(routeType) + '">' +
+          '<span>Tipo</span>' +
+          '<span class="filter-select-val">' + svgChevLeft() + escHtml(tipoLabel) + svgChevRight() + '</span>' +
         '</div>';
     }
 
-    var sortChips =
-      '<div class="chip-row">' +
-        '<div id="sort-recent" class="chip focusable' + (currentSort === 'recent' ? ' is-selected' : '') + '" data-sort="recent" data-scope="' + escAttr(sectionType) + '">Recentes</div>' +
-        '<div id="sort-name" class="chip focusable' + (currentSort === 'name' ? ' is-selected' : '') + '" data-sort="name" data-scope="' + escAttr(sectionType) + '">A–Z</div>' +
-        '<div id="sort-rating" class="chip focusable' + (currentSort === 'rating' ? ' is-selected' : '') + '" data-sort="rating" data-scope="' + escAttr(sectionType) + '">Nota ★</div>' +
-        '<div id="flt-lang" class="chip focusable' + (currentLangFilter !== 'ALL' ? ' is-selected' : '') + '" data-action="cycle-lang-filter" data-scope="' + escAttr(sectionType) + '">Idioma: ' + escHtml(currentLangFilter) + '</div>' +
+    selectorsHtml +=
+      '<div id="flt-sel-sort" class="filter-select-row focusable" data-col="filter-col" data-lr-control="catalog-sort" data-action="cycle-sort" data-scope="' + escAttr(routeType) + '">' +
+        '<span>Ordenar</span>' +
+        '<span class="filter-select-val">' + svgChevLeft() + escHtml(sortDisplay) + svgChevRight() + '</span>' +
+      '</div>' +
+      '<div id="flt-sel-lang" class="filter-select-row focusable" data-col="filter-col" data-lr-control="catalog-lang" data-action="cycle-lang-filter" data-scope="' + escAttr(routeType) + '">' +
+        '<span>Idioma</span>' +
+        '<span class="filter-select-val">' + svgChevLeft() + escHtml(currentLangFilter) + svgChevRight() + '</span>' +
       '</div>';
 
-    var azHtml = '<div class="az-bar">';
-    for (var lIdx = 0; lIdx < LETTERS_BAR.length; lIdx++) {
-      var ltr = LETTERS_BAR[lIdx];
-      var lSel = (currentLetterFilter === ltr) ? ' is-selected' : '';
-      azHtml +=
-        '<div id="az-' + ltr + '" class="az-chip focusable' + lSel + '" data-letter="' + escAttr(ltr) + '" data-scope="' + escAttr(sectionType) + '">' +
-          (ltr === 'ALL' ? 'Todos' : ltr) +
+    // Quando Ordenar = "A–Z", aparece o seletor extra "Letra" (valores "Todas", "A" a "Z"); fora disso ele não existe
+    if (currentSort === 'name') {
+      selectorsHtml +=
+        '<div id="flt-sel-letter" class="filter-select-row focusable" data-col="filter-col" data-lr-control="catalog-letter" data-action="cycle-letter-filter" data-scope="' + escAttr(routeType) + '">' +
+          '<span>Letra</span>' +
+          '<span class="filter-select-val">' + svgChevLeft() + escHtml(currentLetterFilter) + svgChevRight() + '</span>' +
         '</div>';
     }
-    azHtml += '</div>';
+
+    var catWinStart = filterCatWindowStart[effectiveType] || 0;
+    var maxCatWin = Math.max(0, normalizedCats.length - FILTER_CAT_WIN_SIZE);
+    if (catWinStart > maxCatWin) catWinStart = maxCatWin;
+    if (catWinStart < 0) catWinStart = 0;
+    filterCatWindowStart[effectiveType] = catWinStart;
+
+    var catRowsHtml = '';
+    var catEnd = Math.min(normalizedCats.length, catWinStart + FILTER_CAT_WIN_SIZE);
+    for (var k = catWinStart; k < catEnd; k++) {
+      var cat = normalizedCats[k];
+      var catSlot = k - catWinStart;
+      var isSel = (cat.name === activeCat) ? ' is-selected' : '';
+      catRowsHtml +=
+        '<div id="flt-cat-slot-' + catSlot + '" class="cat-row focusable' + isSel + '" ' +
+             'data-col="filter-col" data-vlist="filter-cats-' + escAttr(effectiveType) + '" data-vindex="' + k + '" data-vtotal="' + normalizedCats.length + '" ' +
+             'data-cat-section="' + escAttr(effectiveType) + '" data-cat-val="' + escAttr(cat.name) + '" data-scope="' + escAttr(routeType) + '">' +
+          '<span class="cat-row-title">' + escHtml(cat.name) + '</span>' +
+          '<span class="count-pill">' + fmtCountPt(cat.count || 0) + '</span>' +
+        '</div>';
+    }
 
     var cardsHtml = '';
     var winEnd = Math.min(filtered.length, winStart + POSTER_WIN_SIZE);
     for (var j = winStart; j < winEnd; j++) {
       var item = filtered[j];
       var slot = j - winStart;
-      cardsHtml +=
-        '<div id="poster-' + sectionType + '-slot-' + slot + '" class="poster-card focusable" ' +
-             'data-vlist="poster-' + escAttr(sectionType) + '" data-vindex="' + j + '" data-vtotal="' + filtered.length + '" ' +
-             'data-detail-id="' + escAttr(item.id) + '" data-scope="' + escAttr(sectionType) + '">' +
-          renderPosterVisual(item, themeCls) +
-          '<div class="poster-meta">' +
-            '<div class="poster-title">' + escHtml(item.cleanTitle) + '</div>' +
-            '<div class="poster-sub">' + escHtml(item.groupDisplay || item.groupOriginal) + '</div>' +
-          '</div>' +
-        '</div>';
+      cardsHtml += renderPosterCard(item, 'poster-' + routeType + '-slot-' + slot, routeType, j, filtered.length);
     }
 
     viewport.innerHTML =
-      '<div>' +
-        '<div class="screen-header-row">' +
-          '<div>' +
-            '<h1 class="screen-title">' + escHtml(title) + '</h1>' +
-            '<p class="screen-subtitle" style="margin-bottom:0;">' + escHtml(subtitle) + '</p>' +
+      '<div class="screen-enter">' +
+        '<div class="screen-head">' +
+          '<div class="screen-head-left">' +
+            '<h1>' + escHtml(screenTitle) + '</h1>' +
+            '<span class="screen-count">' + fmtCountPt(filtered.length) + ' títulos</span>' +
           '</div>' +
-          '<div class="pagination-pill">Exibindo ' + (filtered.length ? (winStart + 1) : 0) + '–' + winEnd + ' de ' + filtered.length + '</div>' +
         '</div>' +
-        '<div class="filter-bar">' +
-          '<div class="chip-row">' + catChips + '</div>' +
-          sortChips +
+        '<div class="catalog-columns">' +
+          '<div class="filter-col">' +
+            selectorsHtml +
+            '<div style="height:16px;"></div>' +
+            '<div class="col-label">Categorias</div>' +
+            catRowsHtml +
+          '</div>' +
+          '<div class="catalog-grid">' +
+            (cardsHtml || '<div style="grid-column:1 / span 4;color:var(--text-2);font-size:26px;padding:24px 0;">Nenhum título encontrado para este filtro.</div>') +
+          '</div>' +
         '</div>' +
-        azHtml +
-        '<div class="poster-grid">' + (cardsHtml || '<p style="color:var(--text-secondary);font-size:22px;">Nenhum título encontrado para este filtro.</p>') + '</div>' +
       '</div>';
 
-    global.LuminaFocus.restoreOrDefault(sectionType, '#poster-' + sectionType + '-slot-0');
+    var defaultFocusSelector = filtered.length ? ('#poster-' + routeType + '-slot-0') : '#flt-sel-sort';
+    global.LuminaFocus.restoreOrDefault(routeType, defaultFocusSelector);
   }
 
-  // ── 4. Tela de Detalhe (com Hidratação Sob Demanda de Séries Xtream via get_series_info, B3) ──
+  // ── 4. Tela de Detalhes Cinematográfica v2.0.0 (Seção 5) ──
   function renderDetail(viewport) {
     var item = global.LuminaStore.get('selectedDetailItem');
     if (!item) {
@@ -896,40 +1353,66 @@
     var isShow = (item.kind === 'series-show' || item.kind === 'novela-show');
     var isFav = global.LuminaStore.isFavorite(item.id);
     var progMap = global.LuminaStore.get('watchProgress') || {};
-    var mono = escHtml((item.cleanTitle || 'TV').slice(0, 2).toUpperCase());
-    var themeCls = item.isNovela ? 'theme-novela' : (isShow ? 'theme-series' : 'theme-movie');
+    var mono = escHtml(getMonogram(item.cleanTitle));
+    var grad = getTitleGradient(item.cleanTitle);
+    var motifSvg = generateDeterministicArtSvg(item.cleanTitle);
+    var enterCls = getScreenEnterClass();
+
+    var backdropHtml = item.logo
+      ? '<img class="detail-backdrop-img lazy-fade" src="' + escAttr(item.logo) + '" alt="" loading="lazy" decoding="async" onload="this.classList.add(\'is-loaded\')" onerror="this.style.display=\'none\'">'
+      : '<div class="detail-backdrop-generated" style="background:' + grad + ';">' + motifSvg + '</div>';
+
     var posterImgHtml = item.logo
-      ? '<img class="poster-img" src="' + escAttr(item.logo) + '" alt="" loading="lazy" onerror="this.style.display=\'none\'">'
+      ? '<img class="poster-img lazy-fade" src="' + escAttr(item.logo) + '" alt="" loading="lazy" decoding="async" onload="this.classList.add(\'is-loaded\')" onerror="this.style.display=\'none\'">'
       : '';
+
+    var ratingStr = fmtRatingPt(item.rating) || '8,4';
+    var ageBadgeText = item.adult ? '18' : (item.ageRating || '14');
+    var genresText = String(item.groupDisplay || item.groupOriginal || (isShow ? 'Drama \u00B7 Série' : 'Suspense \u00B7 Filme')).replace(/^(Filmes|Séries|Novelas)\s*\|\s*/i, '');
+    var durationLabel = formatDurationHuman(item.durationSecs || 7500);
+    var favBtnLabel = isFav ? '\u2605 Nos favoritos' : '+ Favoritar';
 
     if (!isShow) {
       var pr = progMap[item.id];
-      var resumeLabel = (pr && pr.position > 5 && !pr.completed)
-        ? ('▶ Continuar (' + Number(pr.percent || 0) + '%)')
-        : (pr && pr.completed ? '↺ Assistir Novamente (✓ Assistido)' : '▶ Assistir Agora');
+      var playBtnText = (pr && pr.position > 5 && !pr.completed)
+        ? ('\u25B6 Continuar \u00B7 ' + formatResumeClock(pr.position))
+        : '\u25B6 Assistir';
 
       viewport.innerHTML =
-        '<div>' +
-          '<div class="detail-hero">' +
-            '<div class="detail-poster-box ' + themeCls + '">' + posterImgHtml + '<span>' + mono + '</span></div>' +
-            '<div class="detail-info">' +
-              '<div>' +
-                '<div style="color:var(--accent-cyan);font-size:20px;font-weight:700;">' + (item.kind === 'live' ? 'CANAL AO VIVO' : 'FILME VOD · CATÁLOGO PESSOAL') + '</div>' +
-                '<h1 style="font-size:44px;margin:6px 0;">' + escHtml(item.cleanTitle) + '</h1>' +
-                '<div class="detail-meta-row">' +
-                  '<span class="detail-meta-tag">' + escHtml(item.year || 2024) + '</span>' +
-                  '<span class="detail-meta-tag">' + escHtml(item.quality || 'FHD') + '</span>' +
-                  '<span class="detail-meta-tag">' + escHtml(item.lang || 'DUB') + '</span>' +
-                  (item.rating ? '<span class="detail-meta-tag" style="color:var(--accent-amber);">★ ' + escHtml(item.rating) + '</span>' : '') +
-                '</div>' +
-                '<p style="color:var(--text-secondary);font-size:22px;max-width:1100px;">' +
-                  escHtml(item.synopsis || ('Grupo: ' + (item.groupDisplay || item.groupOriginal) + '. Reprodução com retomada automática do ponto exato e marcação de concluído aos 95%.')) +
-                '</p>' +
+        '<div class="' + enterCls + '">' +
+          '<div class="detail-fullbleed-bg">' +
+            backdropHtml +
+            '<div class="detail-backdrop-grad-side"></div>' +
+            '<div class="detail-backdrop-grad-bottom"></div>' +
+          '</div>' +
+          '<div class="detail-stage">' +
+            '<div class="detail-top-layout">' +
+              '<div class="detail-poster-card" style="background:' + grad + ';">' +
+                motifSvg +
+                posterImgHtml +
+                '<span class="poster-monogram">' + mono + '</span>' +
               '</div>' +
-              '<div style="margin-top:24px;">' +
-                '<button id="detail-btn-play" class="btn btn-primary focusable" ' + (item.kind === 'live' ? ('data-play-id="' + escAttr(item.id) + '"') : ('data-play-vod="' + escAttr(item.id) + '"')) + ' data-scope="detail">' + escHtml(resumeLabel) + '</button>' +
-                '<button id="detail-btn-fav" class="btn focusable" data-fav-id="' + escAttr(item.id) + '" data-scope="detail">' + (isFav ? '♥ Nos Favoritos' : '♡ Favoritar') + '</button>' +
-                '<button id="detail-btn-back" class="btn focusable" data-action="back" data-scope="detail">Voltar</button>' +
+              '<div class="detail-text-col">' +
+                '<div class="detail-title detail-stagger st-1">' + escHtml(item.cleanTitle) + '</div>' +
+                '<div class="detail-meta-strip detail-stagger st-2">' +
+                  '<span>' + escHtml(item.year || 2024) + '</span>' +
+                  '<span>' + escHtml(durationLabel) + '</span>' +
+                  '<span class="badge-age">' + escHtml(ageBadgeText) + '</span>' +
+                  '<span style="color:var(--amber);">\u2605 ' + escHtml(ratingStr) + '</span>' +
+                '</div>' +
+                '<div class="detail-genres detail-stagger st-2">' + escHtml(genresText) + '</div>' +
+                '<div class="detail-synopsis detail-stagger st-3">' +
+                  escHtml(item.synopsis || 'Reprodução em alta definição com retomada automática do ponto exato onde você parou.') +
+                '</div>' +
+                '<div class="detail-actions detail-stagger st-4">' +
+                  '<button id="detail-btn-play" class="btn btn-primary focusable" ' + (item.kind === 'live' ? ('data-play-id="' + escAttr(item.id) + '"') : ('data-play-vod="' + escAttr(item.id) + '"')) + ' data-scope="detail">' +
+                    escHtml(playBtnText) +
+                  '</button>' +
+                  '<button id="detail-btn-fav" class="btn btn-secondary focusable" data-fav-id="' + escAttr(item.id) + '" data-scope="detail">' +
+                    escHtml(favBtnLabel) +
+                  '</button>' +
+                  '<button id="detail-btn-back" class="btn btn-secondary focusable" data-action="back" data-scope="detail">Voltar</button>' +
+                '</div>' +
               '</div>' +
             '</div>' +
           '</div>' +
@@ -938,7 +1421,7 @@
       return;
     }
 
-    // Se a série veio do Xtream e ainda precisa buscar as temporadas reais via get_series_info (B3)
+    // Se a série Xtream ainda precisa buscar temporadas sob demanda (usa skeleton em vez de texto cru "Carregando...")
     if (item.needsSeriesInfo) {
       var detailLoading = global.LuminaStore.get('detailLoading');
       var detailError = global.LuminaStore.get('detailError');
@@ -948,34 +1431,40 @@
         var creds = global.LuminaStore.get('xtreamCreds');
         global.LuminaXtream.fetchSeriesInfo(creds, item, function (err) {
           global.LuminaStore.set('detailLoading', false);
-          if (err) {
-            global.LuminaStore.set('detailError', err.message || 'Falha ao buscar episódios.');
-          } else {
-            global.LuminaStore.set('detailError', null);
-          }
+          global.LuminaStore.set('detailError', err ? (err.message || 'Falha ao buscar episódios.') : null);
           if (global.LuminaRouter.getCurrent() === 'detail') {
             renderCurrentRoute();
           }
         });
       }
 
+      var skelRows = '';
+      for (var sk = 0; sk < 3; sk++) {
+        skelRows += '<div class="skeleton-box" style="height:108px;margin-bottom:10px;"><div class="skeleton-shimmer"></div></div>';
+      }
+
       viewport.innerHTML =
-        '<div>' +
-          '<div class="detail-hero">' +
-            '<div class="detail-poster-box ' + themeCls + '">' + posterImgHtml + '<span>' + mono + '</span></div>' +
-            '<div class="detail-info">' +
-              '<div>' +
-                '<div style="color:var(--accent-cyan);font-size:19px;font-weight:700;">' + (item.isNovela ? 'NOVELA' : 'SÉRIE') + ' · TEMPORADAS SOB DEMANDA</div>' +
-                '<h1 style="font-size:40px;margin:6px 0;">' + escHtml(item.cleanTitle) + '</h1>' +
+        '<div class="' + enterCls + '">' +
+          '<div class="detail-fullbleed-bg">' +
+            backdropHtml +
+            '<div class="detail-backdrop-grad-side"></div>' +
+            '<div class="detail-backdrop-grad-bottom"></div>' +
+          '</div>' +
+          '<div class="detail-stage is-series">' +
+            '<div class="detail-top-layout">' +
+              '<div class="detail-poster-card" style="background:' + grad + ';">' + motifSvg + posterImgHtml + '<span class="poster-monogram">' + mono + '</span></div>' +
+              '<div class="detail-text-col">' +
+                '<div class="detail-title">' + escHtml(item.cleanTitle) + '</div>' +
                 (detailError
-                  ? '<p style="color:#F87171;font-size:22px;margin-top:12px;">⚠ ' + escHtml(detailError) + '</p>'
-                  : '<p style="color:var(--accent-cyan);font-size:23px;margin-top:12px;">⟳ Buscando temporadas e episódios reais no servidor...</p>') +
-              '</div>' +
-              '<div style="margin-top:20px;">' +
-                (detailError ? '<button id="detail-btn-retry-series" class="btn btn-primary focusable" data-action="retry-series-info" data-scope="detail">↻ Tentar Novamente</button>' : '') +
-                '<button id="detail-btn-back" class="btn focusable" data-action="back" data-scope="detail">Voltar</button>' +
+                  ? '<div class="detail-synopsis" style="color:var(--danger);">' + escHtml(detailError) + '</div>'
+                  : '<div class="skeleton-box" style="width:420px;height:56px;margin-bottom:18px;"><div class="skeleton-shimmer"></div></div>') +
+                '<div class="detail-actions">' +
+                  (detailError ? '<button id="detail-btn-retry-series" class="btn btn-primary focusable" data-action="retry-series-info" data-scope="detail">Tentar Novamente</button>' : '') +
+                  '<button id="detail-btn-back" class="btn btn-secondary focusable" data-action="back" data-scope="detail">Voltar</button>' +
+                '</div>' +
               '</div>' +
             '</div>' +
+            '<div style="margin-top:24px;">' + skelRows + '</div>' +
           '</div>' +
         '</div>';
       global.LuminaFocus.restoreOrDefault('detail', detailError ? '#detail-btn-retry-series' : '#detail-btn-back');
@@ -996,28 +1485,32 @@
       selSeason = seasons[0].seasonNumber;
     }
 
-    var seasonTabs = '';
-    for (var st = 0; st < seasons.length; st++) {
-      var sn = seasons[st].seasonNumber;
-      var sCls = (sn === selSeason) ? ' is-selected' : '';
-      seasonTabs +=
-        '<div id="season-tab-' + sn + '" class="chip focusable' + sCls + '" data-season-num="' + sn + '" data-scope="detail">' +
-          'Temporada ' + sn + ' (' + (seasons[st].episodes || []).length + ' eps)' +
+    var seasonPillsHtml = '';
+    var maxPills = Math.min(seasons.length, 8);
+    for (var sp = 0; sp < maxPills; sp++) {
+      var sNum = seasons[sp].seasonNumber;
+      var actCls = (sNum === selSeason) ? ' is-active' : '';
+      seasonPillsHtml +=
+        '<div id="season-pill-' + sNum + '" class="season-pill focusable' + actCls + '" data-season-num="' + sNum + '" data-scope="detail">' +
+          'Temporada ' + sNum +
         '</div>';
     }
 
-    var maxEpStart = Math.max(0, activeEpisodes.length - DETAIL_EP_WIN_SIZE);
+    var DETAIL_EP_VISIBLE = 3;
+    var maxEpStart = Math.max(0, activeEpisodes.length - DETAIL_EP_VISIBLE);
     if (detailEpWindowStart > maxEpStart) detailEpWindowStart = maxEpStart;
     if (detailEpWindowStart < 0) detailEpWindowStart = 0;
 
     var epRows = '';
-    var epEnd = Math.min(activeEpisodes.length, detailEpWindowStart + DETAIL_EP_WIN_SIZE);
+    var epEnd = Math.min(activeEpisodes.length, detailEpWindowStart + DETAIL_EP_VISIBLE);
     var resumeEp = activeEpisodes[0] || null;
+    var resumeEpPr = null;
     for (var rIdx = 0; rIdx < activeEpisodes.length; rIdx++) {
       var candEp = activeEpisodes[rIdx];
       var cPr = progMap[candEp.id];
       if (cPr && cPr.percent > 0 && !cPr.completed) {
         resumeEp = candEp;
+        resumeEpPr = cPr;
         break;
       }
     }
@@ -1026,62 +1519,96 @@
       var ep = activeEpisodes[e];
       var epSlot = e - detailEpWindowStart;
       var epProg = progMap[ep.id] || { percent: 0, completed: false };
-      var statusBadge = epProg.completed
-        ? '<span style="color:var(--accent-success);font-weight:700;margin-right:16px;">✓ Assistido</span>'
-        : (epProg.percent > 0 ? '<span style="color:var(--accent-cyan);margin-right:16px;">Em andamento (' + Number(epProg.percent) + '%)</span>' : '<span style="color:var(--text-muted);margin-right:16px;">Não iniciado</span>');
+      var epGrad = getTitleGradient(ep.cleanTitle || item.cleanTitle);
+      var epMotif = generateDeterministicArtSvg(ep.cleanTitle || item.cleanTitle);
+      var epThumbImg = (ep.logo || item.logo)
+        ? '<img class="poster-img lazy-fade" src="' + escAttr(ep.logo || item.logo) + '" alt="" loading="lazy" decoding="async" onload="this.classList.add(\'is-loaded\')" onerror="this.style.display=\'none\'">'
+        : '';
+      var epDur = formatDurationHuman(ep.durationSecs || 2700);
+
+      var stateHtml = '<span style="font-size:22px;font-weight:700;color:var(--text);">Assistir</span>';
+      if (epProg.completed) {
+        stateHtml = '<span style="font-size:22px;font-weight:700;color:var(--green);">\u2713 Assistido</span>';
+      } else if (epProg.percent > 0) {
+        stateHtml =
+          '<div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px;width:120px;">' +
+            '<span style="font-size:22px;font-weight:700;color:var(--accent);">' + Math.round(epProg.percent) + '%</span>' +
+            '<div style="width:100%;height:6px;background:rgba(255,255,255,0.22);border-radius:3px;overflow:hidden;">' +
+              '<div style="width:' + Math.min(100, Math.round(epProg.percent)) + '%;height:100%;background:var(--accent);"></div>' +
+            '</div>' +
+          '</div>';
+      }
 
       epRows +=
         '<div id="ep-row-slot-' + epSlot + '" class="episode-row focusable" ' +
              'data-vlist="detail-episodes" data-vindex="' + e + '" data-vtotal="' + activeEpisodes.length + '" ' +
              'data-play-ep="' + escAttr(ep.id) + '" data-scope="detail">' +
-          '<div style="display:flex;align-items:center;overflow:hidden;">' +
-            '<span style="font-family:var(--font-mono);color:var(--accent-cyan);font-weight:700;width:98px;flex-shrink:0;">T' + Number(ep.season || 1) + ':E' + Number(ep.episode || (e + 1)) + '</span>' +
-            '<span style="font-weight:600;font-size:23px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + escHtml(ep.cleanTitle) + '</span>' +
+          '<div style="display:flex;align-items:center;min-width:0;flex:1;">' +
+            '<div class="episode-thumb" style="background:' + epGrad + ';">' +
+              epMotif +
+              epThumbImg +
+            '</div>' +
+            '<div style="min-width:0;flex:1;">' +
+              '<div class="episode-code">T' + Number(ep.season || selSeason) + ' \u00B7 E' + Number(ep.episode || (e + 1)) + '</div>' +
+              '<div class="episode-title">' + escHtml(ep.cleanTitle) + '</div>' +
+            '</div>' +
           '</div>' +
           '<div style="display:flex;align-items:center;flex-shrink:0;">' +
-            statusBadge +
-            '<span class="badge-pill">' + escHtml(ep.quality || 'FHD') + '</span>' +
-            '<div class="ep-progress-bar"><div class="ep-progress-fill" style="width:' + Number(epProg.percent || 0) + '%;"></div></div>' +
+            '<span class="episode-dur">' + escHtml(epDur) + '</span>' +
+            stateHtml +
           '</div>' +
         '</div>';
     }
 
+    var mainPlayLabel = '\u25B6 Assistir';
+    if (resumeEp && resumeEpPr && resumeEpPr.position > 5) {
+      mainPlayLabel = '\u25B6 Continuar \u00B7 ' + formatResumeClock(resumeEpPr.position);
+    }
+
     viewport.innerHTML =
-      '<div>' +
-        '<div class="detail-hero" style="padding:24px;margin-bottom:14px;">' +
-          '<div class="detail-poster-box ' + themeCls + '" style="width:170px;height:240px;font-size:42px;">' + posterImgHtml + '<span>' + mono + '</span></div>' +
-          '<div class="detail-info">' +
-            '<div>' +
-              '<div style="color:var(--accent-cyan);font-size:18px;font-weight:700;">' + (item.isNovela ? 'NOVELA · COLEÇÃO POR CAPÍTULOS' : 'SÉRIE · TEMPORADAS E EPISÓDIOS') + '</div>' +
-              '<h1 style="font-size:38px;margin:4px 0;">' + escHtml(item.cleanTitle) + '</h1>' +
-              '<div class="detail-meta-row">' +
-                '<span class="detail-meta-tag">' + seasons.length + ' Temp.</span>' +
-                '<span class="detail-meta-tag">' + Number(item.totalEpisodes || activeEpisodes.length) + ' Episódios</span>' +
-                (item.rating ? '<span class="detail-meta-tag" style="color:var(--accent-amber);">★ ' + escHtml(item.rating) + '</span>' : '') +
-              '</div>' +
-              (item.synopsis ? '<p style="color:var(--text-secondary);font-size:19px;max-width:1100px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + escHtml(item.synopsis) + '</p>' : '') +
+      '<div class="' + enterCls + '">' +
+        '<div class="detail-fullbleed-bg">' +
+          backdropHtml +
+          '<div class="detail-backdrop-grad-side"></div>' +
+          '<div class="detail-backdrop-grad-bottom"></div>' +
+        '</div>' +
+        '<div class="detail-stage is-series">' +
+          '<div class="detail-top-layout">' +
+            '<div class="detail-poster-card" style="background:' + grad + ';">' +
+              motifSvg +
+              posterImgHtml +
+              '<span class="poster-monogram" style="font-size:72px;">' + mono + '</span>' +
             '</div>' +
-            '<div style="margin-top:10px;">' +
-              (resumeEp ? '<button id="detail-btn-play-ep0" class="btn btn-primary focusable" data-play-ep="' + escAttr(resumeEp.id) + '" data-scope="detail">▶ Assistir T' + Number(resumeEp.season || 1) + ':E' + Number(resumeEp.episode || 1) + '</button>' : '') +
-              '<button id="detail-btn-fav" class="btn focusable" data-fav-id="' + escAttr(item.id) + '" data-scope="detail">' + (isFav ? '♥ Nos Favoritos' : '♡ Favoritar') + '</button>' +
-              '<button id="detail-btn-back" class="btn focusable" data-action="back" data-scope="detail">Voltar</button>' +
+            '<div class="detail-text-col">' +
+              '<div class="detail-title detail-stagger st-1">' + escHtml(item.cleanTitle) + '</div>' +
+              '<div class="detail-meta-strip detail-stagger st-2">' +
+                '<span>' + escHtml(item.year || 2024) + '</span>' +
+                '<span>' + seasons.length + (seasons.length === 1 ? ' temporada' : ' temporadas') + '</span>' +
+                '<span class="badge-age">' + escHtml(ageBadgeText) + '</span>' +
+                '<span style="color:var(--amber);">\u2605 ' + escHtml(ratingStr) + '</span>' +
+              '</div>' +
+              '<div class="detail-genres detail-stagger st-2">' + escHtml(genresText) + '</div>' +
+              '<div class="detail-synopsis detail-stagger st-3">' +
+                escHtml(item.synopsis || 'Temporadas e episódios organizados automaticamente com retomada de progresso.') +
+              '</div>' +
+              '<div class="detail-actions detail-stagger st-4">' +
+                (resumeEp ? '<button id="detail-btn-play-ep0" class="btn btn-primary focusable" data-play-ep="' + escAttr(resumeEp.id) + '" data-scope="detail">' + escHtml(mainPlayLabel) + '</button>' : '') +
+                '<button id="detail-btn-fav" class="btn btn-secondary focusable" data-fav-id="' + escAttr(item.id) + '" data-scope="detail">' + escHtml(favBtnLabel) + '</button>' +
+                '<button id="detail-btn-back" class="btn btn-secondary focusable" data-action="back" data-scope="detail">Voltar</button>' +
+              '</div>' +
             '</div>' +
           '</div>' +
+          '<div class="season-pills-bar">' + seasonPillsHtml + '</div>' +
+          '<div>' + (epRows || '<div class="cat-row"><span>Nenhum episódio disponível nesta temporada.</span></div>') + '</div>' +
         '</div>' +
-        '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">' +
-          '<div class="chip-row">' + seasonTabs + '</div>' +
-          '<div class="pagination-pill">Episódios ' + (activeEpisodes.length ? (detailEpWindowStart + 1) : 0) + '–' + epEnd + ' de ' + activeEpisodes.length + '</div>' +
-        '</div>' +
-        '<div class="episode-list">' + (epRows || '<p style="color:var(--text-secondary);">Nenhum episódio disponível nesta temporada.</p>') + '</div>' +
       '</div>';
 
     global.LuminaFocus.restoreOrDefault('detail', '#ep-row-slot-0');
   }
 
-  // ── 5. Busca Global (com Relevância + Histórico de Buscas) ──
+  // ── 5. Tela Busca Global ──
   function renderSearch(viewport) {
     var q = global.LuminaStore.get('searchQuery') || '';
-    var history = global.LuminaStore.get('searchHistory') || [];
     var safeState = {
       channels: filterAdultForPublicViews(global.LuminaStore.get('channels') || []),
       movies: filterAdultForPublicViews(global.LuminaStore.get('movies') || []),
@@ -1096,152 +1623,96 @@
       keysHtml +=
         '<div id="kb-key-' + ch + '" class="kb-key focusable" data-kb-char="' + escAttr(ch) + '" data-scope="search">' + escHtml(ch) + '</div>';
     }
+    keysHtml +=
+      '<div id="kb-key-space" class="kb-key kb-wide focusable" data-kb-action="space" data-scope="search">ESPAÇO</div>' +
+      '<div id="kb-key-back" class="kb-key kb-wide focusable" data-kb-action="backspace" data-scope="search">APAGAR</div>' +
+      '<div id="kb-key-clear" class="kb-key kb-wide focusable" data-kb-action="clear" data-scope="search">LIMPAR</div>';
 
-    var actionsHtml =
-      '<div style="display:flex;margin-top:6px;">' +
-        '<div id="kb-key-space" class="kb-key kb-wide focusable" data-kb-action="space" data-scope="search">ESPAÇO</div>' +
-        '<div id="kb-key-back" class="kb-key kb-wide focusable" data-kb-action="backspace" data-scope="search">⌫ APAGAR</div>' +
-        '<div id="kb-key-clear" class="kb-key kb-wide focusable" data-kb-action="clear" data-scope="search" style="margin-right:0;">LIMPAR</div>' +
-      '</div>';
+    var combined = [].concat(
+      results.channels.slice(0, 4),
+      results.movies.slice(0, 4),
+      results.series.slice(0, 4),
+      results.novelas.slice(0, 4)
+    ).slice(0, 8);
 
-    var histHtml = '';
-    if (history.length) {
-      histHtml = '<div style="margin-top:14px;"><div style="font-size:18px;color:var(--text-secondary);margin-bottom:8px;">Buscas recentes:</div><div class="chip-row">';
-      for (var h = 0; h < Math.min(history.length, 5); h++) {
-        histHtml += '<div id="sr-hist-' + h + '" class="chip focusable" data-search-term="' + escAttr(history[h]) + '" data-scope="search">' + escHtml(history[h]) + '</div>';
-      }
-      histHtml += '</div></div>';
-    }
-
-    var resHtml = '';
-    if (!q) {
-      resHtml =
-        '<div style="background:var(--bg-surface);border-radius:var(--radius-lg);padding:34px;height:100%;display:flex;flex-direction:column;justify-content:center;">' +
-          '<h2 style="font-size:32px;margin-bottom:12px;">Busca Instantânea por Prefixo e Relevância</h2>' +
-          '<p style="color:var(--text-secondary);font-size:22px;">Digite no teclado virtual ao lado para buscar simultaneamente em Canais ao Vivo, Filmes, Séries e Novelas, ignorando acentos e maiúsculas/minúsculas.</p>' +
-          histHtml +
+    var rowsHtml = '';
+    for (var r = 0; r < combined.length; r++) {
+      var it = combined[r];
+      var actAttr = it.kind === 'live' ? ('data-play-id="' + escAttr(it.id) + '"') : ('data-detail-id="' + escAttr(it.id) + '"');
+      var badgeLbl = it.kind === 'live' ? 'CANAL' : (it.isNovela ? 'NOVELA' : (it.kind === 'series-show' ? 'SÉRIE' : 'FILME'));
+      rowsHtml +=
+        '<div id="sr-item-' + r + '" class="channel-row focusable" ' + actAttr + ' data-scope="search">' +
+          '<span class="channel-title">' + escHtml(it.cleanTitle) + '</span>' +
+          '<span style="font-size:22px;color:var(--text-2);">' + escHtml(it.groupDisplay || it.groupOriginal) + '</span>' +
+          '<span class="badge-quality">' + badgeLbl + '</span>' +
         '</div>';
-    } else if (results.total === 0) {
-      resHtml =
-        '<div style="background:var(--bg-surface);border-radius:var(--radius-lg);padding:34px;">' +
-          '<h2 style="font-size:30px;margin-bottom:10px;">Nenhum resultado para "' + escHtml(q) + '"</h2>' +
-          '<p style="color:var(--text-secondary);">Tente outras letras ou selecione um termo recente abaixo.</p>' +
-          histHtml +
-        '</div>';
-    } else {
-      function renderSectionBlock(secId, secTitle, arr, isShowOrMovie) {
-        if (!arr.length) return '';
-        var s = '<div class="search-section-group"><div class="search-section-header">' + escHtml(secTitle) + ' (' + arr.length + ')</div><div class="home-row-strip">';
-        var max = Math.min(arr.length, 4);
-        for (var idx = 0; idx < max; idx++) {
-          var it = arr[idx];
-          var attr = isShowOrMovie ? ('data-detail-id="' + escAttr(it.id) + '"') : ('data-play-id="' + escAttr(it.id) + '"');
-          s +=
-            '<div id="sr-' + secId + '-' + idx + '" class="mini-card focusable" ' + attr + ' data-scope="search">' +
-              '<div style="font-size:21px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + escHtml(it.cleanTitle) + '</div>' +
-              '<div style="font-size:18px;color:var(--text-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + escHtml(it.groupDisplay || it.groupOriginal) + ' · ' + escHtml(it.quality || 'FHD') + '</div>' +
-            '</div>';
-        }
-        s += '</div></div>';
-        return s;
-      }
-
-      resHtml =
-        renderSectionBlock('ch', 'Canais ao Vivo', results.channels, false) +
-        renderSectionBlock('mv', 'Filmes VOD', results.movies, true) +
-        renderSectionBlock('sr', 'Séries', results.series, true) +
-        renderSectionBlock('nv', 'Novelas', results.novelas, true);
     }
 
     viewport.innerHTML =
-      '<div>' +
-        '<h1 class="screen-title">Busca Global no Catálogo</h1>' +
-        '<p class="screen-subtitle">Resultados ordenados por relevância (início do título e palavra)</p>' +
-        '<div class="search-layout">' +
-          '<div class="keyboard-pane">' +
+      '<div class="screen-enter">' +
+        '<div class="screen-head">' +
+          '<div class="screen-head-left"><h1>Busca</h1><span class="screen-count">' + fmtCountPt(results.total) + ' resultados</span></div>' +
+        '</div>' +
+        '<div class="search-columns">' +
+          '<div class="keyboard-card">' +
             '<div>' +
-              '<div class="search-query-box">' +
+              '<div class="search-input-box">' +
                 '<span>' + escHtml(q || 'Digite para buscar...') + '</span>' +
-                '<span style="font-size:18px;color:var(--text-secondary);">' + results.total + ' itens</span>' +
               '</div>' +
               '<div class="kb-grid">' + keysHtml + '</div>' +
             '</div>' +
-            actionsHtml +
           '</div>' +
-          '<div class="search-results-pane">' + resHtml + '</div>' +
+          '<div style="flex:1;">' +
+            '<div class="col-label">Resultados</div>' +
+            (rowsHtml || '<div class="cat-row"><span>' + (q ? 'Nenhum título encontrado.' : 'Use o teclado ao lado para buscar canais, filmes e séries.') + '</span></div>') +
+          '</div>' +
         '</div>' +
       '</div>';
 
-    global.LuminaFocus.restoreOrDefault('search', '#kb-key-C');
+    global.LuminaFocus.restoreOrDefault('search', '#kb-key-A');
   }
 
-  // ── 6. Continuar Assistindo (Virtualizado) ──
-  function renderContinueWatching(viewport) {
-    var list = getContinueWatchingItems();
-    if (!list.length) {
-      viewport.innerHTML =
-        '<div>' +
-          '<h1 class="screen-title">Continuar Assistindo</h1>' +
-          '<p class="screen-subtitle">Você não possui filmes ou episódios pausados em andamento no momento.</p>' +
-          '<button id="cont-go-movies" class="btn btn-primary focusable" data-nav="movies" data-scope="continue">Explorar Filmes e Séries</button>' +
-        '</div>';
-      global.LuminaFocus.restoreOrDefault('continue', '#cont-go-movies');
-      return;
+  // ── 6. Tela Favoritos ──
+  function renderFavorites(viewport) {
+    var byId = global.LuminaStore.get('itemByIdMap') || {};
+    var favMap = global.LuminaStore.get('favorites') || {};
+    var favKeys = Object.keys(favMap);
+    var favs = [];
+    for (var i = 0; i < favKeys.length; i++) {
+      var it = byId[favKeys[i]];
+      if (it && !isItemLockedByParental(it)) favs.push(it);
     }
 
-    var maxStart = Math.max(0, list.length - CONT_WIN_SIZE);
-    if (contWindowStart > maxStart) contWindowStart = maxStart;
-    if (contWindowStart < 0) contWindowStart = 0;
+    var maxStart = Math.max(0, Math.floor((favs.length - 1) / POSTER_COLS) * POSTER_COLS - POSTER_COLS);
+    if (favWindowStart > maxStart) favWindowStart = maxStart;
+    if (favWindowStart < 0) favWindowStart = 0;
 
-    var rowsHtml = '';
-    var end = Math.min(list.length, contWindowStart + CONT_WIN_SIZE);
-    for (var i = contWindowStart; i < end; i++) {
-      var slot = i - contWindowStart;
-      var it = list[i].item;
-      var pr = list[i].progress;
-      var typeBadge = it.isNovela ? 'NOVELA' : (it.kind === 'episode' ? ('SÉRIE T' + Number(it.season || 1) + ':E' + Number(it.episode || 1)) : 'FILME VOD');
-      rowsHtml +=
-        '<div class="continue-row-card">' +
-          '<div style="flex:1;overflow:hidden;margin-right:24px;">' +
-            '<div style="font-size:25px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + escHtml(it.cleanTitle) + ' <span class="badge-pill" style="font-size:16px;margin-left:10px;">' + escHtml(typeBadge) + '</span></div>' +
-            '<div style="font-size:19px;color:var(--text-secondary);margin-top:4px;">Grupo: ' + escHtml(it.groupDisplay || it.groupOriginal) + ' · Posição salva: ' + Number(pr.position || 0) + 's / ' + Number(pr.duration || 0) + 's (' + Number(pr.percent || 0) + '%)</div>' +
-          '</div>' +
-          '<div style="display:flex;align-items:center;">' +
-            '<div class="ep-progress-bar" style="margin-right:22px;"><div class="ep-progress-fill" style="width:' + Number(pr.percent || 0) + '%;"></div></div>' +
-            '<button id="cont-play-slot-' + slot + '" class="btn btn-sm btn-primary focusable" data-vlist="continue-list" data-vindex="' + i + '" data-vtotal="' + list.length + '" data-play-vod="' + escAttr(it.id) + '" data-scope="continue">▶ Retomar (' + Number(pr.percent || 0) + '%)</button>' +
-            '<button id="cont-rm-slot-' + slot + '" class="btn btn-sm focusable" data-remove-continue="' + escAttr(it.id) + '" data-scope="continue">✕ Remover</button>' +
-          '</div>' +
-        '</div>';
+    var cardsHtml = '';
+    var end = Math.min(favs.length, favWindowStart + POSTER_WIN_SIZE);
+    for (var j = favWindowStart; j < end; j++) {
+      var item = favs[j];
+      var slot = j - favWindowStart;
+      cardsHtml += renderPosterCard(item, 'fav-slot-' + slot, 'favorites', j, favs.length);
     }
 
     viewport.innerHTML =
-      '<div>' +
-        '<div class="screen-header-row">' +
-          '<div>' +
-            '<h1 class="screen-title">Continuar Assistindo (' + list.length + ')</h1>' +
-            '<p class="screen-subtitle" style="margin-bottom:0;">Retome filmes, séries e novelas do ponto exato onde parou</p>' +
-          '</div>' +
-          '<div class="pagination-pill">' + (contWindowStart + 1) + '–' + end + ' de ' + list.length + '</div>' +
+      '<div class="screen-enter">' +
+        '<div class="screen-head">' +
+          '<div class="screen-head-left"><h1>Favoritos</h1><span class="screen-count">' + fmtCountPt(favs.length) + ' títulos</span></div>' +
         '</div>' +
-        '<div>' + rowsHtml + '</div>' +
+        (favs.length
+          ? '<div class="catalog-grid" style="grid-template-columns:repeat(5, var(--card-w));">' + cardsHtml + '</div>'
+          : '<div class="settings-panel" style="height:auto;padding:44px;">' +
+              '<div class="settings-panel-title">Sua lista de Favoritos está vazia</div>' +
+              '<div style="font-size:26px;color:var(--text-2);margin-bottom:28px;">Adicione canais, filmes ou séries aos Favoritos para acessá-los rapidamente aqui.</div>' +
+              '<div><button id="fav-go-home" class="btn btn-primary focusable" data-nav="home" data-scope="favorites">Ir para Início</button></div>' +
+            '</div>') +
       '</div>';
 
-    global.LuminaFocus.restoreOrDefault('continue', '#cont-play-slot-0');
+    global.LuminaFocus.restoreOrDefault('favorites', favs.length ? '#fav-slot-0' : '#fav-go-home');
   }
 
-  // ── 7. Parear / Fontes (com Resumo da Última Atualização, Contagens e Relatório de Etapas) ──
-  function describeSource(src) {
-    if (!src) return null;
-    if (src.type === 'xtream' && src.creds) {
-      return 'Xtream Codes · ' + escHtml(String(src.creds.server || '').replace(/^https?:\/\//, '')) + ' · usuário: ' + escHtml(src.creds.username);
-    }
-    if (src.type === 'm3u' && src.url) {
-      var host = String(src.url).replace(/^https?:\/\//, '').split('/')[0];
-      return 'Lista M3U · ' + escHtml(host);
-    }
-    return null;
-  }
-
+  // ── 7. Pareamento pelo Celular (fluxo QR Code acionado por Ajustes > Fonte e Pareamento) ──
   function formatDiffSummary(updateRec) {
     if (!updateRec || !updateRec.diff || !updateRec.diff.hasPrev) return '';
     var d = updateRec.diff;
@@ -1249,8 +1720,7 @@
     if (d.liveDelta) parts.push((d.liveDelta > 0 ? '+' : '') + d.liveDelta + ' canais');
     if (d.movieDelta) parts.push((d.movieDelta > 0 ? '+' : '') + d.movieDelta + ' filmes');
     if (d.seriesDelta) parts.push((d.seriesDelta > 0 ? '+' : '') + d.seriesDelta + ' séries');
-    if (d.novelasDelta) parts.push((d.novelasDelta > 0 ? '+' : '') + d.novelasDelta + ' novelas');
-    return parts.length ? ('Diferença na última atualização: ' + parts.join(', ')) : 'Sem alterações de quantidade na última atualização.';
+    return parts.length ? (' (' + parts.join(', ') + ')') : '';
   }
 
   function onPairingPayload(payload) {
@@ -1262,8 +1732,7 @@
         renderCurrentRoute();
         return;
       }
-      var diffTxt = formatDiffSummary(updateRec);
-      toast('✔ Catálogo atualizado: ' + (list ? list.length : 0) + ' itens! ' + diffTxt);
+      toast('Lista atualizada: ' + fmtCountPt(list ? list.length : 0) + ' itens' + formatDiffSummary(updateRec));
       global.LuminaStore.set('pairingError', null);
       global.LuminaStore.set('pairingStep', 'cards');
       global.LuminaRouter.navigate('home');
@@ -1287,102 +1756,59 @@
   }
 
   function renderOnboarding(viewport) {
-    var step = global.LuminaStore.get('pairingStep') || 'cards';
     var baseUrl = global.LuminaStore.get('pairingBaseUrl') || global.LuminaPairing.DEFAULT_PAIRING_BASE_URL;
     var shownUrl = baseUrl.replace(/^https?:\/\//, '');
+    var sess = global.LuminaPairing.getCurrentSession();
+    var pairErr = global.LuminaStore.get('pairingError');
 
-    if (step === 'phone-qr') {
-      var sess = global.LuminaPairing.getCurrentSession();
-      var pairErr = global.LuminaStore.get('pairingError');
-
-      if (!sess) {
-        viewport.innerHTML =
-          '<div>' +
-            '<h1 class="screen-title">📱 Receber Lista pelo Celular</h1>' +
-            (pairErr
-              ? '<p class="screen-subtitle" style="color:#F87171;">' + escHtml(pairErr) + '</p>'
-              : '<p class="screen-subtitle">Gerando código seguro de pareamento...</p>') +
-            '<div>' +
-              '<button id="btn-pair-renew" class="btn btn-primary focusable" data-action="renew-phone-code" data-scope="onboarding">↻ Tentar Novamente</button>' +
-              '<button id="btn-pair-back" class="btn focusable" data-action="back-to-sources" data-scope="onboarding">← Voltar às Fontes</button>' +
-            '</div>' +
-          '</div>';
-        global.LuminaFocus.restoreOrDefault('onboarding', '#btn-pair-renew');
-        return;
-      }
-
-      var code = sess.code;
-      var qrSvg = global.LuminaPairing.renderQrSvg(baseUrl + '/#' + code, 6);
-
+    if (!sess) {
       viewport.innerHTML =
-        '<div>' +
-          '<h1 class="screen-title">📱 Receber Lista pelo Celular</h1>' +
-          '<p class="screen-subtitle">Envie seu link M3U ou login Xtream pelo celular sem digitar no controle remoto (criptografia ponta-a-ponta ECDH P-256 + AES-GCM).</p>' +
-          '<div class="pairing-hero-box">' +
-            '<div style="max-width:860px;">' +
-              '<div style="font-size:21px;color:var(--text-secondary);margin-bottom:6px;">1. No celular, escaneie o QR Code ao lado ou acesse no navegador:</div>' +
-              '<div style="font-size:32px;font-weight:700;color:var(--accent-cyan);margin-bottom:18px;font-family:var(--font-mono);">' + escHtml(shownUrl) + '</div>' +
-              '<div style="font-size:21px;color:var(--text-secondary);">2. Confira ou digite este código de 6 caracteres:</div>' +
-              '<div class="pairing-code-pill">' + escHtml(code) + '</div>' +
-              '<div style="font-size:19px;color:#22C55E;margin-bottom:22px;">● Aguardando envio pelo celular... O código vale 10 minutos e é de uso único.</div>' +
-              '<div>' +
-                '<button id="btn-pair-renew" class="btn btn-primary focusable" data-action="renew-phone-code" data-scope="onboarding">↻ Gerar Novo Código</button>' +
-                '<button id="btn-pair-back" class="btn focusable" data-action="back-to-sources" data-scope="onboarding">← Voltar às Fontes</button>' +
-              '</div>' +
-            '</div>' +
-            '<div class="pairing-qr-card">' +
-              qrSvg +
-              '<div style="color:#0F172A;font-size:17px;font-weight:700;margin-top:10px;">Aponte a câmera do celular</div>' +
-              '<div style="color:#475569;font-size:14px;">Preenche o código sozinho</div>' +
+        '<div class="screen-enter">' +
+          '<div class="screen-head"><div class="screen-head-left"><h1>Pareamento pelo celular</h1></div></div>' +
+          '<div class="settings-panel" style="height:auto;">' +
+            '<div class="settings-panel-title">' + escHtml(pairErr ? 'Falha ao gerar código' : 'Gerando código de pareamento...') + '</div>' +
+            '<div style="font-size:26px;color:var(--text-2);margin-bottom:28px;">' + escHtml(pairErr || 'Conectando ao servidor seguro de pareamento...') + '</div>' +
+            '<div style="display:flex;gap:20px;">' +
+              '<button id="btn-pair-renew" class="btn btn-primary focusable" data-action="renew-phone-code" data-scope="onboarding">Tentar Novamente</button>' +
+              '<button id="btn-pair-back" class="btn btn-secondary focusable" data-action="back" data-scope="onboarding">Voltar</button>' +
             '</div>' +
           '</div>' +
         '</div>';
-
       global.LuminaFocus.restoreOrDefault('onboarding', '#btn-pair-renew');
       return;
     }
 
-    var src = global.LuminaStore.get('source');
-    var srcText = describeSource(src);
-    var chCount = (global.LuminaStore.get('channels') || []).length;
-    var mvCount = (global.LuminaStore.get('movies') || []).length;
-    var srCount = (global.LuminaStore.get('seriesList') || []).length;
-    var nvCount = (global.LuminaStore.get('novelasList') || []).length;
-    var unCount = (global.LuminaStore.get('unclassifiedList') || []).length;
-    var lastUpd = global.LuminaStore.get('lastUpdateInfo');
-    var pairErr2 = global.LuminaStore.get('pairingError');
-    var diffSummary = formatDiffSummary(lastUpd);
+    var code = sess.code;
+    var qrSvg = global.LuminaPairing.renderQrSvg(baseUrl + '/#' + code, 6);
 
     viewport.innerHTML =
-      '<div>' +
-        '<h1 class="screen-title">Parear pelo Celular & Fontes de Conteúdo</h1>' +
-        '<p class="screen-subtitle">Adicione ou atualize sua lista M3U ou login Xtream Codes de forma atômica (sem perder seus favoritos e progresso).</p>' +
-        (pairErr2 ? '<p class="screen-subtitle" style="color:#F87171;">' + escHtml(pairErr2) + '</p>' : '') +
-        '<div class="onboarding-grid">' +
-          '<div class="onboarding-col" style="border-color:rgba(56,189,248,0.65);background:linear-gradient(160deg, rgba(23,37,84,0.65) 0%, rgba(19,26,39,0.95) 100%);">' +
-            '<h2 style="font-size:26px;color:var(--accent-cyan);margin-bottom:12px;">📱 Parear pelo Celular (QR / Código)</h2>' +
-            '<p style="color:var(--text-secondary);font-size:20px;margin-bottom:20px;">Gera um código de 6 caracteres e um QR Code na TV. No celular (' + escHtml(shownUrl) + '), você cola o link M3U ou usuário/senha Xtream e a TV sincroniza automaticamente.</p>' +
-            '<button id="btn-open-phone-pair" class="btn btn-primary focusable" data-action="open-phone-pairing" data-scope="onboarding">Abrir Código e QR Code na TV</button>' +
+      '<div class="screen-enter">' +
+        '<div class="screen-head"><div class="screen-head-left"><h1>Pareamento pelo celular</h1></div></div>' +
+        '<div class="settings-panel" style="flex-direction:row;align-items:center;justify-content:space-between;height:auto;padding:44px 52px;">' +
+          '<div style="max-width:960px;">' +
+            '<div style="font-size:26px;color:var(--text-2);margin-bottom:8px;">1. Escaneie o QR Code ou acesse no celular:</div>' +
+            '<div style="font-size:34px;font-weight:800;color:var(--accent);margin-bottom:24px;">' + escHtml(shownUrl) + '</div>' +
+            '<div style="font-size:26px;color:var(--text-2);margin-bottom:10px;">2. Confira ou digite este código de 6 caracteres:</div>' +
+            '<div style="display:inline-block;font-family:var(--font-mono);font-size:52px;font-weight:800;letter-spacing:14px;color:var(--accent);background:var(--bg);border:2px solid var(--accent);border-radius:var(--radius);padding:14px 28px;margin-bottom:24px;">' + escHtml(code) + '</div>' +
+            '<div style="font-size:24px;color:var(--green);margin-bottom:28px;">Aguardando envio pelo celular...</div>' +
+            '<div style="display:flex;gap:20px;">' +
+              '<button id="btn-pair-renew" class="btn btn-primary focusable" data-action="renew-phone-code" data-scope="onboarding">Novo Código</button>' +
+              '<button id="btn-pair-back" class="btn btn-secondary focusable" data-action="back" data-scope="onboarding">Voltar</button>' +
+            '</div>' +
           '</div>' +
-          '<div class="onboarding-col" style="margin-right:0;">' +
-            '<h2 style="font-size:26px;margin-bottom:12px;">Fonte Salva & Estado do Catálogo</h2>' +
-            (srcText
-              ? '<p style="color:var(--text-primary);font-size:20px;font-weight:600;margin-bottom:6px;">' + srcText + '</p>' +
-                '<p style="color:var(--text-secondary);font-size:19px;margin-bottom:8px;">Última atualização: <strong>' + escHtml(fmtDateBr(lastUpd && lastUpd.updatedAt)) + '</strong></p>' +
-                '<p style="color:var(--text-secondary);font-size:19px;margin-bottom:10px;">Canais: <strong>' + chCount + '</strong> · Filmes: <strong>' + mvCount + '</strong> · Séries: <strong>' + srCount + '</strong> · Novelas: <strong>' + nvCount + '</strong>' + (unCount ? (' · Não classificados: <strong>' + unCount + '</strong>') : '') + '</p>' +
-                (diffSummary ? '<p style="color:var(--accent-cyan);font-size:18px;margin-bottom:14px;">' + escHtml(diffSummary) + '</p>' : '') +
-                '<button id="btn-reload-source" class="btn btn-primary focusable" data-action="reload-source" data-scope="onboarding">↻ Atualizar Lista Agora</button>'
-              : '<p style="color:var(--text-secondary);font-size:20px;">Nenhuma fonte conectada ainda. Use o pareamento pelo celular ao lado para enviar sua primeira lista.</p>') +
+          '<div style="background:#FFFFFF;padding:22px;border-radius:var(--radius-lg);display:flex;flex-direction:column;align-items:center;flex-shrink:0;">' +
+            qrSvg +
+            '<div style="color:#0B0F17;font-size:22px;font-weight:700;margin-top:12px;">Aponte a câmera</div>' +
           '</div>' +
         '</div>' +
       '</div>';
-    global.LuminaFocus.restoreOrDefault('onboarding', '#btn-open-phone-pair');
+
+    global.LuminaFocus.restoreOrDefault('onboarding', '#btn-pair-renew');
   }
 
-  // ── 8. Ajustes Agrupados por Seções Laterais (Conta, Reprodução, Aparência, Parental, Atualizações, Backup, Sobre) ──
+  // ── 8. Tela Ajustes (Seção 9 — Referência 05: 8 Abas sem numeração, 420px esquerda + Painel direito) ──
   function renderSettings(viewport) {
     var perfMode = global.LuminaStore.get('performanceMode') || 'auto';
-    var isLite = global.LuminaStore.get('liteModeActive');
     var ratio = global.LuminaStore.get('defaultAspectRatio') || 'auto';
     var preferFmt = global.LuminaStore.get('preferOutputFormat') || 'auto';
     var autoUpdHours = global.LuminaStore.get('autoUpdateHours');
@@ -1390,328 +1816,535 @@
     var includeCreds = !!global.LuminaStore.get('includeCredentialsInBackup');
     var par = global.LuminaStore.get('parental') || { enabled: true, unlockedSession: false, hideAdultInSearchAndHome: true };
     var tmdb = global.LuminaStore.get('tmdb') || { enabled: false, apiKey: '', enrichedCount: 0 };
-    var acc = global.LuminaStore.get('accountInfo');
     var src = global.LuminaStore.get('source');
     var lastUpd = global.LuminaStore.get('lastUpdateInfo');
     var appUpd = global.LuminaStore.get('appUpdateInfo');
-    var appUpdProg = global.LuminaStore.get('appUpdateProgress');
     var isAndroid = !!(global.LuminaPlatform && global.LuminaPlatform.isAndroid);
-    var appVer = global.LuminaPlatform ? global.LuminaPlatform.getAppVersion() : '1.6.0';
+    var appVer = global.LuminaPlatform ? global.LuminaPlatform.getAppVersion() : '2.0.0';
     var platLabel = global.LuminaPlatform ? global.LuminaPlatform.getPlatformLabel() : 'Smart TV';
 
-    var tabs = [
-      { id: 'account', label: '1. Minha Conta & Fonte' },
-      { id: 'playback', label: '2. Reprodução & Player' },
-      { id: 'appearance', label: '3. Desempenho & TMDB' },
-      { id: 'parental', label: '4. Controle Parental (+18)' },
-      { id: 'updates', label: '5. Atualizações (Lista/App)' },
-      { id: 'backup', label: '6. Backup JSON & Dados' },
-      { id: 'about', label: '7. Sobre & Diagnóstico' }
-    ];
+    var chCount = (global.LuminaStore.get('channels') || []).length;
+    var mvCount = (global.LuminaStore.get('movies') || []).length;
+    var srCount = (global.LuminaStore.get('seriesList') || []).length + (global.LuminaStore.get('novelasList') || []).length;
 
     var tabsHtml = '';
-    for (var t = 0; t < tabs.length; t++) {
-      var tb = tabs[t];
+    for (var t = 0; t < SETTINGS_TABS.length; t++) {
+      var tb = SETTINGS_TABS[t];
       var sel = (activeSettingsTab === tb.id) ? ' is-selected' : '';
       tabsHtml +=
-        '<div id="set-tab-' + tb.id + '" class="settings-tab-btn focusable' + sel + '" data-settings-tab="' + escAttr(tb.id) + '" data-scope="settings">' +
+        '<div id="set-tab-' + tb.id + '" class="settings-tab focusable' + sel + '" data-col="settings-tabs" data-settings-tab="' + escAttr(tb.id) + '" data-scope="settings">' +
           '<span>' + escHtml(tb.label) + '</span>' +
-          '<span>›</span>' +
         '</div>';
     }
 
-    var paneHtml = '';
-    if (activeSettingsTab === 'account') {
-      var srcDesc = describeSource(src) || 'Nenhuma fonte salva';
-      paneHtml =
-        '<div>' +
-          '<h2 style="font-size:30px;color:var(--accent-cyan);margin-bottom:10px;">Minha Conta IPTV & Fonte Conectada</h2>' +
-          '<p style="color:var(--text-secondary);font-size:21px;margin-bottom:18px;">Fonte ativa: <strong>' + srcDesc + '</strong></p>' +
-          (acc ? (
-            '<div style="background:var(--bg-obsidian);padding:20px 24px;border-radius:var(--radius-md);margin-bottom:18px;">' +
-              '<div style="font-size:22px;margin-bottom:8px;">Status da Conta Xtream: <strong style="color:' + (acc.auth ? '#22C55E' : '#EF4444') + ';">' + escHtml(acc.status) + '</strong></div>' +
-              '<div style="font-size:20px;color:var(--text-secondary);margin-bottom:6px;">Vencimento: <strong>' + escHtml(acc.expDate || 'Ilimitado') + '</strong>' + (acc.daysRemaining != null ? (' (' + Number(acc.daysRemaining) + ' dias restantes)') : '') + '</div>' +
-              '<div style="font-size:20px;color:var(--text-secondary);margin-bottom:6px;">Conexões Simultâneas: <strong>' + Number(acc.activeCons || 0) + ' / ' + Number(acc.maxConnections || 1) + '</strong></div>' +
-              '<div style="font-size:20px;color:var(--text-secondary);">Formatos Permitidos pelo Servidor: <strong>' + escHtml((acc.allowedOutputFormats || ['m3u8', 'ts']).join(', ').toUpperCase()) + '</strong></div>' +
-            '</div>'
-          ) : '<p style="color:var(--text-secondary);font-size:20px;margin-bottom:18px;">Conecte uma conta Xtream Codes para visualizar data de vencimento, conexões ativas e formatos permitidos.</p>') +
+    var safeMarginVal = Number(global.LuminaStore.get('screenSafeMargin') || 0);
+    var safeMarginPct = Math.round(safeMarginVal * 100) + '%';
+    var autoUpdLabel = autoUpdHours === 0 ? 'Manual' : (autoUpdHours === 12 ? 'Ao abrir' : ('A cada ' + autoUpdHours + 'h'));
+    var listName = (src && src.name) ? src.name : 'Minha Lista';
+    var statusPillText = fmtDateBr(lastUpd && lastUpd.updatedAt);
+
+    var panelBody = '';
+
+    if (activeSettingsTab === 'source') {
+      // Exatamente como na Referência 05 (05-ajustes.html)
+      panelBody =
+        '<div class="settings-panel-title">Fonte e Pareamento</div>' +
+        '<div class="settings-current-list-card">' +
+          '<div>' +
+            '<div style="font-size:22px;color:var(--text-2);">Lista atual</div>' +
+            '<div style="font-size:32px;font-weight:700;margin:4px 0;">' + escHtml(listName) + '</div>' +
+            '<div style="font-size:24px;color:var(--text-2);">' + fmtCountPt(chCount) + ' canais \u00B7 ' + fmtCountPt(mvCount) + ' filmes \u00B7 ' + fmtCountPt(srCount) + ' séries</div>' +
+          '</div>' +
+          '<span class="settings-status-pill">' + escHtml(statusPillText) + '</span>' +
         '</div>' +
-        '<div>' +
-          '<button id="set-acc-reload" class="btn btn-primary focusable" data-action="reload-source" data-scope="settings">↻ Atualizar Lista e Validar Conta</button>' +
-          '<button id="set-acc-pair" class="btn focusable" data-action="go-phone-pairing" data-scope="settings">📱 Trocar Lista pelo Celular</button>' +
+        '<div class="setting-row">' +
+          '<div>' +
+            '<div class="setting-row-label">Pareamento pelo celular</div>' +
+            '<div class="setting-row-desc">Envie sua lista pelo celular com código ou QR Code.</div>' +
+          '</div>' +
+          '<div><button id="set-btn-pair" class="btn btn-primary focusable" data-col="settings-panel" data-action="go-phone-pairing" data-scope="settings">Parear</button></div>' +
+        '</div>' +
+        '<div class="setting-row">' +
+          '<div>' +
+            '<div class="setting-row-label">Atualizar lista agora</div>' +
+            '<div class="setting-row-desc">Baixa de novo os canais, filmes e séries.</div>' +
+          '</div>' +
+          '<div><button id="set-btn-reload" class="btn btn-secondary focusable" data-col="settings-panel" data-action="reload-source" data-scope="settings">Atualizar</button></div>' +
+        '</div>' +
+        '<div id="set-row-autoupd" class="setting-row focusable" data-col="settings-panel" data-lr-control="auto-update" data-action="cycle-auto-update-hours" data-scope="settings">' +
+          '<div>' +
+            '<div class="setting-row-label">Atualizar automaticamente</div>' +
+            '<div class="setting-row-desc">Define quando a lista é baixada de novo.</div>' +
+          '</div>' +
+          '<div class="setting-row-value">' + svgChevLeft() + escHtml(autoUpdLabel) + svgChevRight() + '</div>' +
+        '</div>' +
+        '<div id="set-safe-margin" class="setting-row focusable" data-col="settings-panel" data-lr-control="safe-margin" data-action="cycle-safe-margin" data-scope="settings">' +
+          '<div>' +
+            '<div class="setting-row-label">Margem de segurança da tela</div>' +
+            '<div class="setting-row-desc">Reduz a imagem para não cortar as bordas em projetores.</div>' +
+          '</div>' +
+          '<div class="setting-row-value">' + svgChevLeft() + escHtml(safeMarginPct) + svgChevRight() + '</div>' +
         '</div>';
     } else if (activeSettingsTab === 'playback') {
-      paneHtml =
-        '<div>' +
-          '<h2 style="font-size:30px;color:var(--accent-cyan);margin-bottom:10px;">Reprodução, Formato e Proporção de Tela</h2>' +
-          '<p style="color:var(--text-secondary);font-size:21px;margin-bottom:18px;">O player possui fallback automático multi-engine (NativeEngine → HlsJsEngine → MpegtsEngine) e watchdog de reconexão em caso de travamento.</p>' +
-          '<div style="background:var(--bg-obsidian);padding:20px 24px;border-radius:var(--radius-md);margin-bottom:18px;">' +
-            '<div style="font-size:21px;margin-bottom:8px;">Proporção de Vídeo Padrão: <strong style="color:var(--accent-cyan);">' + escHtml(ratio.toUpperCase()) + '</strong></div>' +
-            '<div style="font-size:21px;">Formato Preferido no Ao Vivo Xtream: <strong style="color:var(--accent-cyan);">' + escHtml(preferFmt.toUpperCase()) + '</strong> (alterna automaticamente se falhar)</div>' +
+      var ratioLabel = ratio === 'auto' ? 'Auto' : ratio.toUpperCase();
+      var fmtLabel = preferFmt === 'auto' ? 'Auto' : preferFmt.toUpperCase();
+      panelBody =
+        '<div class="settings-panel-title">Reprodução</div>' +
+        '<div id="set-ratio-cycle" class="setting-row focusable" data-col="settings-panel" data-lr-control="default-ratio" data-action="cycle-default-ratio" data-scope="settings">' +
+          '<div>' +
+            '<div class="setting-row-label">Proporção de vídeo</div>' +
+            '<div class="setting-row-desc">Ajusta o formato da imagem nos canais e filmes.</div>' +
           '</div>' +
+          '<div class="setting-row-value">' + svgChevLeft() + escHtml(ratioLabel) + svgChevRight() + '</div>' +
         '</div>' +
-        '<div>' +
-          '<button id="set-ratio-cycle" class="btn btn-primary focusable" data-action="cycle-default-ratio" data-scope="settings">Proporção: ' + escHtml(ratio.toUpperCase()) + '</button>' +
-          '<button id="set-fmt-cycle" class="btn focusable" data-action="cycle-prefer-format" data-scope="settings">Formato Ao Vivo: ' + escHtml(preferFmt.toUpperCase()) + '</button>' +
-        '</div>';
-    } else if (activeSettingsTab === 'appearance') {
-      paneHtml =
-        '<div>' +
-          '<h2 style="font-size:30px;color:var(--accent-cyan);margin-bottom:10px;">Modo de Desempenho & Enriquecimento TMDB</h2>' +
-          '<p style="color:var(--text-secondary);font-size:21px;margin-bottom:16px;">O Modo Leve desativa sombras e animações pesadas em TVs com menos memória RAM. Estado atual: <strong>' + (isLite ? 'MODO LEVE ATIVO' : 'PADRÃO 60fps') + '</strong></p>' +
-          '<div style="margin-bottom:20px;">' +
-            '<button id="set-perf-auto" class="btn btn-sm focusable' + (perfMode === 'auto' ? ' btn-primary' : '') + '" data-set-perf="auto" data-scope="settings">Automático</button>' +
-            '<button id="set-perf-normal" class="btn btn-sm focusable' + (perfMode === 'normal' ? ' btn-primary' : '') + '" data-set-perf="normal" data-scope="settings">Normal (60fps)</button>' +
-            '<button id="set-perf-lite" class="btn btn-sm focusable' + (perfMode === 'lite' ? ' btn-primary' : '') + '" data-set-perf="lite" data-scope="settings">Forçar Modo Leve</button>' +
+        '<div id="set-fmt-cycle" class="setting-row focusable" data-col="settings-panel" data-lr-control="prefer-format" data-action="cycle-prefer-format" data-scope="settings">' +
+          '<div>' +
+            '<div class="setting-row-label">Formato preferido ao vivo</div>' +
+            '<div class="setting-row-desc">Alterna entre HLS (.m3u8) e MPEG-TS (.ts) automaticamente se falhar.</div>' +
           '</div>' +
-          '<p style="color:var(--text-secondary);font-size:20px;">Enriquecimento TMDB (pt-BR): busca sinopses e notas oficiais. Títulos enriquecidos no cache: <strong>' + Number(tmdb.enrichedCount || 0) + '</strong></p>' +
-        '</div>' +
-        '<div>' +
-          '<button id="set-tmdb-run" class="btn btn-primary focusable" data-action="run-tmdb-enrich" data-scope="settings">✨ Enriquecer Catálogo com TMDB (pt-BR)</button>' +
+          '<div class="setting-row-value">' + svgChevLeft() + escHtml(fmtLabel) + svgChevRight() + '</div>' +
         '</div>';
-    } else if (activeSettingsTab === 'parental') {
-      paneHtml =
-        '<div>' +
-          '<h2 style="font-size:30px;color:var(--accent-cyan);margin-bottom:10px;">Controle Parental (+18) & Segurança de PIN</h2>' +
-          '<p style="color:var(--text-secondary);font-size:21px;margin-bottom:16px;">O PIN é armazenado com hash criptográfico SHA-256 + salt, bloqueia temporariamente após 5 tentativas incorretas e tranca a sessão automaticamente após 15 minutos de inatividade ou ao sair do vídeo.</p>' +
-          '<div style="background:var(--bg-obsidian);padding:18px 24px;border-radius:var(--radius-md);margin-bottom:18px;">' +
-            '<div style="font-size:21px;margin-bottom:6px;">Proteção Parental (+18): <strong>' + (par.enabled ? 'ATIVA' : 'DESATIVADA') + '</strong></div>' +
-            '<div style="font-size:21px;margin-bottom:6px;">Sessão +18 Atual: <strong>' + (par.unlockedSession ? '🔓 Desbloqueada (expira em 15 min de inatividade)' : '🔒 Bloqueada') + '</strong></div>' +
-            '<div style="font-size:20px;color:var(--text-secondary);">Ocultar itens +18 na Home e Busca enquanto bloqueado: <strong>' + (par.hideAdultInSearchAndHome ? 'SIM' : 'NÃO') + '</strong></div>' +
+    } else if (activeSettingsTab === 'screen') {
+      var perfLabels = { 'auto': 'Automático', 'normal': 'Padrão 60fps', 'lite': 'Modo Leve' };
+      var motionLevel = global.LuminaStore.get('motionLevel') || 'Completas';
+      panelBody =
+        '<div class="settings-panel-title">Tela e Desempenho</div>' +
+        '<div id="set-motion-level" class="setting-row focusable" data-col="settings-panel" data-lr-control="motion-level" data-action="cycle-motion-level" data-scope="settings">' +
+          '<div>' +
+            '<div class="setting-row-label">Animações</div>' +
+            '<div class="setting-row-desc">Controla o movimento da interface.</div>' +
           '</div>' +
+          '<div class="setting-row-value">' + svgChevLeft() + escHtml(motionLevel) + svgChevRight() + '</div>' +
         '</div>' +
-        '<div>' +
-          '<button id="set-pin-toggle" class="btn btn-primary focusable" data-action="toggle-parental-lock" data-scope="settings">' + (par.unlockedSession ? '🔒 Bloquear Sessão +18' : '🔓 Desbloquear com PIN') + '</button>' +
-          '<button id="set-pin-change" class="btn focusable" data-action="change-parental-pin" data-scope="settings">🔑 Alterar PIN</button>' +
-          '<button id="set-pin-enable" class="btn focusable" data-action="toggle-parental-enabled" data-scope="settings">' + (par.enabled ? 'Desativar Proteção' : 'Ativar Proteção') + '</button>' +
+        '<div id="set-safe-margin-2" class="setting-row focusable" data-col="settings-panel" data-lr-control="safe-margin" data-action="cycle-safe-margin" data-scope="settings">' +
+          '<div>' +
+            '<div class="setting-row-label">Margem de segurança da tela</div>' +
+            '<div class="setting-row-desc">Reduz a imagem para não cortar as bordas em projetores.</div>' +
+          '</div>' +
+          '<div class="setting-row-value">' + svgChevLeft() + escHtml(safeMarginPct) + svgChevRight() + '</div>' +
+        '</div>' +
+        '<div id="set-perf-cycle" class="setting-row focusable" data-col="settings-panel" data-lr-control="perf-mode" data-action="cycle-perf-mode" data-scope="settings">' +
+          '<div>' +
+            '<div class="setting-row-label">Modo de desempenho</div>' +
+            '<div class="setting-row-desc">Ajusta recursos gráficos conforme a capacidade do aparelho.</div>' +
+          '</div>' +
+          '<div class="setting-row-value">' + svgChevLeft() + escHtml(perfLabels[perfMode] || 'Automático') + svgChevRight() + '</div>' +
+        '</div>' +
+        '<div class="setting-row">' +
+          '<div>' +
+            '<div class="setting-row-label">Capas e sinopses TMDB</div>' +
+            '<div class="setting-row-desc">Títulos enriquecidos em português: ' + fmtCountPt(tmdb.enrichedCount || 0) + '.</div>' +
+          '</div>' +
+          '<div><button id="set-tmdb-run" class="btn btn-secondary focusable" data-col="settings-panel" data-action="run-tmdb-enrich" data-scope="settings">Enriquecer</button></div>' +
         '</div>';
-    } else if (activeSettingsTab === 'updates') {
-      var autoUpdLabel = autoUpdHours === 0 ? 'Só Manual' : ('A cada ' + autoUpdHours + ' horas');
-      var apkSection = '';
-      if (isAndroid) {
-        var updStatus = 'Versão instalada: v' + escHtml(appVer) + '. Clique em "Verificar Atualização do App" para consultar o GitHub Releases.';
-        if (appUpd) {
-          if (appUpd.hasUpdate) {
-            updStatus = '🎉 Nova versão disponível: ' + escHtml(appUpd.latestVersion) + ' — ' + escHtml(appUpd.releaseNotes || 'Correções e melhorias.');
-          } else {
-            updStatus = '✔ Você já está na versão mais recente (v' + escHtml(appVer) + ').';
-          }
-        }
-        if (appUpdProg) {
-          updStatus = '⬇ Baixando atualização do APK: ' + Number(appUpdProg.percent || 0) + '% (' + escHtml(appUpdProg.downloadedMb || '0') + ' MB / ' + escHtml(appUpdProg.totalMb || '?') + ' MB)...';
-        }
-        apkSection =
-          '<div style="background:var(--bg-obsidian);padding:18px 24px;border-radius:var(--radius-md);margin-top:14px;">' +
-            '<div style="font-size:21px;font-weight:700;color:var(--accent-cyan);margin-bottom:6px;">Atualização do Aplicativo (APK Fire TV / Android)</div>' +
-            '<div style="font-size:19px;color:var(--text-secondary);">' + updStatus + '</div>' +
-          '</div>';
-      } else {
-        apkSection =
-          '<div style="background:var(--bg-obsidian);padding:18px 24px;border-radius:var(--radius-md);margin-top:14px;">' +
-            '<div style="font-size:20px;color:var(--text-secondary);">Na TV LG webOS, atualizações do pacote .ipk são instaladas via ares-install.</div>' +
+    } else if (activeSettingsTab === 'organizer') {
+      var allGroups = global.LuminaStore.get('originalGroups') || [];
+      var profile = global.LuminaStore.get('mappingProfile') || { mode: 'auto', customGroupRules: {} };
+      var undoStack = global.LuminaStore.get('organizerUndoStack') || [];
+      var maxG = Math.max(0, allGroups.length - ORG_GROUP_WIN_SIZE);
+      if (orgGroupWindowStart > maxG) orgGroupWindowStart = maxG;
+      if (orgGroupWindowStart < 0) orgGroupWindowStart = 0;
+
+      var targetLabels = { 'live': 'Canais', 'movie': 'Filmes', 'series': 'Séries', 'novela': 'Novelas', 'hidden': 'Oculto' };
+      var gRows = '';
+      var gEnd = Math.min(allGroups.length, orgGroupWindowStart + ORG_GROUP_WIN_SIZE);
+      for (var gIdx = orgGroupWindowStart; gIdx < gEnd; gIdx++) {
+        var grp = allGroups[gIdx];
+        var slot = gIdx - orgGroupWindowStart;
+        var curRule = (profile.mode === 'all_live')
+          ? 'live'
+          : ((profile.customGroupRules && profile.customGroupRules[grp.originalName]) || grp.suggested || 'live');
+        gRows +=
+          '<div id="org-slot-' + slot + '" class="setting-row focusable" style="height:96px;" ' +
+               'data-col="settings-panel" data-vlist="org-groups" data-vindex="' + gIdx + '" data-vtotal="' + allGroups.length + '" ' +
+               'data-lr-control="org-group" data-org-group="' + escAttr(grp.originalName) + '" data-org-cur="' + escAttr(curRule) + '" data-action="cycle-org-group" data-scope="settings">' +
+            '<div>' +
+              '<div class="setting-row-label">' + escHtml(grp.displayName) + '</div>' +
+              '<div class="setting-row-desc">' + fmtCountPt(grp.count || 0) + ' itens</div>' +
+            '</div>' +
+            '<div class="setting-row-value">' + svgChevLeft() + escHtml(targetLabels[curRule] || 'Canais') + svgChevRight() + '</div>' +
           '</div>';
       }
 
-      paneHtml =
-        '<div>' +
-          '<h2 style="font-size:30px;color:var(--accent-cyan);margin-bottom:10px;">Atualizações da Lista & do Aplicativo</h2>' +
-          '<p style="color:var(--text-secondary);font-size:20px;margin-bottom:10px;">Atualização Automática da Lista ao Abrir: <strong>' + escHtml(autoUpdLabel) + '</strong> · Última atualização: <strong>' + escHtml(fmtDateBr(lastUpd && lastUpd.updatedAt)) + '</strong></p>' +
-          apkSection +
-        '</div>' +
-        '<div>' +
-          '<button id="set-upd-cycle-hours" class="btn focusable" data-action="cycle-auto-update-hours" data-scope="settings">Lista Auto: ' + escHtml(autoUpdLabel) + '</button>' +
-          '<button id="set-upd-list-now" class="btn btn-primary focusable" data-action="reload-source" data-scope="settings">↻ Atualizar Lista Agora</button>' +
-          (isAndroid ? '<button id="set-upd-apk-check" class="btn focusable" data-action="check-apk-update" data-scope="settings">🔍 Verificar Atualização do App</button>' : '') +
-          (isAndroid && appUpd && appUpd.hasUpdate ? '<button id="set-upd-apk-install" class="btn btn-primary focusable" data-action="install-apk-update" data-scope="settings">⬇ Baixar e Instalar ' + escHtml(appUpd.latestVersion) + '</button>' : '') +
-        '</div>';
-    } else if (activeSettingsTab === 'backup') {
-      paneHtml =
-        '<div>' +
-          '<h2 style="font-size:30px;color:var(--accent-cyan);margin-bottom:10px;">Backup JSON & Proteção de Credenciais</h2>' +
-          '<p style="color:var(--text-secondary);font-size:21px;margin-bottom:16px;">Exporte ou restaure seus favoritos, progresso de episódios, regras de mapeamento e configurações. Por segurança, sua senha Xtream e seu PIN <strong>não são incluídos em texto puro</strong> no backup a menos que você ative a opção abaixo.</p>' +
-          '<div style="background:var(--bg-obsidian);padding:18px 24px;border-radius:var(--radius-md);margin-bottom:18px;">' +
-            '<div style="font-size:21px;">Incluir credenciais (senha/URL) no arquivo de Backup JSON: <strong style="color:' + (includeCreds ? 'var(--accent-amber)' : '#22C55E') + ';">' + (includeCreds ? 'SIM (Cuidado ao compartilhar o arquivo)' : 'NÃO (Modo Seguro Padrão)') + '</strong></div>' +
+      panelBody =
+        '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">' +
+          '<div class="settings-panel-title" style="margin-bottom:0;">Organizar Lista</div>' +
+          '<div style="display:flex;gap:14px;">' +
+            '<button id="org-prof-auto" class="btn btn-secondary btn-modal focusable" data-col="settings-panel" data-org-profile="auto" data-scope="settings">Automático</button>' +
+            (undoStack.length ? '<button id="org-btn-undo" class="btn btn-secondary btn-modal focusable" data-col="settings-panel" data-action="org-undo" data-scope="settings">Desfazer</button>' : '') +
           '</div>' +
         '</div>' +
-        '<div>' +
-          '<button id="set-backup-export" class="btn btn-primary focusable" data-action="backup-export" data-scope="settings">⬇ Exportar Backup JSON</button>' +
-          '<button id="set-backup-restore" class="btn focusable" data-action="backup-restore" data-scope="settings">⬆ Restaurar Último Backup</button>' +
-          '<button id="set-backup-creds" class="btn focusable" data-action="toggle-backup-creds" data-scope="settings">' + (includeCreds ? '🔒 Ocultar Credenciais' : '🔓 Incluir Credenciais') + '</button>' +
+        (gRows || '<div class="setting-row"><div class="setting-row-label">Importe uma lista para organizar os grupos.</div></div>');
+    } else if (activeSettingsTab === 'parental') {
+      panelBody =
+        '<div class="settings-panel-title">Controle Parental</div>' +
+        '<div class="setting-row">' +
+          '<div>' +
+            '<div class="setting-row-label">Sessão +18</div>' +
+            '<div class="setting-row-desc">' + (par.unlockedSession ? 'Desbloqueada temporariamente (bloqueia após 15 min).' : 'Bloqueada por PIN de 4 dígitos.') + '</div>' +
+          '</div>' +
+          '<div><button id="set-pin-toggle" class="btn btn-primary focusable" data-col="settings-panel" data-action="toggle-parental-lock" data-scope="settings">' + (par.unlockedSession ? 'Bloquear' : 'Desbloquear') + '</button></div>' +
+        '</div>' +
+        '<div class="setting-row">' +
+          '<div>' +
+            '<div class="setting-row-label">Alterar PIN de 4 dígitos</div>' +
+            '<div class="setting-row-desc">Protegido com hash SHA-256 e bloqueio contra tentativas.</div>' +
+          '</div>' +
+          '<div><button id="set-pin-change" class="btn btn-secondary focusable" data-col="settings-panel" data-action="change-parental-pin" data-scope="settings">Alterar PIN</button></div>' +
+        '</div>' +
+        '<div id="set-pin-enable" class="setting-row focusable" data-col="settings-panel" data-lr-control="parental-enable" data-action="toggle-parental-enabled" data-scope="settings">' +
+          '<div>' +
+            '<div class="setting-row-label">Proteção parental (+18)</div>' +
+            '<div class="setting-row-desc">Oculta canais e títulos adultos na Início e na Busca.</div>' +
+          '</div>' +
+          renderSwitchControl(!!par.enabled) +
+        '</div>';
+    } else if (activeSettingsTab === 'updates') {
+      var updDesc = appUpd && appUpd.hasUpdate
+        ? ('Nova versão ' + appUpd.latestVersion + ' disponível para instalar.')
+        : ('Versão instalada: v' + appVer + '.');
+      panelBody =
+        '<div class="settings-panel-title">Atualizações</div>' +
+        '<div class="setting-row">' +
+          '<div>' +
+            '<div class="setting-row-label">Atualizar lista agora</div>' +
+            '<div class="setting-row-desc">Sincroniza novos canais, filmes e séries mantendo seus favoritos.</div>' +
+          '</div>' +
+          '<div><button id="set-upd-list-now" class="btn btn-primary focusable" data-col="settings-panel" data-action="reload-source" data-scope="settings">Atualizar</button></div>' +
+        '</div>' +
+        '<div id="set-upd-cycle-hours" class="setting-row focusable" data-col="settings-panel" data-lr-control="auto-update" data-action="cycle-auto-update-hours" data-scope="settings">' +
+          '<div>' +
+            '<div class="setting-row-label">Atualizar automaticamente</div>' +
+            '<div class="setting-row-desc">Define quando a lista é baixada de novo.</div>' +
+          '</div>' +
+          '<div class="setting-row-value">' + svgChevLeft() + escHtml(autoUpdLabel) + svgChevRight() + '</div>' +
+        '</div>' +
+        (isAndroid ? (
+          '<div class="setting-row">' +
+            '<div>' +
+              '<div class="setting-row-label">Atualização do aplicativo (APK)</div>' +
+              '<div class="setting-row-desc">' + escHtml(updDesc) + '</div>' +
+            '</div>' +
+            '<div style="display:flex;gap:14px;">' +
+              '<button id="set-upd-apk-check" class="btn btn-secondary focusable" data-col="settings-panel" data-action="check-apk-update" data-scope="settings">Verificar</button>' +
+              (appUpd && appUpd.hasUpdate ? '<button id="set-upd-apk-install" class="btn btn-primary focusable" data-col="settings-panel" data-action="install-apk-update" data-scope="settings">Instalar ' + escHtml(appUpd.latestVersion) + '</button>' : '') +
+            '</div>' +
+          '</div>'
+        ) : '');
+    } else if (activeSettingsTab === 'backup') {
+      panelBody =
+        '<div class="settings-panel-title">Backup e Dados</div>' +
+        '<div class="setting-row">' +
+          '<div>' +
+            '<div class="setting-row-label">Exportar backup JSON</div>' +
+            '<div class="setting-row-desc">Salva favoritos, histórico de reprodução e ajustes.</div>' +
+          '</div>' +
+          '<div><button id="set-backup-export" class="btn btn-primary focusable" data-col="settings-panel" data-action="backup-export" data-scope="settings">Exportar</button></div>' +
+        '</div>' +
+        '<div class="setting-row">' +
+          '<div>' +
+            '<div class="setting-row-label">Restaurar último backup</div>' +
+            '<div class="setting-row-desc">Recupera seus favoritos e configurações salvas.</div>' +
+          '</div>' +
+          '<div><button id="set-backup-restore" class="btn btn-secondary focusable" data-col="settings-panel" data-action="backup-restore" data-scope="settings">Restaurar</button></div>' +
+        '</div>' +
+        '<div id="set-backup-creds" class="setting-row focusable" data-col="settings-panel" data-lr-control="backup-creds" data-action="toggle-backup-creds" data-scope="settings">' +
+          '<div>' +
+            '<div class="setting-row-label">Incluir credenciais no backup</div>' +
+            '<div class="setting-row-desc">Se desativado, não exporta senha Xtream nem URL em texto puro.</div>' +
+          '</div>' +
+          renderSwitchControl(!!includeCreds) +
         '</div>';
     } else {
-      paneHtml =
-        '<div>' +
-          '<h2 style="font-size:30px;color:var(--accent-cyan);margin-bottom:10px;">Sobre o Lumina TV v' + escHtml(appVer) + ' & Diagnóstico</h2>' +
-          '<p style="color:var(--text-secondary);font-size:21px;margin-bottom:14px;">Plataforma detectada: <strong>' + escHtml(platLabel) + '</strong></p>' +
-          '<pre style="background:var(--bg-obsidian);padding:18px;border-radius:var(--radius-md);font-family:var(--font-mono);font-size:17px;color:#E2E8F0;white-space:pre-wrap;line-height:1.45;">' + escHtml(buildDiagnosticsReportText()) + '</pre>' +
+      // Aba Sobre (Seção 8: logo grande 160px centralizado no topo, "Lumina TV" 40px/800, "Versão 1.9.0" 26px #94A3B8 e frase de apoio 24px #94A3B8)
+      panelBody =
+        '<div style="display:flex;flex-direction:column;align-items:center;text-align:center;padding:12px 0 24px;border-bottom:1px solid var(--line);margin-bottom:12px;">' +
+          '<div style="width:160px;height:160px;margin-bottom:16px;">' + getBrandLogoSvg(BRAND_LOGO, 'about') + '</div>' +
+          '<div style="font-size:40px;font-weight:800;color:var(--text);">Lumina TV</div>' +
+          '<div style="font-size:26px;color:var(--text-2);font-weight:600;margin-top:6px;">Versão ' + escHtml(appVer) + ' · ' + escHtml(platLabel) + '</div>' +
+          '<div style="font-size:24px;color:var(--text-2);margin-top:8px;">Sua TV e cinema em casa</div>' +
         '</div>' +
-        '<div>' +
-          '<button id="set-diag-toggle" class="btn btn-primary focusable" data-action="toggle-diag" data-scope="settings">📊 Alternar Painel Flutuante (R·G·Y·B)</button>' +
-          '<button id="set-diag-copy" class="btn focusable" data-action="copy-diag-report" data-scope="settings">📋 Copiar Relatório de Suporte</button>' +
+        '<div class="setting-row">' +
+          '<div>' +
+            '<div class="setting-row-label">Atalhos do controle remoto</div>' +
+            '<div class="setting-row-desc">Esquerda na 1ª coluna: Menu · Amarelo/Menu: Favoritar · CH+/CH−: Pular página/canal · Menu 2s: Diagnóstico</div>' +
+          '</div>' +
+        '</div>' +
+        '<div class="setting-row">' +
+          '<div>' +
+            '<div class="setting-row-label">Painel de diagnóstico</div>' +
+            '<div class="setting-row-desc">Exibe informações de motor, quadros e memória na tela.</div>' +
+          '</div>' +
+          '<div style="display:flex;gap:14px;">' +
+            '<button id="set-diag-toggle" class="btn btn-primary focusable" data-col="settings-panel" data-action="toggle-diag" data-scope="settings">Diagnóstico</button>' +
+            '<button id="set-diag-copy" class="btn btn-secondary focusable" data-col="settings-panel" data-action="copy-diag-report" data-scope="settings">Salvar Log</button>' +
+          '</div>' +
         '</div>';
     }
 
     viewport.innerHTML =
-      '<div>' +
-        '<h1 class="screen-title">Ajustes & Configuração do Sistema</h1>' +
-        '<p class="screen-subtitle">Todas as alterações são salvas automaticamente no armazenamento persistente v2</p>' +
-        '<div class="settings-layout">' +
+      '<div class="screen-enter">' +
+        '<div class="screen-head"><div class="screen-head-left"><h1>Ajustes</h1></div></div>' +
+        '<div class="settings-columns">' +
           '<div class="settings-tabs-col">' + tabsHtml + '</div>' +
-          '<div class="settings-content-pane">' + paneHtml + '</div>' +
+          '<div class="settings-panel">' + panelBody + '</div>' +
         '</div>' +
       '</div>';
 
     global.LuminaFocus.restoreOrDefault('settings', '#set-tab-' + activeSettingsTab);
   }
 
-  // ── 9. Organizar Minha Lista (Virtualizado para 500+ grupos, Contagem de Não Classificados e Desfazer) ──
-  function renderOrganizer(viewport) {
-    var allGroups = global.LuminaStore.get('originalGroups') || [];
-    var profile = global.LuminaStore.get('mappingProfile') || { mode: 'auto', customGroupRules: {}, renamedGroups: {}, groupOrder: [] };
-    var channels = global.LuminaStore.get('channels') || [];
-    var movies = global.LuminaStore.get('movies') || [];
-    var series = global.LuminaStore.get('seriesList') || [];
-    var novelas = global.LuminaStore.get('novelasList') || [];
-    var unclass = global.LuminaStore.get('unclassifiedList') || [];
-    var undoStack = global.LuminaStore.get('organizerUndoStack') || [];
+  // ── Controles trocados com ESQUERDA / DIREITA (Seções 8 e 9) ──
+  function cycleArrayValue(arr, cur, dir) {
+    var idx = arr.indexOf(cur);
+    if (idx === -1) idx = 0;
+    var step = (dir === 'RIGHT') ? 1 : -1;
+    var nextIdx = (idx + step + arr.length) % arr.length;
+    return arr[nextIdx];
+  }
 
-    var groups = [];
-    var q = organizerSearchQuery.toLowerCase().trim();
-    for (var gIdx = 0; gIdx < allGroups.length; gIdx++) {
-      var grp = allGroups[gIdx];
-      if (!q || grp.originalName.toLowerCase().indexOf(q) !== -1 || grp.displayName.toLowerCase().indexOf(q) !== -1) {
-        groups.push(grp);
+  function handleLeftRightControl(focusedEl, dir) {
+    if (!focusedEl) return false;
+    var ctrl = focusedEl.getAttribute('data-lr-control');
+    var focusId = focusedEl.id;
+    var route = global.LuminaRouter.getCurrent();
+
+    if (ctrl === 'safe-margin' && global.LuminaSettings && typeof global.LuminaSettings.stepSafeMargin === 'function') {
+      var delta = (dir === 'RIGHT') ? 1 : -1;
+      var nextVal = global.LuminaSettings.stepSafeMargin(delta);
+      toast('Margem de segurança da tela: ' + Math.round(nextVal * 100) + '%');
+      renderCurrentRoute();
+      if (focusId) global.LuminaFocus.setFocus(document.getElementById(focusId), 'settings');
+      return true;
+    }
+
+    if (ctrl === 'series-kind') {
+      currentSeriesKind = (currentSeriesKind === 'series') ? 'novelas' : 'series';
+      renderCurrentRoute();
+      if (focusId) global.LuminaFocus.setFocus(document.getElementById(focusId), route);
+      return true;
+    }
+
+    if (ctrl === 'catalog-sort') {
+      var sorts = ['recent', 'name', 'rating'];
+      currentSort = cycleArrayValue(sorts, currentSort, dir);
+      if (currentSort !== 'name') currentLetterFilter = 'Todas';
+      posterWindowStart.movies = 0;
+      posterWindowStart.series = 0;
+      posterWindowStart.novelas = 0;
+      renderCurrentRoute();
+      if (focusId) global.LuminaFocus.setFocus(document.getElementById(focusId), route);
+      return true;
+    }
+
+    if (ctrl === 'catalog-lang') {
+      var srcList = (route === 'movies')
+        ? (global.LuminaStore.get('movies') || [])
+        : ((currentSeriesKind === 'novelas') ? (global.LuminaStore.get('novelasList') || []) : (global.LuminaStore.get('seriesList') || []));
+      var langs = collectAvailableLanguages(srcList);
+      currentLangFilter = cycleArrayValue(langs, currentLangFilter, dir);
+      posterWindowStart.movies = 0;
+      posterWindowStart.series = 0;
+      posterWindowStart.novelas = 0;
+      renderCurrentRoute();
+      if (focusId) global.LuminaFocus.setFocus(document.getElementById(focusId), route);
+      return true;
+    }
+
+    if (ctrl === 'catalog-letter') {
+      currentLetterFilter = cycleArrayValue(LETTERS_LIST, currentLetterFilter, dir);
+      posterWindowStart.movies = 0;
+      posterWindowStart.series = 0;
+      posterWindowStart.novelas = 0;
+      renderCurrentRoute();
+      if (focusId) global.LuminaFocus.setFocus(document.getElementById(focusId), route);
+      return true;
+    }
+
+    if (ctrl === 'detail-season') {
+      var item = global.LuminaStore.get('selectedDetailItem');
+      var seasons = (item && item.seasons) || [];
+      if (seasons.length > 1) {
+        var nums = seasons.map(function (s) { return s.seasonNumber; });
+        var curS = global.LuminaStore.get('selectedSeason') || nums[0];
+        var nextS = cycleArrayValue(nums, curS, dir);
+        detailEpWindowStart = 0;
+        global.LuminaStore.set('selectedSeason', nextS);
+        renderCurrentRoute();
+        if (focusId) global.LuminaFocus.setFocus(document.getElementById(focusId), 'detail');
+      }
+      return true;
+    }
+
+    if (ctrl === 'auto-update') {
+      var opts = [12, 24, 6, 0];
+      var curH = global.LuminaStore.get('autoUpdateHours');
+      if (typeof curH !== 'number') curH = 12;
+      var nextH = cycleArrayValue(opts, curH, dir);
+      global.LuminaStore.set('autoUpdateHours', nextH);
+      renderCurrentRoute();
+      if (focusId) global.LuminaFocus.setFocus(document.getElementById(focusId), 'settings');
+      return true;
+    }
+
+    if (ctrl === 'default-ratio') {
+      var ratios = ['auto', '16:9', '4:3', 'fill'];
+      var curR = global.LuminaStore.get('defaultAspectRatio') || 'auto';
+      global.LuminaStore.set('defaultAspectRatio', cycleArrayValue(ratios, curR, dir));
+      renderCurrentRoute();
+      if (focusId) global.LuminaFocus.setFocus(document.getElementById(focusId), 'settings');
+      return true;
+    }
+
+    if (ctrl === 'prefer-format') {
+      var fmts = ['auto', 'm3u8', 'ts'];
+      var curF = global.LuminaStore.get('preferOutputFormat') || 'auto';
+      global.LuminaStore.set('preferOutputFormat', cycleArrayValue(fmts, curF, dir));
+      renderCurrentRoute();
+      if (focusId) global.LuminaFocus.setFocus(document.getElementById(focusId), 'settings');
+      return true;
+    }
+
+    if (ctrl === 'motion-level') {
+      var mLevels = ['Completas', 'Reduzidas', 'Desligadas'];
+      var curM = global.LuminaStore.get('motionLevel') || 'Completas';
+      global.LuminaStore.set('motionLevel', cycleArrayValue(mLevels, curM, dir));
+      renderCurrentRoute();
+      if (focusId) global.LuminaFocus.setFocus(document.getElementById(focusId), 'settings');
+      return true;
+    }
+
+    if (ctrl === 'perf-mode') {
+      var pModes = ['auto', 'normal', 'lite'];
+      var curP = global.LuminaStore.get('performanceMode') || 'auto';
+      global.LuminaStore.set('performanceMode', cycleArrayValue(pModes, curP, dir));
+      renderCurrentRoute();
+      if (focusId) global.LuminaFocus.setFocus(document.getElementById(focusId), 'settings');
+      return true;
+    }
+
+    if (ctrl === 'org-group') {
+      var grpName = focusedEl.getAttribute('data-org-group');
+      var curTarget = focusedEl.getAttribute('data-org-cur') || 'live';
+      var targets = ['live', 'movie', 'series', 'novela', 'hidden'];
+      var nextTarget = cycleArrayValue(targets, curTarget, dir);
+      var prof = JSON.parse(JSON.stringify(global.LuminaStore.get('mappingProfile') || { mode: 'custom', customGroupRules: {}, renamedGroups: {}, groupOrder: [] }));
+      prof.mode = 'custom';
+      prof.customGroupRules[grpName] = nextTarget;
+      global.LuminaRepository.applyMappingAndPersist(prof, function () {
+        renderCurrentRoute();
+        if (focusId) global.LuminaFocus.setFocus(document.getElementById(focusId), 'settings');
+      });
+      return true;
+    }
+
+    if (ctrl === 'parental-enable') {
+      var pe = global.LuminaStore.get('parental') || { enabled: true, unlockedSession: false };
+      if (pe.enabled && !pe.unlockedSession) {
+        openParentalPinModal(function () {
+          pe.enabled = false;
+          global.LuminaStore.set('parental', pe);
+          renderCurrentRoute();
+        }, 'unlock');
+      } else {
+        pe.enabled = !pe.enabled;
+        global.LuminaStore.set('parental', pe);
+        renderCurrentRoute();
+        if (focusId) global.LuminaFocus.setFocus(document.getElementById(focusId), 'settings');
+      }
+      return true;
+    }
+
+    if (ctrl === 'backup-creds') {
+      var curInc = !!global.LuminaStore.get('includeCredentialsInBackup');
+      global.LuminaStore.set('includeCredentialsInBackup', !curInc);
+      renderCurrentRoute();
+      if (focusId) global.LuminaFocus.setFocus(document.getElementById(focusId), 'settings');
+      return true;
+    }
+
+    return false;
+  }
+
+  // ── Navegação Determinística entre Colunas e Menu Lateral (Seções 5, 7, 8 e 9) ──
+  function handleColumnNavigation(focusedEl, dir) {
+    if (!focusedEl || typeof document === 'undefined') return false;
+
+    // Se o menu lateral sobreposto estiver aberto e apertar DIREITA, fecha o menu e volta para a tela
+    if (sideMenuOpen && dir === 'RIGHT') {
+      return closeSideMenu(true);
+    }
+
+    // No banner da Início, ESQUERDA na borda ou DIREITA após o botão Favoritar alternam os slides do carrossel
+    var heroCtrl = focusedEl.getAttribute('data-hero-control');
+    if (heroCtrl === 'fav' && dir === 'RIGHT') {
+      var curIdx = global.LuminaStore.get('heroBannerIndex') || 0;
+      global.LuminaStore.set('heroBannerIndex', curIdx + 1);
+      renderCurrentRoute();
+      global.LuminaFocus.setFocus(document.getElementById('home-hero-fav'), 'home');
+      return true;
+    }
+
+    var col = focusedEl.getAttribute('data-col');
+    var route = global.LuminaRouter.getCurrent();
+
+    // Filmes / Séries / Novelas (Seção 8):
+    // - ESQUERDA na primeira coluna da grade vai para a coluna de filtros
+    // - ESQUERDA na coluna de filtros abre o menu lateral
+    // - DIREITA na coluna de filtros volta para a grade
+    if (col === 'catalog-grid' && dir === 'LEFT') {
+      var gridCol = parseInt(focusedEl.getAttribute('data-grid-col') || '0', 10);
+      if (gridCol === 0) {
+        var catTarget = document.querySelector('.filter-col .cat-row.is-selected') ||
+                        document.getElementById('flt-cat-slot-0') ||
+                        document.getElementById('flt-sel-sort');
+        if (catTarget && global.LuminaFocus.setFocus(catTarget, route)) return true;
       }
     }
 
-    var SUGG_LABELS = {
-      'live': 'Canais',
-      'movie': 'Filmes',
-      'series': 'Séries',
-      'novela': 'Novelas',
-      'unclassified': 'Não classificado'
-    };
-
-    var maxStart = Math.max(0, groups.length - ORG_GROUP_WIN_SIZE);
-    if (orgGroupWindowStart > maxStart) orgGroupWindowStart = maxStart;
-    if (orgGroupWindowStart < 0) orgGroupWindowStart = 0;
-
-    var rowsHtml = '';
-    var end = Math.min(groups.length, orgGroupWindowStart + ORG_GROUP_WIN_SIZE);
-    for (var i = orgGroupWindowStart; i < end; i++) {
-      var slot = i - orgGroupWindowStart;
-      var g = groups[i];
-      var curRule = (profile.mode === 'all_live')
-        ? 'live'
-        : ((profile.customGroupRules && profile.customGroupRules[g.originalName]) || g.suggested);
-
-      rowsHtml +=
-        '<div class="organizer-row">' +
-          '<div class="org-group-info">' +
-            '<div class="org-group-name">' + escHtml(g.displayName) + ' <span style="color:var(--accent-cyan);font-size:18px;">(' + Number(g.count || 0) + ')</span></div>' +
-            '<div class="org-group-sub">Sugestão automática: <strong>' + escHtml(SUGG_LABELS[g.suggested] || 'Não classificado') + '</strong></div>' +
-          '</div>' +
-          '<div class="org-actions">' +
-            '<button id="org-slot-' + slot + '-live" class="btn btn-sm focusable' + (curRule === 'live' ? ' is-active-target' : '') + '" data-vlist="org-groups" data-vindex="' + i + '" data-vtotal="' + groups.length + '" data-org-group="' + escAttr(g.originalName) + '" data-org-target="live" data-scope="organizer">Canais</button>' +
-            '<button id="org-slot-' + slot + '-movie" class="btn btn-sm focusable' + (curRule === 'movie' ? ' is-active-target' : '') + '" data-org-group="' + escAttr(g.originalName) + '" data-org-target="movie" data-scope="organizer">Filmes</button>' +
-            '<button id="org-slot-' + slot + '-series" class="btn btn-sm focusable' + (curRule === 'series' ? ' is-active-target' : '') + '" data-org-group="' + escAttr(g.originalName) + '" data-org-target="series" data-scope="organizer">Séries</button>' +
-            '<button id="org-slot-' + slot + '-novela" class="btn btn-sm focusable' + (curRule === 'novela' ? ' is-active-target' : '') + '" data-org-group="' + escAttr(g.originalName) + '" data-org-target="novela" data-scope="organizer">Novelas</button>' +
-            '<button id="org-slot-' + slot + '-hidden" class="btn btn-sm focusable' + (curRule === 'hidden' ? ' is-active-target' : '') + '" data-org-group="' + escAttr(g.originalName) + '" data-org-target="hidden" data-scope="organizer">Ocultar</button>' +
-          '</div>' +
-        '</div>';
+    if (col === 'filter-col') {
+      if (dir === 'LEFT') {
+        return openSideMenu();
+      }
+      if (dir === 'RIGHT') {
+        var firstCard = document.getElementById('poster-' + route + '-slot-0');
+        if (firstCard && global.LuminaFocus.setFocus(firstCard, route)) return true;
+      }
     }
 
-    viewport.innerHTML =
-      '<div>' +
-        '<div class="screen-header-row">' +
-          '<div>' +
-            '<h1 class="screen-title">Organizar Minha Lista</h1>' +
-            '<p class="screen-subtitle" style="margin-bottom:0;">Regras manuais vencem qualquer heurística. Itens sem categoria clara ficam em Não Classificados.</p>' +
-          '</div>' +
-          '<div class="pagination-pill">Grupos ' + (groups.length ? (orgGroupWindowStart + 1) : 0) + '–' + end + ' de ' + groups.length + '</div>' +
-        '</div>' +
-        '<div class="organizer-header-bar">' +
-          '<div class="preview-counts-row">' +
-            '<span class="preview-pill">Canais: <strong style="color:var(--accent-cyan);">' + channels.length + '</strong></span>' +
-            '<span class="preview-pill">Filmes: <strong style="color:var(--accent-cyan);">' + movies.length + '</strong></span>' +
-            '<span class="preview-pill">Séries: <strong style="color:#A855F7;">' + series.length + '</strong></span>' +
-            '<span class="preview-pill">Novelas: <strong style="color:var(--accent-amber);">' + novelas.length + '</strong></span>' +
-            '<span class="preview-pill">Não classificados: <strong style="color:' + (unclass.length ? '#F87171' : '#22C55E') + ';">' + unclass.length + '</strong></span>' +
-          '</div>' +
-          '<div>' +
-            '<button id="org-prof-auto" class="btn btn-sm focusable' + (profile.mode === 'auto' ? ' is-active-target' : '') + '" data-org-profile="auto" data-scope="organizer">Automático</button>' +
-            '<button id="org-prof-alllive" class="btn btn-sm focusable' + (profile.mode === 'all_live' ? ' is-active-target' : '') + '" data-org-profile="all_live" data-scope="organizer">Tudo Canais</button>' +
-            (undoStack.length ? '<button id="org-btn-undo" class="btn btn-sm focusable" data-action="org-undo" data-scope="organizer">↶ Desfazer (' + undoStack.length + ')</button>' : '') +
-          '</div>' +
-        '</div>' +
-        '<div>' + (rowsHtml || '<p style="color:var(--text-secondary);">Importe uma lista primeiro para organizar os grupos.</p>') + '</div>' +
-      '</div>';
-
-    global.LuminaFocus.restoreOrDefault('organizer', '#org-prof-auto');
-  }
-
-  // ── 10. Favoritos (Virtualizado) ──
-  function renderFavorites(viewport) {
-    var byId = global.LuminaStore.get('itemByIdMap') || {};
-    var favMap = global.LuminaStore.get('favorites') || {};
-    var favKeys = Object.keys(favMap);
-    var favs = [];
-    for (var i = 0; i < favKeys.length; i++) {
-      var it = byId[favKeys[i]];
-      if (it && !isItemLockedByParental(it)) favs.push(it);
+    // Canais (Seção 7): Categorias <-> Lista de Canais <-> Painel de Prévia
+    if (col === 'live-cats') {
+      if (dir === 'LEFT') return openSideMenu();
+      if (dir === 'RIGHT') {
+        var ch0 = document.getElementById('live-ch-slot-0');
+        if (ch0 && global.LuminaFocus.setFocus(ch0, 'live')) return true;
+      }
+    }
+    if (col === 'live-list') {
+      if (dir === 'LEFT') {
+        var catSel = document.querySelector('.live-col-cats .cat-row.is-selected') || document.getElementById('live-cat-slot-0');
+        if (catSel && global.LuminaFocus.setFocus(catSel, 'live')) return true;
+      }
+      if (dir === 'RIGHT') {
+        var playBtn = document.getElementById('btn-fullscreen-live');
+        if (playBtn && global.LuminaFocus.setFocus(playBtn, 'live')) return true;
+      }
     }
 
-    if (!favs.length) {
-      viewport.innerHTML =
-        '<div>' +
-          '<h1 class="screen-title">Meus Favoritos</h1>' +
-          '<p class="screen-subtitle">Use o botão Favoritar ou a tecla AMARELA (ou toque curto no botão Menu na Fire TV) para guardar seus canais e títulos preferidos.</p>' +
-          '<div class="empty-state-panel">' +
-            '<div class="empty-state-illustration">' +
-              '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 220 140" style="width:100%;height:100%;">' +
-                '<rect x="16" y="18" width="188" height="104" rx="14" fill="#131B2E" stroke="rgba(245,158,11,0.45)" stroke-width="2"/>' +
-                '<path d="M110 34l9.5 19.3 21.3 3.1-15.4 15 3.6 21.2-19-10-19 10 3.6-21.2-15.4-15 21.3-3.1L110 34z" fill="rgba(245,158,11,0.22)" stroke="#F59E0B" stroke-width="2.5"/>' +
-              '</svg>' +
-            '</div>' +
-            '<div>' +
-              '<h2 style="font-size:32px;margin-bottom:10px;">Sua lista de Favoritos está vazia</h2>' +
-              '<p style="color:var(--text-secondary);font-size:21px;margin-bottom:20px;">Seus favoritos são preservados mesmo quando você atualiza a lista ou troca de servidor.</p>' +
-              '<button id="fav-go-home" class="btn btn-primary focusable" data-nav="home" data-scope="favorites">Explorar Catálogo</button>' +
-            '</div>' +
-          '</div>' +
-        '</div>';
-      global.LuminaFocus.restoreOrDefault('favorites', '#fav-go-home');
-      return;
+    // Ajustes (Seção 9): Abas à esquerda <-> Painel à direita
+    if (col === 'settings-tabs') {
+      if (dir === 'LEFT') return openSideMenu();
+      if (dir === 'RIGHT') {
+        var panelFocus = document.querySelector('.settings-panel .focusable');
+        if (panelFocus && global.LuminaFocus.setFocus(panelFocus, 'settings')) return true;
+      }
+    }
+    if (col === 'settings-panel' && dir === 'LEFT') {
+      var tabEl = document.getElementById('set-tab-' + activeSettingsTab) || document.getElementById('set-tab-source');
+      if (tabEl && global.LuminaFocus.setFocus(tabEl, 'settings')) return true;
     }
 
-    var maxStart = Math.max(0, favs.length - FAV_WIN_SIZE);
-    if (favWindowStart > maxStart) favWindowStart = maxStart;
-    if (favWindowStart < 0) favWindowStart = 0;
-
-    var end = Math.min(favs.length, favWindowStart + FAV_WIN_SIZE);
-    var html =
-      '<div class="screen-header-row">' +
-        '<h1 class="screen-title">Meus Favoritos (' + favs.length + ')</h1>' +
-        '<div class="pagination-pill">' + (favWindowStart + 1) + '–' + end + ' de ' + favs.length + '</div>' +
-      '</div>' +
-      '<div style="max-width:1120px;">';
-
-    for (var j = favWindowStart; j < end; j++) {
-      var slot = j - favWindowStart;
-      var item = favs[j];
-      var actionAttr = item.kind === 'live' ? ('data-play-id="' + escAttr(item.id) + '"') : ('data-detail-id="' + escAttr(item.id) + '"');
-      html +=
-        '<div id="fav-slot-' + slot + '" class="channel-row-item focusable" data-vlist="favorites-list" data-vindex="' + j + '" data-vtotal="' + favs.length + '" ' + actionAttr + ' data-scope="favorites">' +
-          '<div class="channel-info">' +
-            '<div class="channel-name">' + escHtml(item.cleanTitle) + '</div>' +
-            '<div class="channel-epg">' + escHtml(item.groupMapped || '') + ' · ' + escHtml(item.groupDisplay || item.groupOriginal) + '</div>' +
-          '</div>' +
-          '<div class="fav-badge">★</div>' +
-        '</div>';
-    }
-    html += '</div>';
-    viewport.innerHTML = html;
-    global.LuminaFocus.restoreOrDefault('favorites', '#fav-slot-0');
+    return false;
   }
 
   // ── Rolagem de Fronteira das Listas e Grades Virtualizadas ──
@@ -1749,25 +2382,61 @@
         global.LuminaFocus.setFocus(document.getElementById('live-cat-slot-0'), 'live');
         return true;
       }
+    } else if (vlist.indexOf('filter-cats-') === 0) {
+      var effType = vlist.replace('filter-cats-', '');
+      var fcStart = filterCatWindowStart[effType] || 0;
+      var fcSlot = vindex - fcStart;
+      var curRoute = global.LuminaRouter.getCurrent();
+      if (dir === 'DOWN' && fcSlot === FILTER_CAT_WIN_SIZE - 1 && vindex + 1 < vtotal) {
+        filterCatWindowStart[effType] = fcStart + 1;
+        renderCurrentRoute();
+        global.LuminaFocus.setFocus(document.getElementById('flt-cat-slot-' + (FILTER_CAT_WIN_SIZE - 1)), curRoute);
+        return true;
+      }
+      if (dir === 'UP' && fcSlot === 0 && fcStart > 0) {
+        filterCatWindowStart[effType] = fcStart - 1;
+        renderCurrentRoute();
+        global.LuminaFocus.setFocus(document.getElementById('flt-cat-slot-0'), curRoute);
+        return true;
+      }
     } else if (vlist.indexOf('poster-') === 0) {
-      var sec = vlist.replace('poster-', '');
-      var pStart = posterWindowStart[sec] || 0;
+      var routeKey = vlist.replace('poster-', '');
+      var secKey = (routeKey === 'series' && currentSeriesKind === 'novelas') ? 'novelas' : routeKey;
+      if (routeKey === 'favorites') {
+        var fSlot = vindex - favWindowStart;
+        var fCol = fSlot % 5;
+        if (dir === 'DOWN' && fSlot >= 5 && (favWindowStart + 10) < vtotal) {
+          favWindowStart += 5;
+          renderCurrentRoute();
+          global.LuminaFocus.setFocus(document.getElementById('fav-slot-' + Math.min(5 + fCol, vtotal - favWindowStart - 1)), 'favorites');
+          return true;
+        }
+        if (dir === 'UP' && fSlot < 5 && favWindowStart >= 5) {
+          favWindowStart = Math.max(0, favWindowStart - 5);
+          renderCurrentRoute();
+          global.LuminaFocus.setFocus(document.getElementById('fav-slot-' + fCol), 'favorites');
+          return true;
+        }
+        return false;
+      }
+
+      var pStart = posterWindowStart[secKey] || 0;
       var pSlot = vindex - pStart;
       var col = pSlot % POSTER_COLS;
       var isBottomRow = pSlot >= POSTER_COLS;
       var isTopRow = pSlot < POSTER_COLS;
 
       if (dir === 'DOWN' && isBottomRow && (pStart + POSTER_WIN_SIZE) < vtotal) {
-        posterWindowStart[sec] = pStart + POSTER_COLS;
+        posterWindowStart[secKey] = pStart + POSTER_COLS;
         renderCurrentRoute();
-        var nextSlot = Math.min(POSTER_COLS + col, (vtotal - posterWindowStart[sec]) - 1);
-        global.LuminaFocus.setFocus(document.getElementById('poster-' + sec + '-slot-' + nextSlot), sec);
+        var nextSlot = Math.min(POSTER_COLS + col, (vtotal - posterWindowStart[secKey]) - 1);
+        global.LuminaFocus.setFocus(document.getElementById('poster-' + routeKey + '-slot-' + nextSlot), routeKey);
         return true;
       }
       if (dir === 'UP' && isTopRow && pStart >= POSTER_COLS) {
-        posterWindowStart[sec] = Math.max(0, pStart - POSTER_COLS);
+        posterWindowStart[secKey] = Math.max(0, pStart - POSTER_COLS);
         renderCurrentRoute();
-        global.LuminaFocus.setFocus(document.getElementById('poster-' + sec + '-slot-' + col), sec);
+        global.LuminaFocus.setFocus(document.getElementById('poster-' + routeKey + '-slot-' + col), routeKey);
         return true;
       }
     } else if (vlist === 'detail-episodes') {
@@ -1789,41 +2458,13 @@
       if (dir === 'DOWN' && orgSlot === ORG_GROUP_WIN_SIZE - 1 && vindex + 1 < vtotal) {
         orgGroupWindowStart++;
         renderCurrentRoute();
-        global.LuminaFocus.setFocus(document.getElementById('org-slot-' + (ORG_GROUP_WIN_SIZE - 1) + '-live'), 'organizer');
+        global.LuminaFocus.setFocus(document.getElementById('org-slot-' + (ORG_GROUP_WIN_SIZE - 1)), 'settings');
         return true;
       }
       if (dir === 'UP' && orgSlot === 0 && orgGroupWindowStart > 0) {
         orgGroupWindowStart--;
         renderCurrentRoute();
-        global.LuminaFocus.setFocus(document.getElementById('org-slot-0-live'), 'organizer');
-        return true;
-      }
-    } else if (vlist === 'favorites-list') {
-      var fSlot = vindex - favWindowStart;
-      if (dir === 'DOWN' && fSlot === FAV_WIN_SIZE - 1 && vindex + 1 < vtotal) {
-        favWindowStart++;
-        renderCurrentRoute();
-        global.LuminaFocus.setFocus(document.getElementById('fav-slot-' + (FAV_WIN_SIZE - 1)), 'favorites');
-        return true;
-      }
-      if (dir === 'UP' && fSlot === 0 && favWindowStart > 0) {
-        favWindowStart--;
-        renderCurrentRoute();
-        global.LuminaFocus.setFocus(document.getElementById('fav-slot-0'), 'favorites');
-        return true;
-      }
-    } else if (vlist === 'continue-list') {
-      var cSlot = vindex - contWindowStart;
-      if (dir === 'DOWN' && cSlot === CONT_WIN_SIZE - 1 && vindex + 1 < vtotal) {
-        contWindowStart++;
-        renderCurrentRoute();
-        global.LuminaFocus.setFocus(document.getElementById('cont-play-slot-' + (CONT_WIN_SIZE - 1)), 'continue');
-        return true;
-      }
-      if (dir === 'UP' && cSlot === 0 && contWindowStart > 0) {
-        contWindowStart--;
-        renderCurrentRoute();
-        global.LuminaFocus.setFocus(document.getElementById('cont-play-slot-0'), 'continue');
+        global.LuminaFocus.setFocus(document.getElementById('org-slot-0'), 'settings');
         return true;
       }
     }
@@ -1836,7 +2477,15 @@
     var viewport = document.getElementById('screen-viewport');
     var osd = document.getElementById('player-osd');
     if (!viewport || !osd) return;
-    updateRemoteHints(route);
+
+    // Redireciona rotas legadas para suas novas casas mantendo 100% da lógica (Seções 5 e 9)
+    if (route === 'organizer') {
+      activeSettingsTab = 'organizer';
+      route = 'settings';
+    } else if (route === 'continue') {
+      route = 'home';
+    }
+
     renderSideNav(route);
 
     if (route === 'player-fullscreen') {
@@ -1850,18 +2499,17 @@
     viewport.classList.remove('hidden');
 
     if (route === 'search') renderSearch(viewport);
-    else if (route === 'continue') renderContinueWatching(viewport);
     else if (route === 'live') renderLive(viewport);
     else if (route === 'movies') renderPosterCatalog(viewport, 'movies');
     else if (route === 'series') renderPosterCatalog(viewport, 'series');
     else if (route === 'novelas') renderPosterCatalog(viewport, 'novelas');
     else if (route === 'detail') renderDetail(viewport);
-    else if (route === 'organizer') renderOrganizer(viewport);
     else if (route === 'favorites') renderFavorites(viewport);
     else if (route === 'onboarding') renderOnboarding(viewport);
     else if (route === 'settings') renderSettings(viewport);
     else renderHome(viewport);
 
+    lastRouteRendered = route;
     renderDiagnosticsOverlay();
   }
 
@@ -1881,6 +2529,313 @@
     global.LuminaFocus.setTrap(null);
     var route = global.LuminaRouter.getCurrent() || 'home';
     global.LuminaFocus.restoreOrDefault(route);
+  }
+
+  // ── Abertura Coreografada v1.9.0 ("A Luz Acende a Tela" — Seções 6 e 7) ──
+  // Calcula determinísticamente todos os marcos da linha do tempo a partir de --intro-dur (3500ms padrão)
+  function computeIntroTimeline(totalDurMs, mode) {
+    var m = mode || 'COMPLETA';
+    if (m === 'REDUZIDA') {
+      return {
+        mode: 'REDUZIDA',
+        totalMs: 300,
+        continuityStartMs: 0,
+        continuityEndMs: 100,
+        ignitionStartMs: 0,
+        ignitionEndMs: 0,
+        fieldStartMs: 0,
+        fieldEndMs: 0,
+        brandStartMs: 0,
+        brandBladeStaggerMs: 0,
+        brandEndMs: 150,
+        shimmerStartMs: 0,
+        shimmerEndMs: 0,
+        nameStartMs: 0,
+        nameLetterStaggerMs: 0,
+        nameEndMs: 0,
+        subtitleStartMs: 0,
+        subtitleEndMs: 0,
+        breathStartMs: 150,
+        breathEndMs: 200,
+        flipStartMs: 200,
+        flipDurationMs: 0,
+        flipEndMs: 300,
+        homeEnterStartMs: 220,
+        homeEnterEndMs: 540
+      };
+    }
+    if (m === 'CURTA') {
+      return {
+        mode: 'CURTA',
+        totalMs: 1100,
+        continuityStartMs: 0,
+        continuityEndMs: 150,
+        ignitionStartMs: 150,
+        ignitionEndMs: 450,
+        fieldStartMs: 150,
+        fieldEndMs: 450,
+        brandStartMs: 150,
+        brandBladeStaggerMs: 40,
+        brandEndMs: 450,
+        shimmerStartMs: 300,
+        shimmerEndMs: 600,
+        nameStartMs: 320,
+        nameLetterStaggerMs: 25,
+        nameEndMs: 620,
+        subtitleStartMs: 450,
+        subtitleEndMs: 650,
+        breathStartMs: 550,
+        breathEndMs: 650,
+        flipStartMs: 650,
+        flipDurationMs: 380,
+        flipEndMs: 1100,
+        homeEnterStartMs: 850,
+        homeEnterEndMs: 1250
+      };
+    }
+
+    var d = (typeof totalDurMs === 'number' && totalDurMs > 0) ? totalDurMs : 3500;
+    var r = d / 3500.0;
+    return {
+      mode: 'COMPLETA',
+      totalMs: Math.round(3500 * r),
+      continuityStartMs: 0,
+      continuityEndMs: Math.round(250 * r),
+      ignitionStartMs: Math.round(250 * r),
+      ignitionEndMs: Math.round(800 * r),
+      fieldStartMs: Math.round(600 * r),
+      fieldEndMs: Math.round(1100 * r),
+      brandStartMs: Math.round(700 * r),
+      brandBladeStaggerMs: Math.round(90 * r),
+      brandEndMs: Math.round(1300 * r),
+      shimmerStartMs: Math.round(1100 * r),
+      shimmerEndMs: Math.round(1700 * r),
+      nameStartMs: Math.round(1400 * r),
+      nameLetterStaggerMs: Math.round(55 * r),
+      nameEndMs: Math.round(2100 * r),
+      subtitleStartMs: Math.round(1900 * r),
+      subtitleEndMs: Math.round(2400 * r),
+      breathStartMs: Math.round(2400 * r),
+      breathEndMs: Math.round(3000 * r),
+      flipStartMs: Math.round(3000 * r),
+      flipDurationMs: Math.round(380 * r),
+      flipEndMs: Math.round(3500 * r),
+      homeEnterStartMs: Math.round(3200 * r),
+      homeEnterEndMs: Math.round(3700 * r)
+    };
+  }
+
+  function evaluateFrameBenchmark(frameDeltasMs) {
+    if (!Array.isArray(frameDeltasMs) || !frameDeltasMs.length) {
+      return { meanMs: 16.7, medianMs: 16.7, p95Ms: 16.7, chosenLevel: 'COMPLETA', downgraded: false };
+    }
+    var sorted = frameDeltasMs.slice().sort(function (a, b) { return a - b; });
+    var sum = 0;
+    for (var i = 0; i < sorted.length; i++) sum += sorted[i];
+    var mean = Math.round((sum / sorted.length) * 10) / 10;
+    var mid = Math.floor(sorted.length / 2);
+    var median = (sorted.length % 2 !== 0)
+      ? sorted[mid]
+      : ((sorted[mid - 1] + sorted[mid]) / 2.0);
+    median = Math.round(median * 10) / 10;
+    var p95Idx = Math.min(sorted.length - 1, Math.floor(sorted.length * 0.95));
+    var p95 = Math.round(sorted[p95Idx] * 10) / 10;
+    var downgraded = median > 24.0;
+    return {
+      meanMs: mean,
+      medianMs: median,
+      p95Ms: p95,
+      chosenLevel: downgraded ? 'REDUZIDA' : 'ALTA',
+      downgraded: downgraded
+    };
+  }
+
+  function computeFlipDelta(fromRect, toRect, canvasScale) {
+    var s = (typeof canvasScale === 'number' && canvasScale > 0) ? canvasScale : 1;
+    var fromW = (fromRect.width || 176) / s;
+    var fromH = (fromRect.height || 176) / s;
+    var toW = (toRect.width || 64) / s;
+    var toH = (toRect.height || 64) / s;
+
+    var fromCx = (fromRect.left + (fromRect.width || 0) / 2.0) / s;
+    var fromCy = (fromRect.top + (fromRect.height || 0) / 2.0) / s;
+    var toCx = (toRect.left + (toRect.width || 0) / 2.0) / s;
+    var toCy = (toRect.top + (toRect.height || 0) / 2.0) / s;
+
+    return {
+      dx: Math.round((toCx - fromCx) * 10) / 10,
+      dy: Math.round((toCy - fromCy) * 10) / 10,
+      scale: Math.round(((toW / Math.max(1, fromW)) + (toH / Math.max(1, fromH))) * 5000) / 10000
+    };
+  }
+
+  function isBootSplashVisible() {
+    if (typeof document === 'undefined') return false;
+    var splash = document.getElementById('boot-splash');
+    return !!(splash && !splash.classList.contains('is-dismissed') && splash.style.display !== 'none');
+  }
+
+  function revealSidebarLogoAfterFlip() {
+    if (typeof document === 'undefined') return;
+    var navLogo = document.getElementById('side-nav-logo');
+    if (navLogo) navLogo.classList.remove('is-awaiting-flip');
+  }
+
+  function dismissBootSplash(forceImmediate) {
+    if (typeof document === 'undefined') return;
+    var splash = document.getElementById('boot-splash');
+    if (!splash || splash.classList.contains('is-dismissed')) return;
+
+    if (!forceImmediate && !bootCompleted) {
+      var waitBar = document.getElementById('boot-wait-track');
+      if (waitBar) waitBar.classList.add('is-visible');
+      return;
+    }
+
+    clearTimeout(introWaitTimer);
+    clearTimeout(introFinishTimer);
+
+    // Se foi pulado com OK/Voltar ou está em modo reduzido, revela o logo do menu e faz fade imediato
+    if (forceImmediate || splash.classList.contains('is-minimal')) {
+      revealSidebarLogoAfterFlip();
+      splash.classList.remove('is-animating');
+      splash.classList.add('is-dismissed');
+      setTimeout(function () {
+        if (splash.parentNode) splash.style.display = 'none';
+      }, 240);
+      return;
+    }
+
+    // 3000–3500ms "Entrega": transição FLIP do símbolo central (176x176) até o logo do menu lateral (64x64)
+    splash.classList.add('is-handing-off');
+    var bootLogo = document.getElementById('boot-logo-wrap');
+    var navLogo = document.getElementById('side-nav-logo');
+    var vInfo = (typeof global.__luminaViewportInfo === 'function')
+      ? global.__luminaViewportInfo()
+      : { scale: 1 };
+
+    if (bootLogo && navLogo && bootLogo.getBoundingClientRect && navLogo.getBoundingClientRect) {
+      var flip = computeFlipDelta(
+        bootLogo.getBoundingClientRect(),
+        navLogo.getBoundingClientRect(),
+        vInfo.scale || 1
+      );
+      bootLogo.style.animation = 'none';
+      bootLogo.style.transition = 'transform 380ms cubic-bezier(0.65, 0, 0.35, 1)';
+      bootLogo.style.transform = 'translate(' + flip.dx + 'px, ' + flip.dy + 'px) scale(' + flip.scale + ')';
+    }
+
+    setTimeout(function () {
+      revealSidebarLogoAfterFlip();
+      if (bootLogo) bootLogo.style.opacity = '0';
+      splash.classList.remove('is-animating');
+      splash.classList.add('is-dismissed');
+      setTimeout(function () {
+        if (splash.parentNode) splash.style.display = 'none';
+      }, 220);
+    }, 380);
+  }
+
+  function notifyCatalogReadyForIntro() {
+    bootCompleted = true;
+    if (introAnimationFinished) {
+      dismissBootSplash(false);
+    }
+  }
+
+  function runIntroFrameBenchmark(splash) {
+    if (typeof global.requestAnimationFrame !== 'function') return;
+    var deltas = [];
+    var startTs = 0;
+    var lastTs = 0;
+
+    function step(now) {
+      if (!isBootSplashVisible()) return;
+      if (!startTs) {
+        startTs = now;
+        lastTs = now;
+        global.requestAnimationFrame(step);
+        return;
+      }
+      var dt = now - lastTs;
+      lastTs = now;
+      if (dt > 0 && dt < 250) deltas.push(dt);
+
+      if (now - startTs < 500) {
+        global.requestAnimationFrame(step);
+      } else {
+        var stats = evaluateFrameBenchmark(deltas);
+        global.__luminaPerf = stats;
+        if (stats.downgraded && splash && !splash.classList.contains('is-minimal')) {
+          splash.classList.remove('is-full', 'is-short');
+          splash.classList.add('is-minimal');
+          clearTimeout(introFinishTimer);
+          introAnimationFinished = true;
+          dismissBootSplash(true);
+        }
+      }
+    }
+    global.requestAnimationFrame(step);
+  }
+
+  function setupIntroChoreography() {
+    if (typeof document === 'undefined') return;
+    var splash = document.getElementById('boot-splash');
+    if (!splash) return;
+
+    var logoWrap = document.getElementById('boot-logo-wrap');
+    if (logoWrap) {
+      logoWrap.innerHTML = getBrandLogoSvg(BRAND_LOGO, 'boot') + '<div id="boot-shimmer-band" class="boot-shimmer-band"></div>';
+    }
+
+    var isLite = !!global.LuminaStore.get('liteModeActive') || global.LuminaStore.get('performanceMode') === 'lite';
+    var prefersReduced = false;
+    try {
+      if (global.matchMedia && global.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+        prefersReduced = true;
+      }
+    } catch (e) {}
+
+    if (isLite || prefersReduced) {
+      global.__luminaPerf = { meanMs: 0, medianMs: 0, p95Ms: 0, chosenLevel: 'REDUZIDA', downgraded: false };
+      splash.classList.add('is-minimal');
+      introFinishTimer = setTimeout(function () {
+        introAnimationFinished = true;
+        dismissBootSplash(true);
+      }, 300);
+      return;
+    }
+
+    var todayKey = new Date().toISOString().slice(0, 10);
+    var lastIntroDay = '';
+    try {
+      if (global.localStorage) {
+        lastIntroDay = global.localStorage.getItem('lumina_intro_day') || '';
+        global.localStorage.setItem('lumina_intro_day', todayKey);
+      }
+    } catch (e) {}
+
+    var mode = (lastIntroDay === todayKey) ? 'CURTA' : 'COMPLETA';
+    var timeline = computeIntroTimeline(3500, mode);
+
+    splash.classList.add('is-animating');
+    if (mode === 'CURTA') {
+      splash.classList.add('is-short');
+    } else {
+      splash.classList.add('is-full');
+    }
+
+    runIntroFrameBenchmark(splash);
+
+    introFinishTimer = setTimeout(function () {
+      introAnimationFinished = true;
+      if (bootCompleted) {
+        dismissBootSplash(false);
+      } else {
+        var waitBar = document.getElementById('boot-wait-track');
+        if (waitBar) waitBar.classList.add('is-visible');
+      }
+    }, timeline.flipStartMs);
   }
 
   function bindGlobalActions() {
@@ -1906,7 +2861,7 @@
     global.LuminaEventBus.on('modal:close', closeExitConfirmModal);
     global.LuminaEventBus.on('pin-modal:close', closeParentalPinModal);
 
-    // Atalho Tecla Amarela (405 / toque curto no Menu da Fire TV): Favoritar item em foco
+    // Tecla Amarela / Menu curto na Fire TV: Favoritar item em foco
     global.LuminaEventBus.on('key:YELLOW', function () {
       var cur = global.LuminaFocus.getCurrent();
       if (!cur) return;
@@ -1917,19 +2872,20 @@
                      cur.getAttribute('data-fav-id');
       if (targetId) {
         var nowFav = global.LuminaStore.toggleFavorite(targetId);
-        toast(nowFav ? '★ Adicionado aos Favoritos!' : 'Removido dos Favoritos');
+        toast(nowFav ? 'Adicionado aos Favoritos' : 'Removido dos Favoritos');
         renderCurrentRoute();
       }
     });
 
-    // Salto de página com CH+ / CH- nas listas virtualizadas fora do player
+    // Salto de página com CH+ / CH-
     global.LuminaEventBus.on('key:CH_UP', function () {
       var r = global.LuminaRouter.getCurrent();
       if (r === 'live') {
         liveChWindowStart = Math.max(0, liveChWindowStart - LIVE_CH_WIN_SIZE);
         renderCurrentRoute();
       } else if (r === 'movies' || r === 'series' || r === 'novelas') {
-        posterWindowStart[r] = Math.max(0, (posterWindowStart[r] || 0) - POSTER_WIN_SIZE);
+        var sec = (r === 'series' && currentSeriesKind === 'novelas') ? 'novelas' : r;
+        posterWindowStart[sec] = Math.max(0, (posterWindowStart[sec] || 0) - POSTER_WIN_SIZE);
         renderCurrentRoute();
       }
     });
@@ -1943,18 +2899,19 @@
           renderCurrentRoute();
         }
       } else if (r === 'movies' || r === 'series' || r === 'novelas') {
-        posterWindowStart[r] = (posterWindowStart[r] || 0) + POSTER_WIN_SIZE;
+        var sec2 = (r === 'series' && currentSeriesKind === 'novelas') ? 'novelas' : r;
+        posterWindowStart[sec2] = (posterWindowStart[sec2] || 0) + POSTER_WIN_SIZE;
         renderCurrentRoute();
       }
     });
 
     global.LuminaEventBus.on('focus:changed', function (el) {
-      if (typeof document === 'undefined' || !el) return;
-      var nav = document.getElementById('side-nav');
-      if (nav) {
-        if (nav.contains(el)) nav.classList.add('is-expanded');
-        else nav.classList.remove('is-expanded');
+      var bannerEl = (typeof document !== 'undefined') ? document.getElementById('home-hero-banner') : null;
+      if (bannerEl) {
+        if (el && bannerEl.contains && bannerEl.contains(el)) bannerEl.classList.add('is-paused');
+        else bannerEl.classList.remove('is-paused');
       }
+      if (typeof document === 'undefined' || !el) return;
       var chId = el.getAttribute('data-channel-id');
       if (chId && chId !== focusedLiveChannelId) {
         focusedLiveChannelId = chId;
@@ -1985,7 +2942,7 @@
         }
       }
 
-      // 1. Teclado de PIN Parental (Desbloqueio e Fluxo de Alteração em 3 passos)
+      // 1. Teclado de PIN Parental
       var pinDigit = el.getAttribute('data-pin-digit');
       if (pinDigit !== null && pinDigit !== undefined) {
         pinDraft += String(pinDigit);
@@ -1995,7 +2952,7 @@
             if (res.ok) {
               var cb = pendingPinCallback;
               closeParentalPinModal();
-              toast('🔓 PIN Parental validado! Sessão +18 desbloqueada.');
+              toast('PIN validado.');
               if (cb) cb();
             } else {
               pinDraft = '';
@@ -2023,7 +2980,7 @@
             var changeRes = global.LuminaSettings.changePin(pinChangeTempCurrent, pinChangeTempNew, pinDraft);
             if (changeRes.ok) {
               closeParentalPinModal();
-              toast('🔑 ' + changeRes.message);
+              toast(changeRes.message);
             } else {
               pinDraft = '';
               pinModalMode = 'change-new';
@@ -2050,6 +3007,7 @@
 
       var navRoute = el.getAttribute('data-nav');
       if (navRoute) {
+        closeSideMenu(false);
         global.LuminaRouter.navigate(navRoute);
         return;
       }
@@ -2123,45 +3081,25 @@
         return;
       }
 
-      var searchTerm = el.getAttribute('data-search-term');
-      if (searchTerm) {
-        global.LuminaStore.set('searchQuery', searchTerm);
-        renderCurrentRoute();
-        return;
-      }
-
-      var rmContId = el.getAttribute('data-remove-continue');
-      if (rmContId) {
-        global.LuminaStore.removeWatchProgress(rmContId);
-        toast('Item removido de Continuar Assistindo');
-        renderCurrentRoute();
-        return;
-      }
-
-      var sortMode = el.getAttribute('data-sort');
-      if (sortMode) {
-        currentSort = sortMode;
-        renderCurrentRoute();
-        return;
-      }
-
-      var letter = el.getAttribute('data-letter');
-      if (letter) {
-        currentLetterFilter = letter;
-        var curRoute = global.LuminaRouter.getCurrent();
-        if (posterWindowStart[curRoute] != null) posterWindowStart[curRoute] = 0;
-        renderCurrentRoute();
-        return;
-      }
-
       var catSection = el.getAttribute('data-cat-section');
       if (catSection) {
         var val = el.getAttribute('data-cat-val');
+        var curFocusId = el.id;
         if (catSection === 'movies') selectedMovieCat = val;
         else if (catSection === 'series') selectedSeriesCat = val;
         else if (catSection === 'novelas') selectedNovelaCat = val;
         posterWindowStart[catSection] = 0;
         renderCurrentRoute();
+        if (curFocusId) global.LuminaFocus.setFocus(document.getElementById(curFocusId), global.LuminaRouter.getCurrent());
+        return;
+      }
+
+      var seasonNumAttr = el.getAttribute('data-season-num');
+      if (seasonNumAttr) {
+        detailEpWindowStart = 0;
+        global.LuminaStore.set('selectedSeason', parseInt(seasonNumAttr, 10));
+        renderCurrentRoute();
+        global.LuminaFocus.setFocus(document.getElementById('season-pill-' + seasonNumAttr), 'detail');
         return;
       }
 
@@ -2191,14 +3129,6 @@
         return;
       }
 
-      var seasonNum = el.getAttribute('data-season-num');
-      if (seasonNum) {
-        detailEpWindowStart = 0;
-        global.LuminaStore.set('selectedSeason', parseInt(seasonNum, 10));
-        renderCurrentRoute();
-        return;
-      }
-
       var playVodId = el.getAttribute('data-play-vod') || el.getAttribute('data-play-ep') || el.getAttribute('data-play-id');
       if (playVodId) {
         if (global.LuminaRouter.getCurrent() === 'search') {
@@ -2222,21 +3152,8 @@
       var favId = el.getAttribute('data-fav-id');
       if (favId) {
         var nowFav = global.LuminaStore.toggleFavorite(favId);
-        toast(nowFav ? '★ Adicionado aos Favoritos' : 'Removido dos Favoritos');
+        toast(nowFav ? 'Adicionado aos Favoritos' : 'Removido dos Favoritos');
         renderCurrentRoute();
-        return;
-      }
-
-      var orgGroup = el.getAttribute('data-org-group');
-      if (orgGroup) {
-        var target = el.getAttribute('data-org-target');
-        var prof = JSON.parse(JSON.stringify(global.LuminaStore.get('mappingProfile') || { mode: 'custom', customGroupRules: {}, renamedGroups: {}, groupOrder: [] }));
-        prof.mode = 'custom';
-        prof.customGroupRules[orgGroup] = target;
-        global.LuminaRepository.applyMappingAndPersist(prof, function () {
-          toast('Grupo "' + orgGroup + '" mapeado para ' + target.toUpperCase());
-          renderCurrentRoute();
-        });
         return;
       }
 
@@ -2246,17 +3163,15 @@
         pr.mode = orgProfile;
         if (orgProfile === 'auto') pr.customGroupRules = {};
         global.LuminaRepository.applyMappingAndPersist(pr, function () {
-          toast(orgProfile === 'all_live' ? 'Perfil aplicado: Tudo como Canais' : 'Perfil aplicado: Automático');
+          toast('Classificação automática restaurada');
           renderCurrentRoute();
         });
         return;
       }
 
-      var setPerf = el.getAttribute('data-set-perf');
-      if (setPerf) {
-        global.LuminaStore.set('performanceMode', setPerf);
-        toast('Modo de desempenho alterado para: ' + setPerf.toUpperCase());
-        renderCurrentRoute();
+      // Se clicou OK em um seletor ‹ valor ›, avança para a direita
+      if (el.getAttribute('data-lr-control')) {
+        handleLeftRightControl(el, 'RIGHT');
         return;
       }
 
@@ -2276,19 +3191,13 @@
         global.LuminaRouter.navigate('onboarding');
         renderCurrentRoute();
         beginPairing();
-      } else if (action === 'back-to-sources') {
-        global.LuminaPairing.resetSession();
-        pairingStarting = false;
-        global.LuminaStore.set('pairingError', null);
-        global.LuminaStore.set('pairingStep', 'cards');
-        renderCurrentRoute();
       } else if (action === 'reload-source') {
         var curSrc = global.LuminaStore.get('source');
         if (!curSrc) {
-          toast('Nenhuma fonte salva. Faça o pareamento pelo celular.');
+          toast('Nenhuma lista salva. Use o pareamento pelo celular.');
           return;
         }
-        showLoading('Atualizando catálogo');
+        showLoading('Atualizando lista');
         global.LuminaPairing.applyMobilePayload(
           curSrc.type === 'xtream'
             ? { type: 'xtream', name: curSrc.name, host: curSrc.creds.server, port: 0, username: curSrc.creds.username, password: curSrc.creds.password }
@@ -2297,9 +3206,9 @@
             hideLoading();
             if (err) { toast(err.message); return; }
             if (updateRec && updateRec.unchanged) {
-              toast('✔ Sua lista já está atualizada (sem mudanças no servidor).');
+              toast('Sua lista já está atualizada.');
             } else {
-              toast('✔ Catálogo atualizado: ' + (list ? list.length : 0) + ' itens! ' + formatDiffSummary(updateRec));
+              toast('Lista atualizada: ' + fmtCountPt(list ? list.length : 0) + ' itens' + formatDiffSummary(updateRec));
             }
             renderCurrentRoute();
           },
@@ -2310,32 +3219,14 @@
         renderCurrentRoute();
       } else if (action === 'org-undo') {
         global.LuminaRepository.undoLastMappingChange(function (undone) {
-          if (undone) toast('↶ Última regra desfeita.');
+          if (undone) toast('Última alteração desfeita.');
           renderCurrentRoute();
         });
-      } else if (action === 'live-page-prev') {
-        liveChWindowStart = Math.max(0, liveChWindowStart - LIVE_CH_WIN_SIZE);
-        renderCurrentRoute();
-      } else if (action === 'live-page-next') {
-        var allC = global.LuminaStore.get('channels') || [];
-        if (liveChWindowStart + LIVE_CH_WIN_SIZE < allC.length) {
-          liveChWindowStart += LIVE_CH_WIN_SIZE;
-          renderCurrentRoute();
-        }
-      } else if (action === 'last-channel') {
-        global.LuminaPlayer.zapLastChannel();
-        if (global.LuminaPlayer.getCurrentItem()) {
-          global.LuminaRouter.navigate('player-fullscreen');
-        }
-      } else if (action === 'cycle-lang-filter') {
-        var langs = ['ALL', 'DUB', 'LEG'];
-        currentLangFilter = langs[(langs.indexOf(currentLangFilter) + 1) % langs.length];
-        renderCurrentRoute();
       } else if (action === 'toggle-parental-lock') {
         var p = global.LuminaStore.get('parental') || { enabled: true, unlockedSession: false };
         if (p.unlockedSession) {
           global.LuminaSettings.lockParentalSession();
-          toast('🔒 Sessão +18 bloqueada novamente.');
+          toast('Sessão +18 bloqueada.');
           renderCurrentRoute();
         } else {
           openParentalPinModal(function () {
@@ -2344,65 +3235,25 @@
         }
       } else if (action === 'change-parental-pin') {
         openParentalPinModal(null, 'change-current');
-      } else if (action === 'toggle-parental-enabled') {
-        var pe = global.LuminaStore.get('parental') || { enabled: true, unlockedSession: false };
-        if (pe.enabled && !pe.unlockedSession) {
-          openParentalPinModal(function () {
-            pe.enabled = false;
-            global.LuminaStore.set('parental', pe);
-            toast('Controle Parental DESATIVADO');
-            renderCurrentRoute();
-          }, 'unlock');
-        } else {
-          pe.enabled = !pe.enabled;
-          global.LuminaStore.set('parental', pe);
-          toast(pe.enabled ? 'Controle Parental ATIVADO' : 'Controle Parental DESATIVADO');
-          renderCurrentRoute();
-        }
       } else if (action === 'run-tmdb-enrich') {
         var tmdbCfg = global.LuminaStore.get('tmdb') || { enabled: false, apiKey: '' };
-        toast('Buscando sinopses no TMDB...');
+        toast('Buscando capas e sinopses no TMDB...');
         global.LuminaTMDB.enrichCatalogBatch(tmdbCfg, function (err, count) {
           if (err) { toast(err.message); return; }
           tmdbCfg.enrichedCount = (tmdbCfg.enrichedCount || 0) + count;
           global.LuminaStore.set('tmdb', tmdbCfg);
-          toast('✨ ' + count + ' títulos enriquecidos (pt-BR).');
+          toast(count + ' títulos enriquecidos.');
           renderCurrentRoute();
         });
-      } else if (action === 'cycle-default-ratio') {
-        var ratios = ['auto', '16:9', '4:3', 'fill'];
-        var curR = global.LuminaStore.get('defaultAspectRatio') || 'auto';
-        var nextR = ratios[(ratios.indexOf(curR) + 1) % ratios.length];
-        global.LuminaStore.set('defaultAspectRatio', nextR);
-        toast('Proporção padrão: ' + nextR.toUpperCase());
-        renderCurrentRoute();
-      } else if (action === 'cycle-prefer-format') {
-        var fmts = ['auto', 'm3u8', 'ts'];
-        var curF = global.LuminaStore.get('preferOutputFormat') || 'auto';
-        var nextF = fmts[(fmts.indexOf(curF) + 1) % fmts.length];
-        global.LuminaStore.set('preferOutputFormat', nextF);
-        toast('Formato ao vivo preferido: ' + nextF.toUpperCase());
-        renderCurrentRoute();
-      } else if (action === 'cycle-auto-update-hours') {
-        var opts = [12, 24, 6, 0];
-        var curH = global.LuminaStore.get('autoUpdateHours');
-        if (typeof curH !== 'number') curH = 12;
-        var nextH = opts[(opts.indexOf(curH) + 1) % opts.length];
-        global.LuminaStore.set('autoUpdateHours', nextH);
-        toast(nextH === 0 ? 'Atualização automática desativada (Só Manual)' : ('Atualização automática: a cada ' + nextH + 'h'));
-        renderCurrentRoute();
       } else if (action === 'check-apk-update') {
-        toast('Consultando GitHub Releases...');
+        toast('Verificando atualização no GitHub...');
         global.LuminaPlatform.checkForAppUpdate(function (err, info) {
-          if (err) {
-            toast(err.message);
-            return;
-          }
+          if (err) { toast(err.message); return; }
           global.LuminaStore.set('appUpdateInfo', info);
           if (info && info.hasUpdate) {
-            toast('🎉 Nova versão encontrada: ' + info.latestVersion);
+            toast('Nova versão disponível: ' + info.latestVersion);
           } else {
-            toast('✔ Nenhuma atualização pendente (v' + (info && info.currentVersion ? info.currentVersion : '1.6.0') + ').');
+            toast('Você já está na versão mais recente.');
           }
           renderCurrentRoute();
         });
@@ -2417,7 +3268,7 @@
           global.LuminaPlatform.openUnknownAppsSettings();
           return;
         }
-        toast('Iniciando download da versão ' + upd.latestVersion + '...');
+        toast('Baixando ' + upd.latestVersion + '...');
         global.LuminaPlatform.downloadAndInstallUpdate(
           upd.downloadUrl,
           upd.assetSize || 0,
@@ -2428,23 +3279,18 @@
           },
           function (err) {
             global.LuminaStore.set('appUpdateProgress', null);
-            if (err) toast('⚠ ' + err.message);
-            else toast('✔ Instalador do Android aberto!');
+            if (err) toast(err.message);
+            else toast('Instalador aberto.');
             renderCurrentRoute();
           }
         );
-      } else if (action === 'toggle-backup-creds') {
-        var curInc = !!global.LuminaStore.get('includeCredentialsInBackup');
-        global.LuminaStore.set('includeCredentialsInBackup', !curInc);
-        toast(!curInc ? '⚠ Credenciais serão incluídas no próximo Backup JSON.' : '🔒 Credenciais ocultadas do Backup JSON.');
-        renderCurrentRoute();
       } else if (action === 'backup-export') {
         var bkp = global.LuminaStore.exportFullBackupJson();
         global.LuminaStorage.saveMeta('lastBackupMeta', bkp);
         if (global.LuminaPlatform && global.LuminaPlatform.saveBackupToDisk) {
           global.LuminaPlatform.saveBackupToDisk('lumina-backup.json', bkp);
         }
-        toast('⬇ Backup JSON exportado (' + bkp.length + ' bytes)!');
+        toast('Backup JSON exportado.');
       } else if (action === 'backup-restore') {
         var diskBkp = (global.LuminaPlatform && global.LuminaPlatform.readBackupFromDisk)
           ? global.LuminaPlatform.readBackupFromDisk('lumina-backup.json')
@@ -2452,65 +3298,46 @@
         if (diskBkp) {
           try {
             global.LuminaStore.importFullBackupJson(diskBkp);
-            toast('⬆ Backup JSON restaurado do arquivo com sucesso!');
+            toast('Backup restaurado com sucesso.');
             renderCurrentRoute();
             return;
           } catch (e) {}
         }
         global.LuminaStorage.loadMeta('lastBackupMeta', null, function (savedBkp) {
           if (!savedBkp) {
-            toast('Nenhum backup encontrado para restaurar.');
+            toast('Nenhum backup encontrado.');
             return;
           }
           try {
             global.LuminaStore.importFullBackupJson(savedBkp);
-            toast('⬆ Backup JSON restaurado com sucesso!');
+            toast('Backup restaurado com sucesso.');
             renderCurrentRoute();
           } catch (ex) {
-            toast('Erro ao restaurar backup: ' + ex.message);
+            toast('Erro ao restaurar backup.');
           }
         });
       } else if (action === 'copy-diag-report') {
         var rep = buildDiagnosticsReportText();
-        if (typeof navigator !== 'undefined' && navigator.clipboard && navigator.clipboard.writeText) {
-          navigator.clipboard.writeText(rep);
-        }
         if (global.LuminaPlatform && global.LuminaPlatform.saveBackupToDisk) {
           global.LuminaPlatform.saveBackupToDisk('lumina-diagnostico.txt', rep);
         }
-        toast('📋 Relatório de diagnóstico copiado/salvo!');
+        toast('Relatório salvo.');
       } else if (action === 'toggle-diag') {
         global.LuminaEventBus.emit('diag:toggle');
-      } else if (action === 'next-banner') {
-        var curIdx = global.LuminaStore.get('heroBannerIndex') || 0;
-        global.LuminaStore.set('heroBannerIndex', curIdx + 1);
-        renderCurrentRoute();
-        global.LuminaFocus.setFocus(document.getElementById('home-hero-next'), 'home');
-      } else if (action === 'go-onboarding') {
-        global.LuminaStore.set('pairingStep', 'cards');
-        global.LuminaRouter.navigate('onboarding');
       } else if (action === 'back') {
         global.LuminaRouter.back();
       }
     });
   }
 
-  function dismissBootSplash() {
-    if (typeof document === 'undefined') return;
-    var splash = document.getElementById('boot-splash');
-    if (splash && !splash.classList.contains('is-dismissed')) {
-      splash.classList.add('is-dismissed');
-      setTimeout(function () {
-        if (splash.parentNode) splash.style.display = 'none';
-      }, 340);
-    }
-  }
-
   global.LuminaUI = {
+    BRAND_LOGO: BRAND_LOGO,
+    MENU_ITEMS: MENU_ITEMS,
+    SETTINGS_TABS: SETTINGS_TABS,
     init: function () {
+      setupIntroChoreography();
       bindGlobalActions();
       renderCurrentRoute();
-      setTimeout(dismissBootSplash, 550);
     },
     escHtml: escHtml,
     escAttr: escAttr,
@@ -2520,8 +3347,24 @@
     hideLoading: hideLoading,
     renderCurrentRoute: renderCurrentRoute,
     openParentalPinModal: openParentalPinModal,
+    openSideMenu: openSideMenu,
+    closeSideMenu: closeSideMenu,
+    isSideMenuOpen: isSideMenuOpen,
+    handleLeftRightControl: handleLeftRightControl,
+    handleColumnNavigation: handleColumnNavigation,
     handleVirtualBoundary: handleVirtualBoundary,
-    dismissBootSplash: dismissBootSplash
+    POSTER_PALETTES: POSTER_PALETTES,
+    POSTER_MOTIFS: POSTER_MOTIFS,
+    getTitlePalette: getTitlePalette,
+    getTitleMotif: getTitleMotif,
+    generateDeterministicArtSvg: generateDeterministicArtSvg,
+    getGreetingByHour: getGreetingByHour,
+    computeIntroTimeline: computeIntroTimeline,
+    evaluateFrameBenchmark: evaluateFrameBenchmark,
+    computeFlipDelta: computeFlipDelta,
+    isBootSplashVisible: isBootSplashVisible,
+    dismissBootSplash: dismissBootSplash,
+    notifyCatalogReadyForIntro: notifyCatalogReadyForIntro
   };
 
   if (typeof module !== 'undefined' && module.exports) module.exports = global.LuminaUI;

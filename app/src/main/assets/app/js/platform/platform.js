@@ -34,9 +34,9 @@
   function getAppVersion() {
     var b = getBridge();
     if (b && typeof b.getAppVersion === 'function') {
-      try { return String(b.getAppVersion() || '1.6.0'); } catch (e) {}
+      try { return String(b.getAppVersion() || '2.0.0'); } catch (e) {}
     }
-    return '1.6.0';
+    return '2.0.0';
   }
 
   function getPlatformLabel() {

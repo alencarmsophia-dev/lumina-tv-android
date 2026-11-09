@@ -1,47 +1,158 @@
+/* Lumina TV v2.0.0 — Design & Motion Tokens (Interface Plana 10-Foot + Sistema de Movimento) */
 :root {
-  --bg-obsidian: #0B0F17;
-  --bg-surface: #131B2E;
-  --bg-surface-hover: #19243D;
+  /* Paleta Oficial da Interface (Plana) */
+  --bg: #0B0F17;
+  --bg-side: #121A2C;
+  --bg-panel: #131B2E;
   --bg-elevated: #1E293B;
-  --bg-glass: rgba(19, 27, 46, 0.92);
-  --bg-overlay: rgba(7, 10, 16, 0.94);
+  --bg-modal: #0F1626;
+  --bg-switch-off: #334155;
+  --accent: #38BDF8;
+  --accent-dark: #0284C7;
+  --accent-focus-light: #BAE6FD;
+  --amber: #F59E0B;
+  --green: #22C55E;
+  --green-text: #052E16;
+  --green-soft-bg: rgba(34, 197, 94, 0.16);
+  --danger: #EF4444;
+  --text: #F8FAFC;
+  --text-2: #94A3B8;
+  --text-on-accent: #06131F;
+  --line: rgba(255, 255, 255, 0.08);
+  --line-btn: rgba(255, 255, 255, 0.10);
+  --sel-bg: rgba(56, 189, 248, 0.16);
+  --sel-pill-bg: #1E3A52;
+  --sel-pill-text: #CFE9FA;
+  --backdrop-dim: rgba(0, 0, 0, 0.55);
+  --badge-dark-bg: rgba(7, 10, 16, 0.86);
 
-  --accent-cyan: #38BDF8;
-  --accent-cyan-glow: rgba(56, 189, 248, 0.36);
-  --accent-amber: #F59E0B;
-  --accent-danger: #EF4444;
-  --accent-success: #22C55E;
-  --accent-purple: #A855F7;
+  /* Tokens de Marca (v1.9+) */
+  --brand-a: #67E8F9;
+  --brand-violet: #6D5BFF;
+  --brand-spark: #FDE68A;
 
-  --text-primary: #F8FAFC;
-  --text-secondary: #94A3B8;
-  --text-muted: #64748B;
-  --font-sans: "LG Smart UI", "Noto Sans", "Segoe UI", Roboto, sans-serif;
+  /* Aliases de compatibilidade interna */
+  --bg-obsidian: var(--bg);
+  --bg-surface: var(--bg-panel);
+  --accent-cyan: var(--accent);
+  --accent-amber: var(--amber);
+  --accent-success: var(--green);
+  --accent-danger: var(--danger);
+  --text-primary: var(--text);
+  --text-secondary: var(--text-2);
+
+  /* Tipografia (Mínimo obrigatório: 22px em qualquer lugar) */
+  --font-sans: Inter, "Noto Sans", Roboto, "Segoe UI", sans-serif;
   --font-mono: "JetBrains Mono", Consolas, monospace;
+  --fs-hero: 60px;
+  --fs-detail-title: 56px;
+  --fs-screen: 52px;
+  --fs-panel: 40px;
+  --fs-osd-title: 36px;
+  --fs-brand: 34px;
+  --fs-row-title: 32px;
+  --fs-modal-title: 30px;
+  --fs-body: 28px;
+  --fs-list: 26px;
+  --fs-2: 24px;
+  --fs-min: 22px;
 
-  --fs-hero: 48px;
-  --fs-h1: 38px;
-  --fs-h2: 28px;
-  --fs-body: 24px;
-  --fs-label: 22px;
-  --fs-small: 19px;
+  --fw-black: 800;
+  --fw-bold: 700;
+  --fw-semi: 600;
+  --fw-med: 500;
 
+  /* Geometria e Layout (Canvas 1920x1080) */
+  --canvas-w: 1920px;
+  --canvas-h: 1080px;
+  --nav-w: 120px;
+  --nav-open-w: 360px;
   --safe-x: 84px;
   --safe-y: 44px;
-  --radius-sm: 10px;
-  --radius-md: 16px;
+  --main-left: 168px;
+  --filters-w: 360px;
+  --live-list-w: 620px;
+  --settings-tabs-w: 420px;
+  --col-gap: 32px;
+  --gap: 24px;
+  --gap-sm: 12px;
+  --row-gap: 8px;
+
+  /* Dimensões de Cartões e Controles */
+  --hero-w: 1668px;
+  --hero-h: 340px;
+  --card-w: 301px;
+  --card-h: 452px;
+  --card-art-h: 336px;
+  --card-meta-h: 112px;
+  --tile-w: 314px;
+  --tile-h: 177px;
+  --tile-lead-w: 420px;
+  --tile-lead-h: 236px;
+  --row-h: 68px;
+  --row-h-nav-open: 76px;
+  --row-h-lg: 84px;
+  --row-h-ep: 108px;
+  --row-h-setting: 116px;
+  --btn-h: 72px;
+  --btn-modal-h: 64px;
+  --logo-box: 64px;
+  --icon-size: 38px;
+  --radius: 16px;
+  --radius-modal: 20px;
   --radius-lg: 24px;
   --radius-pill: 999px;
 
+  /* Linguagem de Movimento v2.0.0 (Seção 1) */
+  --dur-instant: 90ms;
+  --dur-fast: 140ms;
+  --dur-dialog: 160ms;
+  --dur-osd: 180ms;
+  --dur-base: 220ms;
+  --dur-slow: 360ms;
+  --dur-shimmer: 480ms;
+  --dur-crossfade: 500ms;
+  --dur-hero: 600ms;
+
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
   --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
-  --dur-fast: 110ms;
-  --dur-normal: 180ms;
+  --ease-inout: cubic-bezier(0.65, 0, 0.35, 1);
+  --ease-spring: cubic-bezier(0.34, 1.4, 0.64, 1);
+  --ease-spark: var(--ease-spring);
+
+  /* Aliases de movimento */
+  --focus-border-w: 4px;
+  --focus-scale-card: 1.04;
+  --focus-scale-row: 1.03;
+  --dur-focus: var(--dur-fast);
+  --dur-screen: var(--dur-base);
+  --dur-home-banner: 320ms;
+  --dur-row-stagger: 40ms;
+  --dur-flip: 380ms;
+  --intro-dur: 3500ms;
 }
 
+/* Nível de movimento "Reduzidas": só fades de 140ms, sem Ken Burns, sem escalonamento e sem poeira de luz */
+body.motion-reduced .ken-burns-bg,
+body.motion-reduced .card-focus-sheen,
+body.motion-reduced .boot-dust-layer {
+  animation: none !important;
+}
+
+body.motion-reduced .home-row-section,
+body.motion-reduced .detail-stagger,
+body.motion-reduced .side-nav-drawer .nav-item {
+  animation-delay: 0ms !important;
+  transition-delay: 0ms !important;
+}
+
+/* Nível de movimento "Desligadas" ou Modo Leve: trocas instantâneas mantendo apenas o foco visível */
+body.motion-off *,
+body.motion-off *::before,
+body.motion-off *::after,
 body.lite-mode *,
 body.lite-mode *::before,
 body.lite-mode *::after {
   transition: none !important;
   animation: none !important;
-  box-shadow: none !important;
 }

@@ -5,8 +5,8 @@
   var PIN_LOCKOUT_THRESHOLD = 5;
   var PIN_BASE_LOCKOUT_MS = 60000; // 60 segundos
   var PARENTAL_SESSION_TIMEOUT_MS = 15 * 60 * 1000; // 15 minutos
+  var ALLOWED_SAFE_MARGINS = [0, 0.02, 0.04, 0.06, 0.08, 0.10];
 
-  // Hash SHA-256 determinístico em ES5 puro (compatível com WebOS 5+, Android WebView antigo e Node)
   function sha256Hex(ascii) {
     function rightRotate(value, amount) {
       return (value >>> amount) | (value << (32 - amount));
@@ -93,15 +93,24 @@
     return sha256Hex(cleanSalt + ':' + cleanPin);
   }
 
+  function sanitizeSafeMargin(val) {
+    var num = typeof val === 'number' ? val : parseFloat(val);
+    if (typeof num !== 'number' || isNaN(num) || !isFinite(num) || num < 0) return 0;
+    if (num > 0.10) return 0.10;
+    return Math.round(num * 100) / 100;
+  }
+
   function defaultSettings() {
     var salt = 'lumina_v16_default_salt';
     return {
       schemaVersion: 2,
       performanceMode: 'auto',
+      motionLevel: 'Completas',
       defaultAspectRatio: 'auto',
       aspectRatioByContent: {},
-      autoUpdateHours: 12, // 0 = manual, 6, 12, 24
-      preferOutputFormat: 'auto', // 'auto' | 'm3u8' | 'ts'
+      screenSafeMargin: 0,
+      autoUpdateHours: 12,
+      preferOutputFormat: 'auto',
       includeCredentialsInBackup: false,
       searchHistory: [],
       parental: {
@@ -129,9 +138,15 @@
     if (raw.performanceMode === 'auto' || raw.performanceMode === 'normal' || raw.performanceMode === 'lite') {
       def.performanceMode = raw.performanceMode;
     }
+    if (raw.motionLevel === 'Completas' || raw.motionLevel === 'Reduzidas' || raw.motionLevel === 'Desligadas') {
+      def.motionLevel = raw.motionLevel;
+    }
     if (raw.defaultAspectRatio) def.defaultAspectRatio = raw.defaultAspectRatio;
     if (raw.aspectRatioByContent && typeof raw.aspectRatioByContent === 'object') {
       def.aspectRatioByContent = raw.aspectRatioByContent;
+    }
+    if (typeof raw.screenSafeMargin !== 'undefined') {
+      def.screenSafeMargin = sanitizeSafeMargin(raw.screenSafeMargin);
     }
     if (typeof raw.autoUpdateHours === 'number') def.autoUpdateHours = raw.autoUpdateHours;
     if (raw.preferOutputFormat) def.preferOutputFormat = raw.preferOutputFormat;
@@ -153,7 +168,6 @@
         def.parental.pinSalt = raw.parental.pinSalt;
         def.parental.pinHash = raw.parental.pinHash;
       } else if (raw.parental.pin) {
-        // Migra PIN antigo em texto puro para SHA-256 + salt e descarta o texto puro
         var newSalt = 'lumina_migrated_' + Date.now();
         def.parental.pinSalt = newSalt;
         def.parental.pinHash = hashPinWithSalt(String(raw.parental.pin), newSalt);
@@ -177,8 +191,10 @@
     if (!global.LuminaStore) return;
     var s = normalizeAndMigrateSettings(settings);
     global.LuminaStore.set('performanceMode', s.performanceMode);
+    global.LuminaStore.set('motionLevel', s.motionLevel || 'Completas');
     global.LuminaStore.set('defaultAspectRatio', s.defaultAspectRatio);
     global.LuminaStore.set('aspectRatioByContent', s.aspectRatioByContent);
+    global.LuminaStore.set('screenSafeMargin', s.screenSafeMargin);
     global.LuminaStore.set('autoUpdateHours', s.autoUpdateHours);
     global.LuminaStore.set('preferOutputFormat', s.preferOutputFormat);
     global.LuminaStore.set('includeCredentialsInBackup', s.includeCredentialsInBackup);
@@ -204,6 +220,10 @@
       language: s.tmdb.language || 'pt-BR',
       enrichedCount: s.tmdb.enrichedCount || curTmdb.enrichedCount || 0
     });
+
+    if (typeof global.__luminaFitViewport === 'function') {
+      global.__luminaFitViewport();
+    }
   }
 
   function extractSettingsFromStore() {
@@ -212,8 +232,10 @@
     var tmdb = global.LuminaStore.get('tmdb') || {};
     return normalizeAndMigrateSettings({
       performanceMode: global.LuminaStore.get('performanceMode'),
+      motionLevel: global.LuminaStore.get('motionLevel'),
       defaultAspectRatio: global.LuminaStore.get('defaultAspectRatio'),
       aspectRatioByContent: global.LuminaStore.get('aspectRatioByContent'),
+      screenSafeMargin: global.LuminaStore.get('screenSafeMargin'),
       autoUpdateHours: global.LuminaStore.get('autoUpdateHours'),
       preferOutputFormat: global.LuminaStore.get('preferOutputFormat'),
       includeCredentialsInBackup: global.LuminaStore.get('includeCredentialsInBackup'),
@@ -253,7 +275,6 @@
         applySettingsToStore(norm);
         return cb && cb(norm);
       }
-      // Verifica se havia aspectRatioByContent salvo separadamente na v1.5.1
       global.LuminaStorage.loadMeta('aspectRatioByContent', {}, function (legacyRatios) {
         var initial = defaultSettings();
         if (legacyRatios && typeof legacyRatios === 'object') {
@@ -265,6 +286,29 @@
         });
       });
     });
+  }
+
+  function stepSafeMargin(deltaSteps) {
+    var cur = sanitizeSafeMargin(global.LuminaStore ? global.LuminaStore.get('screenSafeMargin') : 0);
+    var idx = 0;
+    for (var i = 0; i < ALLOWED_SAFE_MARGINS.length; i++) {
+      if (Math.abs(ALLOWED_SAFE_MARGINS[i] - cur) < 0.005) {
+        idx = i;
+        break;
+      }
+    }
+    var nextIdx = idx + (deltaSteps || 1);
+    if (nextIdx < 0) nextIdx = 0;
+    if (nextIdx >= ALLOWED_SAFE_MARGINS.length) nextIdx = ALLOWED_SAFE_MARGINS.length - 1;
+    var nextVal = ALLOWED_SAFE_MARGINS[nextIdx];
+    if (global.LuminaStore) {
+      global.LuminaStore.set('screenSafeMargin', nextVal);
+    }
+    saveCurrentSettings();
+    if (typeof global.__luminaFitViewport === 'function') {
+      global.__luminaFitViewport();
+    }
+    return nextVal;
   }
 
   function verifyPin(inputPin, nowMs) {
@@ -385,14 +429,17 @@
     PIN_LOCKOUT_THRESHOLD: PIN_LOCKOUT_THRESHOLD,
     PIN_BASE_LOCKOUT_MS: PIN_BASE_LOCKOUT_MS,
     PARENTAL_SESSION_TIMEOUT_MS: PARENTAL_SESSION_TIMEOUT_MS,
+    ALLOWED_SAFE_MARGINS: ALLOWED_SAFE_MARGINS,
     sha256Hex: sha256Hex,
     hashPinWithSalt: hashPinWithSalt,
+    sanitizeSafeMargin: sanitizeSafeMargin,
     defaultSettings: defaultSettings,
     normalizeAndMigrateSettings: normalizeAndMigrateSettings,
     applySettingsToStore: applySettingsToStore,
     extractSettingsFromStore: extractSettingsFromStore,
     saveCurrentSettings: saveCurrentSettings,
     loadAndApplySettings: loadAndApplySettings,
+    stepSafeMargin: stepSafeMargin,
     verifyPin: verifyPin,
     changePin: changePin,
     checkAndExpireParentalSession: checkAndExpireParentalSession,

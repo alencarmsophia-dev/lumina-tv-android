@@ -1,0 +1,593 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <title>Lumina TV v1.9.0 — Identidade Visual ("A Luz Acende a Tela")</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: #0B0F17;
+      color: #F8FAFC;
+      font-family: Inter, "Noto Sans", Roboto, sans-serif;
+      padding: 48px 64px;
+      line-height: 1.4;
+    }
+    h1 { font-size: 40px; font-weight: 800; letter-spacing: -0.5px; margin-bottom: 8px; }
+    p.lead { font-size: 22px; color: #94A3B8; margin-bottom: 36px; max-width: 1280px; }
+    .wordmark-showcase {
+      background: #131B2E;
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 24px;
+      padding: 32px 44px;
+      margin-bottom: 36px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 32px;
+    }
+    .proposals-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 28px;
+    }
+    .proposal-card {
+      background: #131B2E;
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 24px;
+      padding: 28px;
+      display: flex;
+      flex-direction: column;
+      gap: 18px;
+    }
+    .proposal-card.is-default {
+      border: 3px solid #38BDF8;
+    }
+    .proposal-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .proposal-title { font-size: 26px; font-weight: 800; }
+    .badge-default {
+      background: #22C55E;
+      color: #052E16;
+      font-size: 16px;
+      font-weight: 800;
+      padding: 4px 12px;
+      border-radius: 8px;
+    }
+    .proposal-desc { font-size: 19px; color: #94A3B8; min-height: 80px; }
+    .surface-box {
+      border-radius: 16px;
+      padding: 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-around;
+      border: 1px solid rgba(255,255,255,0.10);
+    }
+    .surface-dark { background: #0B0F17; color: #F8FAFC; }
+    .surface-light { background: #F8FAFC; color: #0B0F17; }
+    .size-col {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 10px;
+    }
+    .size-lbl { font-size: 16px; font-weight: 700; opacity: 0.75; }
+    .mono-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: #0B0F17;
+      border-radius: 16px;
+      padding: 16px 24px;
+      border: 1px solid rgba(255,255,255,0.08);
+    }
+  </style>
+</head>
+<body>
+  <h1>Lumina TV v1.9.0 — Identidade Visual: "A Luz Acende a Tela"</h1>
+  <p class="lead">Símbolos livres de contêiner construídos sobre grade óptica 64×64, área de respiro &ge; 1/4, wordmark desenhado 100% em paths SVG geométricos com centelha quente (<code>#FDE68A</code>) sobre o "I", e suporte a versão monocromática em 24px, 64px e 192px.</p>
+
+  <div class="wordmark-showcase">
+    <div>
+      <div style="font-size:20px;font-weight:700;color:#38BDF8;margin-bottom:6px;">ASSINATURA HORIZONTAL COMPLETA (brand/logo-full.svg)</div>
+      <div style="font-size:18px;color:#94A3B8;">Símbolo "Facho" + Wordmark em paths vetoriais puros ("LUMINA" semibold + centelha #FDE68A no "I" + "TV" leve em degradê ciano).</div>
+    </div>
+    <div style="background:#0B0F17;padding:20px 36px;border-radius:16px;border:1px solid rgba(255,255,255,0.08);">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 292 64" width="410" height="90">
+  <defs>
+    <linearGradient id="fachoBlade1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#67E8F9"/>
+      <stop offset="100%" stop-color="#38BDF8"/>
+    </linearGradient>
+    <linearGradient id="fachoBlade2" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#38BDF8"/>
+      <stop offset="100%" stop-color="#0284C7"/>
+    </linearGradient>
+    <linearGradient id="fachoBlade3" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0284C7"/>
+      <stop offset="100%" stop-color="#6D5BFF"/>
+    </linearGradient>
+  </defs>
+  <linearGradient id="wordmarkCyanGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+    <stop offset="0%" stop-color="#67E8F9"/>
+    <stop offset="55%" stop-color="#38BDF8"/>
+    <stop offset="100%" stop-color="#0284C7"/>
+  </linearGradient>
+  <!-- Símbolo Facho (64x64) -->
+  <path class="brand-part brand-blade-1" d="M 14 14.5 Q 14 10.5 17.6 12.6 L 25.5 17.1 L 19.5 51.1 L 17.6 52.2 Q 14 54.3 14 50.3 Z" fill="url(#fachoBlade1)"/>
+  <path class="brand-part brand-blade-2" d="M 29.2 19.2 L 40.2 25.5 L 36.2 41.5 L 23.2 49.0 Z" fill="url(#fachoBlade2)"/>
+  <path class="brand-part brand-blade-3" d="M 43.8 27.6 L 51.8 32.2 Q 55.2 34.1 51.8 36.0 L 39.8 42.9 Z" fill="url(#fachoBlade3)"/>
+  <circle class="brand-part brand-spark-dot" cx="15.8" cy="8.2" r="2.2" fill="#FDE68A"/>
+  <!-- Wordmark LUMINA em Paths SVG (#F8FAFC) + Centelha no I (#FDE68A) + TV em peso leve (degradê ciano) -->
+  <path class="wm-letter wm-l1" d="M 76 18 H 80.2 V 41.8 H 93 V 46 H 76 Z" fill="#F8FAFC"/>
+  <path class="wm-letter wm-l2" d="M 98 18 H 102.2 V 36.5 C 102.2 40.2 104.6 42.2 108.5 42.2 C 112.4 42.2 114.8 40.2 114.8 36.5 V 18 H 119 V 36.8 C 119 42.8 114.8 46.2 108.5 46.2 C 102.2 46.2 98 42.8 98 36.8 Z" fill="#F8FAFC"/>
+  <path class="wm-letter wm-l3" d="M 125 46 V 18 H 129.4 L 137.5 34.2 L 145.6 18 H 150 V 46 H 145.8 V 26.8 L 139.1 40.0 H 135.9 L 129.2 26.8 V 46 Z" fill="#F8FAFC"/>
+  <path class="wm-letter wm-l4" d="M 157 24 H 161.2 V 46 H 157 Z" fill="#F8FAFC"/>
+  <circle class="wm-spark" cx="159.1" cy="18.2" r="2.5" fill="#FDE68A"/>
+  <path class="wm-letter wm-l5" d="M 168 46 V 18 H 172.2 L 184.8 38.2 V 18 H 189 V 46 H 184.8 L 172.2 25.8 V 46 Z" fill="#F8FAFC"/>
+  <path class="wm-letter wm-l6" d="M 204.2 18 H 208.8 L 219 46 H 214.4 L 211.9 38.8 H 201.1 L 198.6 46 H 194 Z M 202.5 34.8 H 210.5 L 206.5 23.2 Z" fill="#F8FAFC"/>
+  <path class="wm-letter wm-tv" d="M 233 18 H 253 V 20.6 H 244.3 V 46 H 241.7 V 20.6 H 233 Z M 257 18 H 259.8 L 267.5 42.2 L 275.2 18 H 278 L 268.9 46 H 266.1 Z" fill="url(#wordmarkCyanGrad)"/>
+</svg>
+
+    </div>
+  </div>
+
+  <div class="proposals-grid">
+    <!-- CONCEITO A: FACHO (PADRÃO) -->
+    <div class="proposal-card is-default">
+      <div class="proposal-head">
+        <span class="proposal-title">Conceito A · "Facho"</span>
+        <span class="badge-default">PADRÃO (BRAND_LOGO = 'A')</span>
+      </div>
+      <p class="proposal-desc">Triângulo de play de cantos suavemente arredondados (~6%) seccionado por duas fendas diagonais em três lâminas ascendentes de luz (<code>#67E8F9</code> &rarr; <code>#38BDF8</code> &rarr; <code>#0284C7</code>) + centelha <code>#FDE68A</code>.</p>
+      <div class="surface-box surface-dark">
+        <div class="size-col">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="24" height="24">
+  <defs>
+    <linearGradient id="fachoBlade1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#67E8F9"/>
+      <stop offset="100%" stop-color="#38BDF8"/>
+    </linearGradient>
+    <linearGradient id="fachoBlade2" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#38BDF8"/>
+      <stop offset="100%" stop-color="#0284C7"/>
+    </linearGradient>
+    <linearGradient id="fachoBlade3" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0284C7"/>
+      <stop offset="100%" stop-color="#6D5BFF"/>
+    </linearGradient>
+  </defs>
+  <path class="brand-part brand-blade-1" d="M 14 14.5 Q 14 10.5 17.6 12.6 L 25.5 17.1 L 19.5 51.1 L 17.6 52.2 Q 14 54.3 14 50.3 Z" fill="url(#fachoBlade1)"/>
+  <path class="brand-part brand-blade-2" d="M 29.2 19.2 L 40.2 25.5 L 36.2 41.5 L 23.2 49.0 Z" fill="url(#fachoBlade2)"/>
+  <path class="brand-part brand-blade-3" d="M 43.8 27.6 L 51.8 32.2 Q 55.2 34.1 51.8 36.0 L 39.8 42.9 Z" fill="url(#fachoBlade3)"/>
+  <circle class="brand-part brand-spark-dot" cx="15.8" cy="8.2" r="2.2" fill="#FDE68A"/>
+</svg>
+
+          <span class="size-lbl">24px (#0B0F17)</span>
+        </div>
+        <div class="size-col">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <defs>
+    <linearGradient id="fachoBlade1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#67E8F9"/>
+      <stop offset="100%" stop-color="#38BDF8"/>
+    </linearGradient>
+    <linearGradient id="fachoBlade2" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#38BDF8"/>
+      <stop offset="100%" stop-color="#0284C7"/>
+    </linearGradient>
+    <linearGradient id="fachoBlade3" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0284C7"/>
+      <stop offset="100%" stop-color="#6D5BFF"/>
+    </linearGradient>
+  </defs>
+  <path class="brand-part brand-blade-1" d="M 14 14.5 Q 14 10.5 17.6 12.6 L 25.5 17.1 L 19.5 51.1 L 17.6 52.2 Q 14 54.3 14 50.3 Z" fill="url(#fachoBlade1)"/>
+  <path class="brand-part brand-blade-2" d="M 29.2 19.2 L 40.2 25.5 L 36.2 41.5 L 23.2 49.0 Z" fill="url(#fachoBlade2)"/>
+  <path class="brand-part brand-blade-3" d="M 43.8 27.6 L 51.8 32.2 Q 55.2 34.1 51.8 36.0 L 39.8 42.9 Z" fill="url(#fachoBlade3)"/>
+  <circle class="brand-part brand-spark-dot" cx="15.8" cy="8.2" r="2.2" fill="#FDE68A"/>
+</svg>
+
+          <span class="size-lbl">64px (#0B0F17)</span>
+        </div>
+        <div class="size-col">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="192" height="192">
+  <defs>
+    <linearGradient id="fachoBlade1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#67E8F9"/>
+      <stop offset="100%" stop-color="#38BDF8"/>
+    </linearGradient>
+    <linearGradient id="fachoBlade2" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#38BDF8"/>
+      <stop offset="100%" stop-color="#0284C7"/>
+    </linearGradient>
+    <linearGradient id="fachoBlade3" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0284C7"/>
+      <stop offset="100%" stop-color="#6D5BFF"/>
+    </linearGradient>
+  </defs>
+  <path class="brand-part brand-blade-1" d="M 14 14.5 Q 14 10.5 17.6 12.6 L 25.5 17.1 L 19.5 51.1 L 17.6 52.2 Q 14 54.3 14 50.3 Z" fill="url(#fachoBlade1)"/>
+  <path class="brand-part brand-blade-2" d="M 29.2 19.2 L 40.2 25.5 L 36.2 41.5 L 23.2 49.0 Z" fill="url(#fachoBlade2)"/>
+  <path class="brand-part brand-blade-3" d="M 43.8 27.6 L 51.8 32.2 Q 55.2 34.1 51.8 36.0 L 39.8 42.9 Z" fill="url(#fachoBlade3)"/>
+  <circle class="brand-part brand-spark-dot" cx="15.8" cy="8.2" r="2.2" fill="#FDE68A"/>
+</svg>
+
+          <span class="size-lbl">192px (#0B0F17)</span>
+        </div>
+      </div>
+      <div class="surface-box surface-light">
+        <div class="size-col">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="24" height="24">
+  <defs>
+    <linearGradient id="fachoLight1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0284C7"/>
+      <stop offset="100%" stop-color="#0369A1"/>
+    </linearGradient>
+    <linearGradient id="fachoLight2" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0369A1"/>
+      <stop offset="100%" stop-color="#1E3A8A"/>
+    </linearGradient>
+    <linearGradient id="fachoLight3" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1E3A8A"/>
+      <stop offset="100%" stop-color="#4F46E5"/>
+    </linearGradient>
+  </defs>
+  <path d="M 14 14.5 Q 14 10.5 17.6 12.6 L 25.5 17.1 L 19.5 51.1 L 17.6 52.2 Q 14 54.3 14 50.3 Z" fill="url(#fachoLight1)"/>
+  <path d="M 29.2 19.2 L 40.2 25.5 L 36.2 41.5 L 23.2 49.0 Z" fill="url(#fachoLight2)"/>
+  <path d="M 43.8 27.6 L 51.8 32.2 Q 55.2 34.1 51.8 36.0 L 39.8 42.9 Z" fill="url(#fachoLight3)"/>
+  <circle cx="15.8" cy="8.2" r="2.2" fill="#D97706"/>
+</svg>
+
+          <span class="size-lbl">24px (#F8FAFC)</span>
+        </div>
+        <div class="size-col">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <defs>
+    <linearGradient id="fachoLight1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0284C7"/>
+      <stop offset="100%" stop-color="#0369A1"/>
+    </linearGradient>
+    <linearGradient id="fachoLight2" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0369A1"/>
+      <stop offset="100%" stop-color="#1E3A8A"/>
+    </linearGradient>
+    <linearGradient id="fachoLight3" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1E3A8A"/>
+      <stop offset="100%" stop-color="#4F46E5"/>
+    </linearGradient>
+  </defs>
+  <path d="M 14 14.5 Q 14 10.5 17.6 12.6 L 25.5 17.1 L 19.5 51.1 L 17.6 52.2 Q 14 54.3 14 50.3 Z" fill="url(#fachoLight1)"/>
+  <path d="M 29.2 19.2 L 40.2 25.5 L 36.2 41.5 L 23.2 49.0 Z" fill="url(#fachoLight2)"/>
+  <path d="M 43.8 27.6 L 51.8 32.2 Q 55.2 34.1 51.8 36.0 L 39.8 42.9 Z" fill="url(#fachoLight3)"/>
+  <circle cx="15.8" cy="8.2" r="2.2" fill="#D97706"/>
+</svg>
+
+          <span class="size-lbl">64px (#F8FAFC)</span>
+        </div>
+        <div class="size-col">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="192" height="192">
+  <defs>
+    <linearGradient id="fachoLight1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0284C7"/>
+      <stop offset="100%" stop-color="#0369A1"/>
+    </linearGradient>
+    <linearGradient id="fachoLight2" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0369A1"/>
+      <stop offset="100%" stop-color="#1E3A8A"/>
+    </linearGradient>
+    <linearGradient id="fachoLight3" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1E3A8A"/>
+      <stop offset="100%" stop-color="#4F46E5"/>
+    </linearGradient>
+  </defs>
+  <path d="M 14 14.5 Q 14 10.5 17.6 12.6 L 25.5 17.1 L 19.5 51.1 L 17.6 52.2 Q 14 54.3 14 50.3 Z" fill="url(#fachoLight1)"/>
+  <path d="M 29.2 19.2 L 40.2 25.5 L 36.2 41.5 L 23.2 49.0 Z" fill="url(#fachoLight2)"/>
+  <path d="M 43.8 27.6 L 51.8 32.2 Q 55.2 34.1 51.8 36.0 L 39.8 42.9 Z" fill="url(#fachoLight3)"/>
+  <circle cx="15.8" cy="8.2" r="2.2" fill="#D97706"/>
+</svg>
+
+          <span class="size-lbl">192px (#F8FAFC)</span>
+        </div>
+      </div>
+      <div class="mono-row">
+        <span style="font-size:18px;color:#94A3B8;font-weight:700;">Versão Monocromática (1 cor)</span>
+        <div style="display:flex;gap:20px;align-items:center;color:#F8FAFC;">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="24" height="24">
+  <path d="M 14 14.5 Q 14 10.5 17.6 12.6 L 25.5 17.1 L 19.5 51.1 L 17.6 52.2 Q 14 54.3 14 50.3 Z" fill="currentColor"/>
+  <path d="M 29.2 19.2 L 40.2 25.5 L 36.2 41.5 L 23.2 49.0 Z" fill="currentColor"/>
+  <path d="M 43.8 27.6 L 51.8 32.2 Q 55.2 34.1 51.8 36.0 L 39.8 42.9 Z" fill="currentColor"/>
+  <circle cx="15.8" cy="8.2" r="2.2" fill="currentColor"/>
+</svg>
+
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="48" height="48">
+  <path d="M 14 14.5 Q 14 10.5 17.6 12.6 L 25.5 17.1 L 19.5 51.1 L 17.6 52.2 Q 14 54.3 14 50.3 Z" fill="currentColor"/>
+  <path d="M 29.2 19.2 L 40.2 25.5 L 36.2 41.5 L 23.2 49.0 Z" fill="currentColor"/>
+  <path d="M 43.8 27.6 L 51.8 32.2 Q 55.2 34.1 51.8 36.0 L 39.8 42.9 Z" fill="currentColor"/>
+  <circle cx="15.8" cy="8.2" r="2.2" fill="currentColor"/>
+</svg>
+
+        </div>
+      </div>
+    </div>
+
+    <!-- CONCEITO B: L DE LUZ -->
+    <div class="proposal-card">
+      <div class="proposal-head">
+        <span class="proposal-title">Conceito B · "L de Luz"</span>
+      </div>
+      <p class="proposal-desc">Traço contínuo de pontas arredondadas formando um "L" cuja haste horizontal converge numa ponta em forma de Play, com a centelha quente (<code>#FDE68A</code>) pairando sobre a haste vertical.</p>
+      <div class="surface-box surface-dark">
+        <div class="size-col">
+          <svg width="24" height="24" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <linearGradient id="lDeLuzGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#67E8F9"/>
+      <stop offset="55%" stop-color="#38BDF8"/>
+      <stop offset="100%" stop-color="#0284C7"/>
+    </linearGradient>
+  </defs>
+  <!-- Haste contínua em L com ponta em Play e cantos arredondados -->
+  <path class="brand-part brand-blade-1" d="M 16 15 C 16 12.2 18.2 10 21 10 C 23.8 10 26 12.2 26 15 V 40 H 38 V 33.5 L 52 43.5 L 38 53.5 V 47 H 21 C 18.2 47 16 44.8 16 42 Z" fill="url(#lDeLuzGrad)"/>
+  <path class="brand-part brand-blade-2" d="M 30 20 L 46 30 L 30 36 Z" fill="#38BDF8" opacity="0.45"/>
+  <!-- Centelha quente pairando acima da haste vertical -->
+  <circle class="brand-part brand-spark-dot" cx="21" cy="6.2" r="2.4" fill="#FDE68A"/>
+</svg>
+          <span class="size-lbl">24px (#0B0F17)</span>
+        </div>
+        <div class="size-col">
+          <svg width="64" height="64" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <linearGradient id="lDeLuzGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#67E8F9"/>
+      <stop offset="55%" stop-color="#38BDF8"/>
+      <stop offset="100%" stop-color="#0284C7"/>
+    </linearGradient>
+  </defs>
+  <!-- Haste contínua em L com ponta em Play e cantos arredondados -->
+  <path class="brand-part brand-blade-1" d="M 16 15 C 16 12.2 18.2 10 21 10 C 23.8 10 26 12.2 26 15 V 40 H 38 V 33.5 L 52 43.5 L 38 53.5 V 47 H 21 C 18.2 47 16 44.8 16 42 Z" fill="url(#lDeLuzGrad)"/>
+  <path class="brand-part brand-blade-2" d="M 30 20 L 46 30 L 30 36 Z" fill="#38BDF8" opacity="0.45"/>
+  <!-- Centelha quente pairando acima da haste vertical -->
+  <circle class="brand-part brand-spark-dot" cx="21" cy="6.2" r="2.4" fill="#FDE68A"/>
+</svg>
+          <span class="size-lbl">64px (#0B0F17)</span>
+        </div>
+        <div class="size-col">
+          <svg width="192" height="192" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <linearGradient id="lDeLuzGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#67E8F9"/>
+      <stop offset="55%" stop-color="#38BDF8"/>
+      <stop offset="100%" stop-color="#0284C7"/>
+    </linearGradient>
+  </defs>
+  <!-- Haste contínua em L com ponta em Play e cantos arredondados -->
+  <path class="brand-part brand-blade-1" d="M 16 15 C 16 12.2 18.2 10 21 10 C 23.8 10 26 12.2 26 15 V 40 H 38 V 33.5 L 52 43.5 L 38 53.5 V 47 H 21 C 18.2 47 16 44.8 16 42 Z" fill="url(#lDeLuzGrad)"/>
+  <path class="brand-part brand-blade-2" d="M 30 20 L 46 30 L 30 36 Z" fill="#38BDF8" opacity="0.45"/>
+  <!-- Centelha quente pairando acima da haste vertical -->
+  <circle class="brand-part brand-spark-dot" cx="21" cy="6.2" r="2.4" fill="#FDE68A"/>
+</svg>
+          <span class="size-lbl">192px (#0B0F17)</span>
+        </div>
+      </div>
+      <div class="surface-box surface-light">
+        <div class="size-col">
+          <svg width="24" height="24" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <linearGradient id="lDeLuzGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#67E8F9"/>
+      <stop offset="55%" stop-color="#38BDF8"/>
+      <stop offset="100%" stop-color="#0284C7"/>
+    </linearGradient>
+  </defs>
+  <!-- Haste contínua em L com ponta em Play e cantos arredondados -->
+  <path class="brand-part brand-blade-1" d="M 16 15 C 16 12.2 18.2 10 21 10 C 23.8 10 26 12.2 26 15 V 40 H 38 V 33.5 L 52 43.5 L 38 53.5 V 47 H 21 C 18.2 47 16 44.8 16 42 Z" fill="url(#lDeLuzGrad)"/>
+  <path class="brand-part brand-blade-2" d="M 30 20 L 46 30 L 30 36 Z" fill="#38BDF8" opacity="0.45"/>
+  <!-- Centelha quente pairando acima da haste vertical -->
+  <circle class="brand-part brand-spark-dot" cx="21" cy="6.2" r="2.4" fill="#FDE68A"/>
+</svg>
+          <span class="size-lbl">24px (#F8FAFC)</span>
+        </div>
+        <div class="size-col">
+          <svg width="64" height="64" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <linearGradient id="lDeLuzGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#67E8F9"/>
+      <stop offset="55%" stop-color="#38BDF8"/>
+      <stop offset="100%" stop-color="#0284C7"/>
+    </linearGradient>
+  </defs>
+  <!-- Haste contínua em L com ponta em Play e cantos arredondados -->
+  <path class="brand-part brand-blade-1" d="M 16 15 C 16 12.2 18.2 10 21 10 C 23.8 10 26 12.2 26 15 V 40 H 38 V 33.5 L 52 43.5 L 38 53.5 V 47 H 21 C 18.2 47 16 44.8 16 42 Z" fill="url(#lDeLuzGrad)"/>
+  <path class="brand-part brand-blade-2" d="M 30 20 L 46 30 L 30 36 Z" fill="#38BDF8" opacity="0.45"/>
+  <!-- Centelha quente pairando acima da haste vertical -->
+  <circle class="brand-part brand-spark-dot" cx="21" cy="6.2" r="2.4" fill="#FDE68A"/>
+</svg>
+          <span class="size-lbl">64px (#F8FAFC)</span>
+        </div>
+        <div class="size-col">
+          <svg width="192" height="192" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <linearGradient id="lDeLuzGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#67E8F9"/>
+      <stop offset="55%" stop-color="#38BDF8"/>
+      <stop offset="100%" stop-color="#0284C7"/>
+    </linearGradient>
+  </defs>
+  <!-- Haste contínua em L com ponta em Play e cantos arredondados -->
+  <path class="brand-part brand-blade-1" d="M 16 15 C 16 12.2 18.2 10 21 10 C 23.8 10 26 12.2 26 15 V 40 H 38 V 33.5 L 52 43.5 L 38 53.5 V 47 H 21 C 18.2 47 16 44.8 16 42 Z" fill="url(#lDeLuzGrad)"/>
+  <path class="brand-part brand-blade-2" d="M 30 20 L 46 30 L 30 36 Z" fill="#38BDF8" opacity="0.45"/>
+  <!-- Centelha quente pairando acima da haste vertical -->
+  <circle class="brand-part brand-spark-dot" cx="21" cy="6.2" r="2.4" fill="#FDE68A"/>
+</svg>
+          <span class="size-lbl">192px (#F8FAFC)</span>
+        </div>
+      </div>
+      <div class="mono-row">
+        <span style="font-size:18px;color:#94A3B8;font-weight:700;">Versão Monocromática (1 cor)</span>
+        <div style="display:flex;gap:20px;align-items:center;color:#F8FAFC;">
+          <svg width="24" height="24" viewBox="0 0 64 64"><path d="M 16 15 C 16 12.2 18.2 10 21 10 C 23.8 10 26 12.2 26 15 V 40 H 38 V 33.5 L 52 43.5 L 38 53.5 V 47 H 21 C 18.2 47 16 44.8 16 42 Z" fill="currentColor"/><circle cx="21" cy="6.2" r="2.4" fill="currentColor"/></svg>
+          <svg width="48" height="48" viewBox="0 0 64 64"><path d="M 16 15 C 16 12.2 18.2 10 21 10 C 23.8 10 26 12.2 26 15 V 40 H 38 V 33.5 L 52 43.5 L 38 53.5 V 47 H 21 C 18.2 47 16 44.8 16 42 Z" fill="currentColor"/><circle cx="21" cy="6.2" r="2.4" fill="currentColor"/></svg>
+        </div>
+      </div>
+    </div>
+
+    <!-- CONCEITO C: HORIZONTE -->
+    <div class="proposal-card">
+      <div class="proposal-head">
+        <span class="proposal-title">Conceito C · "Horizonte"</span>
+      </div>
+      <p class="proposal-desc">Arco luminoso nascendo sobre a barra horizontal da tela, com dois arcos concêntricos, um triângulo de Play em espaço negativo no centro e centelha no zênite.</p>
+      <div class="surface-box surface-dark">
+        <div class="size-col">
+          <svg width="24" height="24" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <linearGradient id="horizonteArc1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#67E8F9"/>
+      <stop offset="100%" stop-color="#0284C7"/>
+    </linearGradient>
+    <linearGradient id="horizonteArc2" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#38BDF8"/>
+      <stop offset="100%" stop-color="#67E8F9"/>
+    </linearGradient>
+  </defs>
+  <!-- Arco externo luminoso com Play em espaço negativo -->
+  <path class="brand-part brand-blade-1" fill-rule="evenodd" d="M 10 44 A 22 22 0 0 1 54 44 H 46 A 14 14 0 0 0 18 44 Z M 28 27 L 40 34.5 L 28 42 Z" fill="url(#horizonteArc1)"/>
+  <!-- Arco concêntrico superior -->
+  <path class="brand-part brand-blade-2" d="M 16 22 A 24 24 0 0 1 48 22 L 45 25.5 A 19 19 0 0 0 19 25.5 Z" fill="#38BDF8"/>
+  <!-- Barra horizontal (a tela iluminada) -->
+  <rect class="brand-part brand-blade-3" x="10" y="48" width="44" height="5" rx="2.5" fill="url(#horizonteArc2)"/>
+  <!-- Centelha quente no zênite -->
+  <circle class="brand-part brand-spark-dot" cx="32" cy="11.5" r="2.2" fill="#FDE68A"/>
+</svg>
+          <span class="size-lbl">24px (#0B0F17)</span>
+        </div>
+        <div class="size-col">
+          <svg width="64" height="64" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <linearGradient id="horizonteArc1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#67E8F9"/>
+      <stop offset="100%" stop-color="#0284C7"/>
+    </linearGradient>
+    <linearGradient id="horizonteArc2" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#38BDF8"/>
+      <stop offset="100%" stop-color="#67E8F9"/>
+    </linearGradient>
+  </defs>
+  <!-- Arco externo luminoso com Play em espaço negativo -->
+  <path class="brand-part brand-blade-1" fill-rule="evenodd" d="M 10 44 A 22 22 0 0 1 54 44 H 46 A 14 14 0 0 0 18 44 Z M 28 27 L 40 34.5 L 28 42 Z" fill="url(#horizonteArc1)"/>
+  <!-- Arco concêntrico superior -->
+  <path class="brand-part brand-blade-2" d="M 16 22 A 24 24 0 0 1 48 22 L 45 25.5 A 19 19 0 0 0 19 25.5 Z" fill="#38BDF8"/>
+  <!-- Barra horizontal (a tela iluminada) -->
+  <rect class="brand-part brand-blade-3" x="10" y="48" width="44" height="5" rx="2.5" fill="url(#horizonteArc2)"/>
+  <!-- Centelha quente no zênite -->
+  <circle class="brand-part brand-spark-dot" cx="32" cy="11.5" r="2.2" fill="#FDE68A"/>
+</svg>
+          <span class="size-lbl">64px (#0B0F17)</span>
+        </div>
+        <div class="size-col">
+          <svg width="192" height="192" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <linearGradient id="horizonteArc1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#67E8F9"/>
+      <stop offset="100%" stop-color="#0284C7"/>
+    </linearGradient>
+    <linearGradient id="horizonteArc2" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#38BDF8"/>
+      <stop offset="100%" stop-color="#67E8F9"/>
+    </linearGradient>
+  </defs>
+  <!-- Arco externo luminoso com Play em espaço negativo -->
+  <path class="brand-part brand-blade-1" fill-rule="evenodd" d="M 10 44 A 22 22 0 0 1 54 44 H 46 A 14 14 0 0 0 18 44 Z M 28 27 L 40 34.5 L 28 42 Z" fill="url(#horizonteArc1)"/>
+  <!-- Arco concêntrico superior -->
+  <path class="brand-part brand-blade-2" d="M 16 22 A 24 24 0 0 1 48 22 L 45 25.5 A 19 19 0 0 0 19 25.5 Z" fill="#38BDF8"/>
+  <!-- Barra horizontal (a tela iluminada) -->
+  <rect class="brand-part brand-blade-3" x="10" y="48" width="44" height="5" rx="2.5" fill="url(#horizonteArc2)"/>
+  <!-- Centelha quente no zênite -->
+  <circle class="brand-part brand-spark-dot" cx="32" cy="11.5" r="2.2" fill="#FDE68A"/>
+</svg>
+          <span class="size-lbl">192px (#0B0F17)</span>
+        </div>
+      </div>
+      <div class="surface-box surface-light">
+        <div class="size-col">
+          <svg width="24" height="24" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <linearGradient id="horizonteArc1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#67E8F9"/>
+      <stop offset="100%" stop-color="#0284C7"/>
+    </linearGradient>
+    <linearGradient id="horizonteArc2" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#38BDF8"/>
+      <stop offset="100%" stop-color="#67E8F9"/>
+    </linearGradient>
+  </defs>
+  <!-- Arco externo luminoso com Play em espaço negativo -->
+  <path class="brand-part brand-blade-1" fill-rule="evenodd" d="M 10 44 A 22 22 0 0 1 54 44 H 46 A 14 14 0 0 0 18 44 Z M 28 27 L 40 34.5 L 28 42 Z" fill="url(#horizonteArc1)"/>
+  <!-- Arco concêntrico superior -->
+  <path class="brand-part brand-blade-2" d="M 16 22 A 24 24 0 0 1 48 22 L 45 25.5 A 19 19 0 0 0 19 25.5 Z" fill="#38BDF8"/>
+  <!-- Barra horizontal (a tela iluminada) -->
+  <rect class="brand-part brand-blade-3" x="10" y="48" width="44" height="5" rx="2.5" fill="url(#horizonteArc2)"/>
+  <!-- Centelha quente no zênite -->
+  <circle class="brand-part brand-spark-dot" cx="32" cy="11.5" r="2.2" fill="#FDE68A"/>
+</svg>
+          <span class="size-lbl">24px (#F8FAFC)</span>
+        </div>
+        <div class="size-col">
+          <svg width="64" height="64" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <linearGradient id="horizonteArc1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#67E8F9"/>
+      <stop offset="100%" stop-color="#0284C7"/>
+    </linearGradient>
+    <linearGradient id="horizonteArc2" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#38BDF8"/>
+      <stop offset="100%" stop-color="#67E8F9"/>
+    </linearGradient>
+  </defs>
+  <!-- Arco externo luminoso com Play em espaço negativo -->
+  <path class="brand-part brand-blade-1" fill-rule="evenodd" d="M 10 44 A 22 22 0 0 1 54 44 H 46 A 14 14 0 0 0 18 44 Z M 28 27 L 40 34.5 L 28 42 Z" fill="url(#horizonteArc1)"/>
+  <!-- Arco concêntrico superior -->
+  <path class="brand-part brand-blade-2" d="M 16 22 A 24 24 0 0 1 48 22 L 45 25.5 A 19 19 0 0 0 19 25.5 Z" fill="#38BDF8"/>
+  <!-- Barra horizontal (a tela iluminada) -->
+  <rect class="brand-part brand-blade-3" x="10" y="48" width="44" height="5" rx="2.5" fill="url(#horizonteArc2)"/>
+  <!-- Centelha quente no zênite -->
+  <circle class="brand-part brand-spark-dot" cx="32" cy="11.5" r="2.2" fill="#FDE68A"/>
+</svg>
+          <span class="size-lbl">64px (#F8FAFC)</span>
+        </div>
+        <div class="size-col">
+          <svg width="192" height="192" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <linearGradient id="horizonteArc1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#67E8F9"/>
+      <stop offset="100%" stop-color="#0284C7"/>
+    </linearGradient>
+    <linearGradient id="horizonteArc2" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#38BDF8"/>
+      <stop offset="100%" stop-color="#67E8F9"/>
+    </linearGradient>
+  </defs>
+  <!-- Arco externo luminoso com Play em espaço negativo -->
+  <path class="brand-part brand-blade-1" fill-rule="evenodd" d="M 10 44 A 22 22 0 0 1 54 44 H 46 A 14 14 0 0 0 18 44 Z M 28 27 L 40 34.5 L 28 42 Z" fill="url(#horizonteArc1)"/>
+  <!-- Arco concêntrico superior -->
+  <path class="brand-part brand-blade-2" d="M 16 22 A 24 24 0 0 1 48 22 L 45 25.5 A 19 19 0 0 0 19 25.5 Z" fill="#38BDF8"/>
+  <!-- Barra horizontal (a tela iluminada) -->
+  <rect class="brand-part brand-blade-3" x="10" y="48" width="44" height="5" rx="2.5" fill="url(#horizonteArc2)"/>
+  <!-- Centelha quente no zênite -->
+  <circle class="brand-part brand-spark-dot" cx="32" cy="11.5" r="2.2" fill="#FDE68A"/>
+</svg>
+          <span class="size-lbl">192px (#F8FAFC)</span>
+        </div>
+      </div>
+      <div class="mono-row">
+        <span style="font-size:18px;color:#94A3B8;font-weight:700;">Versão Monocromática (1 cor)</span>
+        <div style="display:flex;gap:20px;align-items:center;color:#F8FAFC;">
+          <svg width="24" height="24" viewBox="0 0 64 64"><path fill-rule="evenodd" d="M 10 44 A 22 22 0 0 1 54 44 H 46 A 14 14 0 0 0 18 44 Z M 28 27 L 40 34.5 L 28 42 Z" fill="currentColor"/><rect x="10" y="48" width="44" height="5" rx="2.5" fill="currentColor"/><circle cx="32" cy="11.5" r="2.2" fill="currentColor"/></svg>
+          <svg width="48" height="48" viewBox="0 0 64 64"><path fill-rule="evenodd" d="M 10 44 A 22 22 0 0 1 54 44 H 46 A 14 14 0 0 0 18 44 Z M 28 27 L 40 34.5 L 28 42 Z" fill="currentColor"/><rect x="10" y="48" width="44" height="5" rx="2.5" fill="currentColor"/><circle cx="32" cy="11.5" r="2.2" fill="currentColor"/></svg>
+        </div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

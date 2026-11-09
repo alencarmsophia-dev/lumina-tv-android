@@ -20,8 +20,8 @@ android {
         applicationId = "com.luminatv.player"
         minSdk = 22
         targetSdk = 34
-        versionCode = 1600
-        versionName = "1.6.0"
+        versionCode = 2000
+        versionName = "2.0.0"
     }
 
     signingConfigs {
