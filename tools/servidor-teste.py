@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 tools/servidor-teste.py
-Servidor HTTP local de teste para o Lumina TV (v2.2.0).
+Servidor HTTP local de teste para o Lumina TV (v2.2.1).
 Usa SOMENTE a biblioteca padrão do Python.
 Suporta:
 - Range / If-Range (HTTP 206 Partial Content)
@@ -24,7 +24,7 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 import argparse
 
 class MockIptvHandler(BaseHTTPRequestHandler):
-    server_version = "LuminaMockServer/2.2.0"
+    server_version = "LuminaMockServer/2.2.1"
 
     def do_HEAD(self):
         self.handle_request(is_head=True)

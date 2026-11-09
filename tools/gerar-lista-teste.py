@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 tools/gerar-lista-teste.py
-Gera listas M3U sintéticas para testes do Lumina TV (v2.2.0).
+Gera listas M3U sintéticas para testes do Lumina TV (v2.2.1).
 Usa SOMENTE a biblioteca padrão do Python.
 PROIBIDO o uso de dados, listas, servidores ou credenciais reais de terceiros.
 Todas as URLs apontam para http://10.0.2.2:8080 (servidor de teste local acessível pelo emulador Android).

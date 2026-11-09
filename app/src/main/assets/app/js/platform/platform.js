@@ -5,7 +5,7 @@
   var isWebOS = /Web0S|webOS|LG Browser|NetCast/i.test(ua) || !!(typeof window !== 'undefined' && (window.webOS || window.PalmSystem));
   var isFireTV = /\bAFT[A-Z0-9]+\b|Amazon|Silk/i.test(ua);
   var isAndroid = /Android/i.test(ua) || isFireTV || !!(typeof window !== 'undefined' && window.LuminaAndroidBridge);
-  var FALLBACK_APP_VERSION = '2.2.0';
+  var FALLBACK_APP_VERSION = '2.2.1';
   var probeSeq = 0;
   var pendingProbes = {};
 

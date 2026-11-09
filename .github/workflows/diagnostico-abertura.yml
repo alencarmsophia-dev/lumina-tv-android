@@ -1,4 +1,4 @@
-name: Diagnóstico de Abertura em Emuladores (v2.2.0)
+name: Diagnóstico de Abertura em Emuladores (v2.2.1)
 
 on:
   workflow_dispatch:

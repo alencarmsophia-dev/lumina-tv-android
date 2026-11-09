@@ -2,6 +2,7 @@ package com.luminatv.player
 
 import android.annotation.SuppressLint
 import android.app.Activity
+import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
@@ -9,6 +10,7 @@ import android.content.SharedPreferences
 import android.content.pm.ApplicationInfo
 import android.content.res.Configuration
 import android.graphics.Color
+import android.graphics.Typeface
 import android.media.AudioAttributes
 import android.media.AudioFocusRequest
 import android.media.AudioManager
@@ -16,6 +18,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
+import android.util.Log
 import android.view.Gravity
 import android.view.KeyEvent
 import android.view.View
@@ -27,9 +30,11 @@ import android.webkit.CookieManager
 import android.webkit.JavascriptInterface
 import android.webkit.WebSettings
 import android.webkit.WebView
+import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.core.content.FileProvider
@@ -41,6 +46,7 @@ import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
 import java.security.MessageDigest
+import java.util.Locale
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
@@ -49,7 +55,7 @@ class MainActivity : Activity() {
     companion object {
         const val APP_ENTRY_URL = "https://appassets.androidplatform.net/assets/app/index.html"
         const val UPDATE_REPO = "alencarmsophia-dev/lumina-tv-android"
-        const val APP_VERSION_NAME = "2.2.0"
+        const val APP_VERSION_NAME = "2.2.1"
         private const val MIN_CHROMIUM_MAJOR = 50
         private const val BOOT_PREFS_NAME = "lumina_boot_guard"
         private const val BOOT_WINDOW_MS = 3 * 60 * 1000L // 3 minutos
@@ -124,7 +130,7 @@ class MainActivity : Activity() {
                 val sb = StringBuilder()
                 sb.append("=== LUMINA TV CRASH REPORT ===\n")
                 sb.append("Data: ").append(nowStr).append("\n")
-                sb.append("Versão: ").append(APP_VERSION_NAME).append(" (versionCode 2200)\n")
+                sb.append("Versão: ").append(APP_VERSION_NAME).append(" (versionCode 2201)\n")
                 sb.append("Modelo: ").append(Build.MANUFACTURER).append(" ").append(Build.MODEL).append(" (").append(Build.DEVICE).append(")\n")
                 sb.append("Android: ").append(Build.VERSION.RELEASE).append(" (SDK ").append(Build.VERSION.SDK_INT).append(")\n")
                 sb.append("Thread: ").append(thread.name).append("\n")

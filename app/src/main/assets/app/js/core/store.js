@@ -10,7 +10,7 @@
   // Parte 6.1: As chaves gigantes do catálogo foram removidas do LuminaStore.
   // O estado em memória guarda apenas metadados leves, configurações e retratos de favoritos/progresso.
   var state = {
-    appVersion: '2.2.0',
+    appVersion: '2.2.1',
     currentRoute: 'home',
     activeSectionSearch: {
       section: 'movie',

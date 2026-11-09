@@ -395,9 +395,7 @@ class LuminaWebViewClient(
                 "Erro de carregamento"
             }
             Log.e(TAG, "Falha ao carregar página principal: $desc em ${request.url}")
-            onMainFrameLoadError("Falha ao carregar página principal:
-URL: ${request.url}
-Erro: $desc")
+            onMainFrameLoadError("Falha ao carregar página principal:\nURL: ${request.url}\nErro: $desc")
         }
     }
 
@@ -406,9 +404,7 @@ Erro: $desc")
         super.onReceivedError(view, errorCode, description, failingUrl)
         if (failingUrl == null || failingUrl == MainActivity.APP_ENTRY_URL || failingUrl.startsWith("https://$ASSET_HOST")) {
             Log.e(TAG, "Falha ao carregar página principal (legado): $description (código $errorCode)")
-            onMainFrameLoadError("Falha ao carregar página principal (legado):
-URL: $failingUrl
-Erro: $description (código $errorCode)")
+            onMainFrameLoadError("Falha ao carregar página principal (legado):\nURL: $failingUrl\nErro: $description (código $errorCode)")
         }
     }
 
@@ -417,9 +413,7 @@ Erro: $description (código $errorCode)")
         if (request?.isForMainFrame == true) {
             val status = errorResponse?.statusCode ?: 0
             Log.e(TAG, "Erro HTTP na página principal: $status em ${request.url}")
-            onMainFrameLoadError("Erro HTTP ao carregar página principal:
-URL: ${request.url}
-Status: $status")
+            onMainFrameLoadError("Erro HTTP ao carregar página principal:\nURL: ${request.url}\nStatus: $status")
         }
     }
 

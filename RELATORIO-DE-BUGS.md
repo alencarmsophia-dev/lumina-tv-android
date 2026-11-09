@@ -11,3 +11,5 @@
 | **Causa E** | `buildFallbackPlan` detectava TS com `ul.indexOf('.ts') !== -1`, casando falsamente com `.tsv`, subdomínios `ts.` ou parâmetros de query. | Substituído por regex estrita de caminho: `/\.m3u8($|\?)/i` (`isHlsPath`) e `/\.ts($|\?)/i` (`isTsPath`). |
 | **Causa F** | Timeouts curtos por tentativa e ausência de classificação semântica faziam o player trocar de formato/motor mesmo em erros `401/403/404/429/458`. | `classifyPlaybackError()` distingue autenticação (`401/403`), limite de conexões (`429/458/884`), `404`, `5xx`, DNS, timeout e erro de faixa de áudio. |
 | **Causa G** | Ausência de log estruturado de rede/reprodução e de testador de stream sem vídeo dificultava diagnosticar falhas da lista na TV. | Criados `app/js/core/diag-log.js` (50 eventos com mascaramento de senhas), tela `"Diagnóstico do player"` e ferramenta `"Testar minha lista"` (`probeStream`). |
+
+- build 2.2.0 falhou por imports ausentes em MainActivity.kt e strings multilinha em LuminaWebViewClient.kt; corrigido na 2.2.1; verificador tools/verificar-kotlin.py criado para evitar reincidência.

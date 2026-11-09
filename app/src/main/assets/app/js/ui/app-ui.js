@@ -1,5 +1,5 @@
 /**
- * Lumina TV - Interface de Usuario Principal (v2.2.0)
+ * Lumina TV - Interface de Usuario Principal (v2.2.1)
  * Arquitetura 10-foot por demanda:
  * - Zero catalogo completo na RAM; consome apenas LuminaCatalog (getGroups, getPage, getItem, search, getRecent).
  * - Estado isolado por aba ('live' | 'vod' | 'series') com maquina de estados:
@@ -567,7 +567,7 @@ var LuminaUI = (function () {
     function renderHomeOnboarding() {
         var html = '<div class="screen screen-home screen-home-onboarding">' +
             '<div class="onboarding-hero">' +
-            '<div class="onboarding-eyebrow"><span class="hero-dot"></span>LUMINA TV v2.2.0 • CATÁLOGO SOB DEMANDA</div>' +
+            '<div class="onboarding-eyebrow"><span class="hero-dot"></span>LUMINA TV v2.2.1 • CATÁLOGO SOB DEMANDA</div>' +
             '<h1 class="onboarding-title">Sua central de TV ao vivo, filmes e séries na tela grande.</h1>' +
             '<p class="onboarding-subtitle">Para começar, escolha abaixo como deseja adicionar sua lista M3U ou conta Xtream Codes.</p>' +
             '<div class="onboarding-cards">' +
@@ -1780,7 +1780,7 @@ var LuminaUI = (function () {
             '</div>' +
             '</section>' +
             '<section class="settings-card">' +
-            '<h2>Armazenamento e Catálogo (v2.2.0)</h2>' +
+            '<h2>Armazenamento e Catálogo (v2.2.1)</h2>' +
             '<ul class="settings-stats-list">' +
             '<li><span>Canais indexados:</span> <strong>' + formatNumber(counts.live) + '</strong></li>' +
             '<li><span>Filmes indexados:</span> <strong>' + formatNumber(counts.vod) + '</strong></li>' +

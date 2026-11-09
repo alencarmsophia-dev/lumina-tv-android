@@ -34,7 +34,7 @@ class ListDownloader(
         private val BACKOFF_SECONDS = longArrayOf(2L, 4L, 8L, 15L, 30L, 60L)
         private val ALT_USER_AGENTS = listOf(
             "VLC/3.0.20 LibVLC/3.0.20",
-            "Lumina TV/2.2.0 (Android)",
+            "Lumina TV/2.2.1 (Android)",
             "okhttp/4.12.0",
             "Mozilla/5.0 (Linux; Android 11; AFTKA) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0 Safari/537.36"
         )

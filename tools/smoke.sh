@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# tools/smoke.sh - Bateria automatizada de testes do Lumina TV (v2.2.0)
+# tools/smoke.sh - Bateria automatizada de testes do Lumina TV (v2.2.1)
 # Executa cenários de fumaça, robustez, estresse e segurança em emuladores Android.
 # ==============================================================================
 set -euo pipefail
