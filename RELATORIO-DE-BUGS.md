@@ -48,3 +48,31 @@
 - **Continuidade Perfeita Splash Nativo → Abertura Web → Menu Lateral (FLIP)**: o splash composto (`1920×1080`) e o primeiro frame (`0–250ms`) de `#boot-splash` compartilham exatamente o mesmo fundo (`#0B0F17` → `#0A1426` + brilho radial central) e o símbolo de `176px` em `(960, 540)`, encerrando aos `3000–3500ms` com transição FLIP calculada pela escala real de `viewport-fit.js` até o canto superior esquerdo do menu (`64×64`).
 - **Benchmark Adaptativo de Quadros (`window.__luminaPerf`)**: medição via `requestAnimationFrame` nos primeiros `500ms` que rebaixa automaticamente para a variação `REDUZIDA` caso a mediana de tempo de quadro supere `24ms`.
 
+---
+
+## 11. Correção de Bug Crítico B10 (v2.1.0): Overlay de Carregamento Travado em 100%, "Aguardando envio pelo celular..." no Fundo e Erro "Importação cancelada pelo usuário."
+
+### Sintoma
+- Ao adicionar uma lista (via pareamento pelo celular, link M3U ou Xtream Codes), o overlay `#loading-overlay` avançava até `100%` com o botão `"Cancelar"` visível, nunca fechava, não abria a tela `"home"` e deixava `"Aguardando envio pelo celular..."` visível ao fundo; ao pressionar `"Cancelar"` ou `"Voltar"` no controle remoto depois disso, exibia a mensagem de erro `"Importação cancelada pelo usuário."`.
+
+### Causa Raiz Confirmada no Código
+1. **Duas chamadas a funções inexistentes (`TypeError` fatal) em `rebuildCatalogFromRawAsync` (`js/data/repository.js`, linhas 105 e 120) logo após a barra atingir `100%`**:
+   - Em `commitIncomingCatalog`, `LuminaStorage.saveCatalogBatch` gravava os blocos e reportava `ratio = 1.0`, fazendo `onProgress` atualizar a barra para `90 + Math.round(1.0 * 10) = 100%`.
+   - Em seguida, `commitIncomingCatalog` chamava `rebuildCatalogFromRawAsync(newRawItems, ...)`, que na linha 105 executava `global.LuminaClassifier.applyProfileMapping(it, profile)` (função inexistente em `classifier.js`, que exporta apenas `classifyEntry`) e na linha 120 executava `global.LuminaGrouper.groupCatalog(processed)` esperando `grouped.standaloneItems` (função inexistente em `grouper.js`, que exporta apenas `groupSeriesAndNovelas(items)` retornando `{ seriesList, novelasList }`).
+   - Como `processSlice` rodava dentro de `setTimeout` sem `try / catch`, o `TypeError` abortava silenciosamente a execução exatamente em `100%`, sem jamais chamar o callback de `commitIncomingCatalog` nem `hideLoading()` ou `LuminaRouter.navigate('home')`.
+2. **Ausência de handlers `tx.onabort`, `req.onerror`, `req.onblocked` e de timeout no IndexedDB (`js/core/storage.js`)**: as funções `openDB`, `putRecord`, `getRecord`, `deleteRecord` e `listAllKeys` escutavam apenas `tx.oncomplete` e `tx.onerror`, e `cleanupOldGenerations` podia bloquear a conclusão se a limpeza de blocos antigos falhasse ou travasse.
+3. **Leitura incompleta de progresso (`js/ui/app-ui.js`)**: `onLoadProgress(p)` lia apenas `p.status` e ignorava `p.stage`, deixando o texto de status em branco durante as etapas de `repository.js`.
+4. **Fluxo de cancelamento e tela de pareamento residual (`js/data/repository.js` e `js/ui/app-ui.js`)**: `onPairingPayload` não limpava a sessão/tela `"Aguardando envio pelo celular..."` antes de abrir o overlay; e ao pressionar `"Cancelar"` ou `"Voltar"`, `cancelActiveLoad()` gerava `new Error('Importação cancelada pelo usuário.')`, que os callbacks de `app-ui.js` exibiam como erro na tela.
+
+### Arquivos Alterados
+- `app/src/main/assets/app/js/core/storage.js`
+- `app/src/main/assets/app/js/data/repository.js`
+- `app/src/main/assets/app/js/ui/app-ui.js`
+- `RELATORIO-DE-BUGS.md`
+
+### O que foi verificado e o que NÃO pôde ser verificado na TV física
+- **Verificado no ambiente de desenvolvimento (Node.js)**:
+  - Checagem de sintaxe (`node --check`) nos 3 arquivos JavaScript alterados.
+  - Suíte completa de testes automatizados (`npm test`) + simulação em Node.js provando: (a) execução completa de `loadFromXtream` / `rebuildCatalogFromRawAsync` sem `TypeError`, populando `channels`, `movies` e `seriesList`, (b) captura de `tx.onabort` e tolerância a falha em `cleanupOldGenerations` em `storage.js`, (c) registro de todas as etapas em `LuminaDiagLog` e watchdog de 60s, e (d) cancelamento limpo sem exibir `"Importação cancelada pelo usuário."`.
+- **NÃO verificado em aparelho Fire TV físico**:
+  - Como não há acesso a um dispositivo Amazon Fire TV físico neste ambiente, o teste final no APK instalado na TV física com uma lista real deve ser confirmado pelo proprietário no aparelho.

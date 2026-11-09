@@ -344,6 +344,14 @@
   }
 
   // ── Carregamento de Lista ──
+  function isUserCancelledError(err) {
+    if (!err) return false;
+    if (global.LuminaRepository && typeof global.LuminaRepository.isCancelledError === 'function') {
+      return global.LuminaRepository.isCancelledError(err);
+    }
+    return !!(err.isCancelled || err.code === 'CANCELLED' || /cancelad[ao]\s+pelo\s+usu/i.test(String(err.message || err)));
+  }
+
   function showLoading(title) {
     global.LuminaStore.set('loading', true);
     if (typeof document === 'undefined') return;
@@ -353,6 +361,9 @@
     if (titleEl) titleEl.textContent = title || 'Carregando';
     setLoading('Preparando...', null);
     el.classList.remove('hidden');
+    if (global.LuminaFocus && typeof global.LuminaFocus.setTrap === 'function') {
+      global.LuminaFocus.setTrap(el);
+    }
     var cancelBtn = document.getElementById('btn-loading-cancel');
     if (cancelBtn) global.LuminaFocus.setFocus(cancelBtn, 'loading');
   }
@@ -380,10 +391,52 @@
     if (typeof document === 'undefined') return;
     var el = document.getElementById('loading-overlay');
     if (el) el.classList.add('hidden');
+    if (global.LuminaFocus && typeof global.LuminaFocus.setTrap === 'function') {
+      global.LuminaFocus.setTrap(null);
+    }
   }
 
   function onLoadProgress(p) {
-    setLoading(p.status, p.percent);
+    if (!p) return;
+    setLoading(p.status || p.stage || '', p.percent);
+  }
+
+  function prepareForListImport(loadingTitle) {
+    pairingStarting = false;
+    if (global.LuminaPairing && typeof global.LuminaPairing.resetSession === 'function') {
+      global.LuminaPairing.resetSession();
+    } else if (global.LuminaPairing && typeof global.LuminaPairing.stopPolling === 'function') {
+      global.LuminaPairing.stopPolling();
+    }
+    global.LuminaStore.set('pairingStep', 'cards');
+    global.LuminaStore.set('pairingError', null);
+    if (global.LuminaRouter && typeof global.LuminaRouter.getCurrent === 'function' && global.LuminaRouter.getCurrent() === 'onboarding') {
+      addListMode = 'cards';
+      renderCurrentRoute();
+    }
+    showLoading(loadingTitle);
+  }
+
+  function cancelLoadingOverlayByUser() {
+    if (global.LuminaRepository && typeof global.LuminaRepository.cancelActiveLoad === 'function') {
+      global.LuminaRepository.cancelActiveLoad();
+    }
+    if (global.LuminaPairing && typeof global.LuminaPairing.resetSession === 'function') {
+      global.LuminaPairing.resetSession();
+    }
+    pairingStarting = false;
+    global.LuminaStore.set('pairingError', null);
+    global.LuminaStore.set('pairingStep', 'cards');
+    if (addListDraft) {
+      addListDraft.errorMsg = '';
+    }
+    hideLoading();
+    if (global.LuminaRouter && typeof global.LuminaRouter.getCurrent === 'function' && global.LuminaRouter.getCurrent() === 'onboarding') {
+      addListMode = 'cards';
+      global.LuminaRouter.navigate('add-list');
+      return;
+    }
+    renderCurrentRoute();
   }
 
   function toast(msg) {
@@ -1745,18 +1798,26 @@
   }
 
   function onPairingPayload(payload) {
-    showLoading('Lista recebida do celular');
+    prepareForListImport('Lista recebida do celular');
     global.LuminaPairing.applyMobilePayload(payload, function (err, list, _pl, updateRec) {
-      hideLoading();
-      if (err) {
-        global.LuminaStore.set('pairingError', err.message);
+      try {
+        hideLoading();
+        if (err) {
+          if (isUserCancelledError(err)) return;
+          var errMsg = err.message || 'Falha ao carregar lista recebida do celular.';
+          global.LuminaStore.set('pairingError', errMsg);
+          toast(errMsg);
+          renderCurrentRoute();
+          return;
+        }
+        toast('Lista atualizada: ' + fmtCountPt(list ? list.length : 0) + ' itens' + formatDiffSummary(updateRec));
+        global.LuminaStore.set('pairingError', null);
+        global.LuminaStore.set('pairingStep', 'cards');
+        global.LuminaRouter.navigate('home');
         renderCurrentRoute();
-        return;
+      } finally {
+        hideLoading();
       }
-      toast('Lista atualizada: ' + fmtCountPt(list ? list.length : 0) + ' itens' + formatDiffSummary(updateRec));
-      global.LuminaStore.set('pairingError', null);
-      global.LuminaStore.set('pairingStep', 'cards');
-      global.LuminaRouter.navigate('home');
     }, onLoadProgress);
   }
 
@@ -1783,11 +1844,16 @@
     var pairErr = global.LuminaStore.get('pairingError');
 
     if (!sess) {
+      if (!pairingStarting && !pairErr && global.LuminaStore.get('pairingStep') === 'cards') {
+        addListMode = 'cards';
+        renderAddList(viewport);
+        return;
+      }
       viewport.innerHTML =
         '<div class="screen-enter">' +
           '<div class="screen-head"><div class="screen-head-left"><h1>Pareamento pelo celular</h1></div></div>' +
           '<div class="settings-panel" style="height:auto;">' +
-            '<div class="settings-panel-title">' + escHtml(pairErr ? 'Falha ao gerar código' : 'Gerando código de pareamento...') + '</div>' +
+            '<div class="settings-panel-title">' + escHtml(pairErr ? 'Não foi possível concluir' : 'Gerando código de pareamento...') + '</div>' +
             '<div style="font-size:26px;color:var(--text-2);margin-bottom:28px;">' + escHtml(pairErr || 'Conectando ao servidor seguro de pareamento...') + '</div>' +
             '<div style="display:flex;gap:20px;">' +
               '<button id="btn-pair-renew" class="btn btn-primary focusable" data-action="renew-phone-code" data-scope="onboarding">Tentar Novamente</button>' +
@@ -3266,6 +3332,29 @@
   }
 
   function bindGlobalActions() {
+    if (global.LuminaEventBus && !global.LuminaEventBus.__loadingBackWrapped) {
+      var origEmit = global.LuminaEventBus.emit;
+      global.LuminaEventBus.__loadingBackWrapped = true;
+      global.LuminaEventBus.emit = function (event, payload) {
+        if (event === 'key:BACK' && global.LuminaStore && global.LuminaStore.get('loading')) {
+          cancelLoadingOverlayByUser();
+          return;
+        }
+        return origEmit.call(global.LuminaEventBus, event, payload);
+      };
+    }
+    if (global.LuminaRouter && !global.LuminaRouter.__loadingBackWrapped) {
+      var origRouterBack = global.LuminaRouter.back;
+      global.LuminaRouter.__loadingBackWrapped = true;
+      global.LuminaRouter.back = function () {
+        if (global.LuminaStore && global.LuminaStore.get('loading')) {
+          cancelLoadingOverlayByUser();
+          return;
+        }
+        return origRouterBack.apply(global.LuminaRouter, arguments);
+      };
+    }
+
     global.LuminaEventBus.on('route:changed', renderCurrentRoute);
 
     global.LuminaEventBus.on('diag:toggle', function () {
@@ -3350,12 +3439,7 @@
 
       var actImmediate = el.getAttribute('data-action');
       if (actImmediate === 'cancel-loading') {
-        if (global.LuminaRepository && global.LuminaRepository.cancelActiveLoad) {
-          global.LuminaRepository.cancelActiveLoad();
-        }
-        hideLoading();
-        toast('Operação cancelada.');
-        renderCurrentRoute();
+        cancelLoadingOverlayByUser();
         return;
       }
 
@@ -3739,20 +3823,32 @@
           toast('Nenhuma lista salva. Use o pareamento pelo celular.');
           return;
         }
-        showLoading('Atualizando lista');
+        prepareForListImport('Atualizando lista');
         global.LuminaPairing.applyMobilePayload(
           curSrc.type === 'xtream'
             ? { type: 'xtream', name: curSrc.name, host: curSrc.creds.server, port: 0, username: curSrc.creds.username, password: curSrc.creds.password }
             : curSrc,
           function (err, list, _pl, updateRec) {
-            hideLoading();
-            if (err) { toast(err.message); return; }
-            if (updateRec && updateRec.unchanged) {
-              toast('Sua lista já está atualizada.');
-            } else {
-              toast('Lista atualizada: ' + fmtCountPt(list ? list.length : 0) + ' itens' + formatDiffSummary(updateRec));
+            try {
+              hideLoading();
+              if (err) {
+                if (isUserCancelledError(err)) return;
+                toast(err.message || 'Falha ao atualizar a lista.');
+                renderCurrentRoute();
+                return;
+              }
+              if (updateRec && updateRec.unchanged) {
+                toast('Sua lista já está atualizada.');
+              } else {
+                toast('Lista atualizada: ' + fmtCountPt(list ? list.length : 0) + ' itens' + formatDiffSummary(updateRec));
+              }
+              global.LuminaStore.set('pairingError', null);
+              global.LuminaStore.set('pairingStep', 'cards');
+              global.LuminaRouter.navigate('home');
+              renderCurrentRoute();
+            } finally {
+              hideLoading();
             }
-            renderCurrentRoute();
           },
           onLoadProgress
         );
@@ -3917,34 +4013,43 @@
         addListDraft.errorMsg = '';
         addListDraft.errorIsSsl = false;
 
-        showLoading('1/4 · Verificando endereço…');
+        prepareForListImport('1/4 · Verificando endereço…');
         var credsObj = { server: valRes.server, username: valRes.username, password: valRes.password };
-        global.LuminaRepository.loadFromXtream(credsObj, onLoadProgress, function (err, items) {
-          hideLoading();
-          if (err) {
-            addListDraft.errorMsg = err.message || 'Falha ao conectar ao servidor Xtream.';
-            addListDraft.errorIsSsl = !!err.isSslError;
-            addListDraft.sslHost = valRes.host;
-            renderCurrentRoute();
-            global.LuminaFocus.setFocus(document.getElementById(err.isSslError ? 'btn-trust-ssl' : 'btn-xtream-submit'), 'add-list');
-            return;
-          }
-          var srcRecord = {
-            id: addListDraft.editingListId || undefined,
-            type: 'xtream',
-            name: valRes.name,
-            creds: credsObj
-          };
-          global.LuminaStore.set('xtreamCreds', credsObj);
-          global.LuminaStore.set('source', srcRecord);
-          if (global.LuminaStorage) global.LuminaStorage.saveMeta('source', srcRecord);
-          global.LuminaStore.upsertSavedList(srcRecord);
+        global.LuminaRepository.loadFromXtream(credsObj, onLoadProgress, function (err) {
+          try {
+            hideLoading();
+            if (err) {
+              if (isUserCancelledError(err)) return;
+              addListDraft.errorMsg = err.message || 'Falha ao conectar ao servidor Xtream.';
+              addListDraft.errorIsSsl = !!err.isSslError;
+              addListDraft.sslHost = valRes.host;
+              toast(addListDraft.errorMsg);
+              renderCurrentRoute();
+              global.LuminaFocus.setFocus(document.getElementById(err.isSslError ? 'btn-trust-ssl' : 'btn-xtream-submit'), 'add-list');
+              return;
+            }
+            var srcRecord = {
+              id: addListDraft.editingListId || undefined,
+              type: 'xtream',
+              name: valRes.name,
+              creds: credsObj
+            };
+            global.LuminaStore.set('xtreamCreds', credsObj);
+            global.LuminaStore.set('source', srcRecord);
+            if (global.LuminaStorage) global.LuminaStorage.saveMeta('source', srcRecord);
+            global.LuminaStore.upsertSavedList(srcRecord);
 
-          var chC = (global.LuminaStore.get('channels') || []).length;
-          var mvC = (global.LuminaStore.get('movies') || []).length;
-          var srC = (global.LuminaStore.get('seriesList') || []).length + (global.LuminaStore.get('novelasList') || []).length;
-          toast('Lista conectada: ' + fmtCountPt(chC) + ' canais · ' + fmtCountPt(mvC) + ' filmes · ' + fmtCountPt(srC) + ' séries');
-          global.LuminaRouter.navigate('home');
+            var chC = (global.LuminaStore.get('channels') || []).length;
+            var mvC = (global.LuminaStore.get('movies') || []).length;
+            var srC = (global.LuminaStore.get('seriesList') || []).length + (global.LuminaStore.get('novelasList') || []).length;
+            toast('Lista conectada: ' + fmtCountPt(chC) + ' canais · ' + fmtCountPt(mvC) + ' filmes · ' + fmtCountPt(srC) + ' séries');
+            global.LuminaStore.set('pairingError', null);
+            global.LuminaStore.set('pairingStep', 'cards');
+            global.LuminaRouter.navigate('home');
+            renderCurrentRoute();
+          } finally {
+            hideLoading();
+          }
         });
       } else if (action === 'submit-m3u-form' || action === 'submit-m3u-direct') {
         var m3uValRes = global.LuminaListInput.validateM3uInput({
@@ -3970,32 +4075,41 @@
         addListDraft.errorMsg = '';
         addListDraft.errorIsSsl = false;
 
-        showLoading('1/4 · Verificando endereço…');
+        prepareForListImport('1/4 · Verificando endereço…');
         global.LuminaRepository.loadFromUrlOrLocalPath(m3uValRes.url, 'manual-m3u', onLoadProgress, function (err) {
-          hideLoading();
-          if (err) {
-            addListDraft.errorMsg = err.message || 'Falha ao baixar lista M3U.';
-            addListDraft.errorIsSsl = !!err.isSslError;
-            addListDraft.sslHost = m3uValRes.host;
-            renderCurrentRoute();
-            global.LuminaFocus.setFocus(document.getElementById(err.isSslError ? 'btn-trust-ssl-m3u' : 'btn-m3u-submit'), 'add-list');
-            return;
-          }
-          var srcRecord2 = {
-            id: addListDraft.editingListId || undefined,
-            type: 'm3u',
-            name: m3uValRes.name,
-            url: m3uValRes.url
-          };
-          global.LuminaStore.set('source', srcRecord2);
-          if (global.LuminaStorage) global.LuminaStorage.saveMeta('source', srcRecord2);
-          global.LuminaStore.upsertSavedList(srcRecord2);
+          try {
+            hideLoading();
+            if (err) {
+              if (isUserCancelledError(err)) return;
+              addListDraft.errorMsg = err.message || 'Falha ao baixar lista M3U.';
+              addListDraft.errorIsSsl = !!err.isSslError;
+              addListDraft.sslHost = m3uValRes.host;
+              toast(addListDraft.errorMsg);
+              renderCurrentRoute();
+              global.LuminaFocus.setFocus(document.getElementById(err.isSslError ? 'btn-trust-ssl-m3u' : 'btn-m3u-submit'), 'add-list');
+              return;
+            }
+            var srcRecord2 = {
+              id: addListDraft.editingListId || undefined,
+              type: 'm3u',
+              name: m3uValRes.name,
+              url: m3uValRes.url
+            };
+            global.LuminaStore.set('source', srcRecord2);
+            if (global.LuminaStorage) global.LuminaStorage.saveMeta('source', srcRecord2);
+            global.LuminaStore.upsertSavedList(srcRecord2);
 
-          var chC2 = (global.LuminaStore.get('channels') || []).length;
-          var mvC2 = (global.LuminaStore.get('movies') || []).length;
-          var srC2 = (global.LuminaStore.get('seriesList') || []).length + (global.LuminaStore.get('novelasList') || []).length;
-          toast('Lista conectada: ' + fmtCountPt(chC2) + ' canais · ' + fmtCountPt(mvC2) + ' filmes · ' + fmtCountPt(srC2) + ' séries');
-          global.LuminaRouter.navigate('home');
+            var chC2 = (global.LuminaStore.get('channels') || []).length;
+            var mvC2 = (global.LuminaStore.get('movies') || []).length;
+            var srC2 = (global.LuminaStore.get('seriesList') || []).length + (global.LuminaStore.get('novelasList') || []).length;
+            toast('Lista conectada: ' + fmtCountPt(chC2) + ' canais · ' + fmtCountPt(mvC2) + ' filmes · ' + fmtCountPt(srC2) + ' séries');
+            global.LuminaStore.set('pairingError', null);
+            global.LuminaStore.set('pairingStep', 'cards');
+            global.LuminaRouter.navigate('home');
+            renderCurrentRoute();
+          } finally {
+            hideLoading();
+          }
         });
       } else if (action === 'trust-ssl-and-retry') {
         if (addListDraft.sslHost && global.LuminaPlatform && global.LuminaPlatform.trustInsecureHost) {
@@ -4008,12 +4122,24 @@
       } else if (action === 'activate-saved-list') {
         var targetId = el.getAttribute('data-saved-list-id');
         if (!targetId) return;
-        showLoading('Trocando de lista…');
+        prepareForListImport('Trocando de lista…');
         global.LuminaRepository.activateSavedList(targetId, onLoadProgress, function (err, list) {
-          hideLoading();
-          if (err) { toast(err.message); return; }
-          toast('Lista ativada (' + fmtCountPt(list ? list.length : 0) + ' itens).');
-          renderCurrentRoute();
+          try {
+            hideLoading();
+            if (err) {
+              if (isUserCancelledError(err)) return;
+              toast(err.message || 'Falha ao ativar lista salva.');
+              renderCurrentRoute();
+              return;
+            }
+            toast('Lista ativada (' + fmtCountPt(list ? list.length : 0) + ' itens).');
+            global.LuminaStore.set('pairingError', null);
+            global.LuminaStore.set('pairingStep', 'cards');
+            global.LuminaRouter.navigate('home');
+            renderCurrentRoute();
+          } finally {
+            hideLoading();
+          }
         });
       } else if (action === 'edit-saved-list') {
         var editId = el.getAttribute('data-saved-list-id');
