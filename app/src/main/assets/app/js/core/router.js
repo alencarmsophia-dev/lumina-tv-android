@@ -51,6 +51,16 @@
 
     var current = stack[stack.length - 1];
     if (current === 'player-fullscreen') {
+      if (global.LuminaOSD) {
+        if (typeof global.LuminaOSD.isScrubbing === 'function' && global.LuminaOSD.isScrubbing()) {
+          global.LuminaOSD.cancelScrub();
+          return;
+        }
+        if (typeof global.LuminaOSD.isDrawerOpen === 'function' && global.LuminaOSD.isDrawerOpen()) {
+          global.LuminaOSD.closeDrawer();
+          return;
+        }
+      }
       stack.pop();
       var prev = stack[stack.length - 1] || 'home';
       var curItem = global.LuminaPlayer && global.LuminaPlayer.getCurrentItem ? global.LuminaPlayer.getCurrentItem() : null;

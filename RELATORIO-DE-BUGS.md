@@ -76,3 +76,59 @@
   - Suíte completa de testes automatizados (`npm test`) + simulação em Node.js provando: (a) execução completa de `loadFromXtream` / `rebuildCatalogFromRawAsync` sem `TypeError`, populando `channels`, `movies` e `seriesList`, (b) captura de `tx.onabort` e tolerância a falha em `cleanupOldGenerations` em `storage.js`, (c) registro de todas as etapas em `LuminaDiagLog` e watchdog de 60s, e (d) cancelamento limpo sem exibir `"Importação cancelada pelo usuário."`.
 - **NÃO verificado em aparelho Fire TV físico**:
   - Como não há acesso a um dispositivo Amazon Fire TV físico neste ambiente, o teste final no APK instalado na TV física com uma lista real deve ser confirmado pelo proprietário no aparelho.
+
+---
+
+## 12. Correção de Bugs de Interface B11 e B12 (v2.1.0): Piscar ao Rolar Listas Longas e Canais ao Vivo Abrindo Tela de Detalhes
+
+### B11 — Piscar ao rolar listas (`js/ui/app-ui.js`, `css/screens.css`, `css/components.css`)
+- **Sintoma**: Em séries com muitos episódios (e nas listas de canais, categorias, grades de pôsteres, favoritos e grupos), cada toque para BAIXO ou para CIMA na borda da janela visível fazia a tela inteira piscar como se estivesse trocando de página, e as miniaturas/pôsteres voltavam a ficar transparentes antes de reaparecer.
+- **Causa Raiz Confirmada no Código**:
+  1. `handleVirtualBoundary` alterava o índice inicial da janela (`detailEpWindowStart`, `liveChWindowStart`, `liveCatWindowStart`, `filterCatWindowStart`, `posterWindowStart`, `favWindowStart`, `orgGroupWindowStart`) e chamava `renderCurrentRoute()`, que reconstruía `viewport.innerHTML` sempre com `<div class="screen-enter">` ou `getScreenEnterClass()` (`screen-enter-forward` / `screen-enter-back`), além de `.detail-poster-card` (`detailPosterEnter`) e `.detail-stagger` (`screenFadeIn`), repetindo a animação completa de entrada da tela a cada passo da lista. A variável `lastRouteRendered` era gravada no fim de `renderCurrentRoute()`, mas nunca era consultada.
+  2. Todas as imagens (`img.lazy-fade`) eram recriadas sem a classe `is-loaded` (`opacity: 0`) e aguardavam um novo disparo assíncrono de `onload` para voltar a `opacity: 1`.
+  3. `.episode-row`, `.cat-row` e `.channel-row` usavam `content-visibility: auto`, causando adiamento de pintura (*pop-in* de 1 quadro) ao recriar os nós no WebView.
+- **Correção Implementada**:
+  1. Em `renderCurrentRoute()`, calculado `isCurrentRenderRouteChange = (lastRouteRendered !== route)` antes de renderizar; `getScreenEnterClass()` retorna `'screen-in-place'` quando a rota não mudou (aplicado em todas as telas), e em `css/screens.css` `.screen-in-place` desativa as animações de entrada da tela, pôster e `.detail-stagger`.
+  2. Criado cache em memória de URLs de imagens já carregadas (`loadedImageUrls` + `window.__luminaImgLoaded` + `renderLazyImgTag` + `syncLoadedImagesInViewport`), emitindo `lazy-fade is-loaded` e `loading="eager"` imediatamente para imagens já vistas.
+  3. Criado estado de deslocamento de janela (`pendingWindowShift`) e helper `getVirtualRowEnterClass`, aplicando uma transição curta de `140ms` (`translateY(±18px)` + `opacity`, `.vrow-enter-down` / `.vrow-enter-up`) exclusivamente na linha/fileira que entra na janela em todas as listas virtualizadas, mantendo as demais linhas estáticas e substituindo `content-visibility: auto` por `contain: layout paint`.
+- **Como testar na TV física**: Abrir uma série com mais de 10 episódios (ou a lista de Canais / grade de Filmes) e manter a seta para BAIXO e depois para CIMA pressionada: a tela de fundo, o pôster e os títulos permanecem firmes sem piscar, as imagens já carregadas não somem e apenas a nova linha na extremidade desliza suavemente em `140ms`. Ao trocar de tela (ex.: Início -> Séries -> Detalhe), a animação normal de entrada da tela continua ocorrendo.
+
+### B12 — Canal ao vivo abrindo tela de detalhe (`js/ui/app-ui.js`)
+- **Sintoma**: Abrir alguns conteúdos ao vivo (como um canal salvo na tela de Favoritos ou qualquer cartão renderizado por `renderPosterCard` / acionado via `data-detail-id`) abria a página de detalhes de filme/série em vez de iniciar a reprodução direta no player.
+- **Causa Raiz Confirmada no Código**:
+  1. `renderPosterCard` (usado também em `renderFavorites`) atribuía `data-detail-id` indiscriminadamente a qualquer item, inclusive quando `item.kind === 'live'`.
+  2. O handler de clique de `data-detail-id` em `app-ui.js` navegava sempre para `'detail'` sem verificar se `found.kind === 'live'`.
+- **Correção Implementada**:
+  1. Em `renderPosterCard`, itens com `item.kind === 'live'` passam a receber `data-play-id` e subtítulo `'Ao vivo · <grupo>'`.
+  2. No handler de `data-detail-id` (em `bindGlobalActions`), adicionada verificação explícita `if (found.kind === 'live')`: preserva o salvamento do histórico de busca e a checagem de PIN parental (`isItemLockedByParental` / `openParentalPinModal`), chama `LuminaPlayer.open(found)` e navega direto para `'player-fullscreen'`, sem criar entrada `'detail'` na pilha do `router.js`.
+- **Como testar na TV física**: Adicionar um canal ao vivo aos Favoritos, abrir a tela Favoritos (ou Início / Busca / Canais) e pressionar OK sobre o canal: o player abre imediatamente em tela cheia, e pressionar Voltar retorna direto para a tela de origem. Filmes e séries continuam abrindo a tela de detalhes normalmente.
+
+---
+
+## 13. Melhorias do player (próximo episódio, lista de episódios, busca livre)
+
+### O que foi adicionado
+1. **Oferta de "Próximo episódio" antes do fim (`NEXT_EP_OFFER_SECS = 30`)**:
+   - Em `js/player/player-core.js` e `js/player/osd.js`: durante a reprodução de um episódio com duração `>= 300 s`, quando restam `<= 30 s` e existe próximo episódio (`getEpisodeContext`), o player exibe o banner em modo `'offer'` (`"Próximo episódio: <título> (T1 · E2)"`) com os botões `"Assistir agora"` (focado por padrão, marca o episódio atual como concluído em `watchProgress` e abre o próximo) e `"Dispensar"` (oculta a oferta e impede o avanço automático ao terminar este episódio).
+   - Se o usuário voltar no vídeo para restarem mais de `35 s`, a oferta é ocultada automaticamente. Se o usuário ignorar a oferta até o vídeo terminar, o fluxo final de contagem regressiva de `5 s` (`mode: 'countdown'`) continua funcionando normalmente.
+2. **Botão "Episódios" (gaveta de temporadas/episódios dentro do player) e botões "Ep. anterior" / "Próx. ep."**:
+   - Em `js/player/player-core.js`: exportado `LuminaPlayer.getEpisodeContext(item)` (fonte única de verdade para encontrar a série por `seriesKey`/`id`, episódio hidratado ou `seriesTitle`, retornando `show`, `seasons`, `flatEpisodes`, `currentIndex`, `prevEpisode`, `nextEpisode` e `needsLazyLoad`) e `loadEpisodeListForCurrent(cb)` (reutilizando `LuminaXtream.fetchSeriesInfo` para séries carregadas sob demanda).
+   - Em `js/player/osd.js`: adicionados no deck (somente para episódios) os botões `"Ep. anterior"`, `"Próx. ep."` (ocultados quando não há episódio vizinho) e `"Episódios"`. A gaveta abre já posicionada na temporada e episódio atuais, exibe pílulas de temporada navegáveis com `ESQUERDA`/`DIREITA` e lista virtualizada de episódios com `CIMA`/`BAIXO` atualizando apenas os nós da gaveta (`updateEpDrawerListOnly`), sem reconstruir o OSD inteiro. Pressionar `Voltar` fecha primeiro a gaveta sem sair do player (`LuminaOSD.isDrawerOpen()` / `closeDrawer()`).
+3. **Busca livre na barra de tempo (scrub com prévia) e avanço/recuo acelerado**:
+   - Em `js/player/osd.js`, `js/ui/app-ui.js` e `css/screens.css`: ao focar `#osd-timeline-seek` (`data-lr-control="osd-seek"`), `ESQUERDA`/`DIREITA` deslocam uma posição de prévia com aceleração por toques consecutivos (`<= 500 ms`: toques 1–3 = `10 s`, 4–8 = `30 s`, 9–15 = `60 s`, 16+ = `5 min`, limitado a `10%` da duração), exibindo a bolha `#osd-seek-bubble` (`"1:23:40  (+5:00)"`) sem chamar `renderOsd()`. O seek é efetivado após `700 ms` sem novos toques ou imediatamente com `OK`; pressionar `Voltar` durante a prévia cancela o scrub sem sair do player.
+   - Os botões `"Voltar"` / `"Avançar"` do deck e as teclas `REWIND` / `FAST_FORWARD` passam a usar a mesma aceleração progressiva em VOD, e um ticker leve de `1 s` mantém o tempo decorrido e a barra atualizados enquanto o OSD está visível.
+4. **Retomada automática (Resume)**:
+   - Verificado em `js/player/player-core.js` (linhas 579–584, 657–659 e 719) que a retomada automática a partir de `watchProgress[item.id].position` já estava implementada tanto para ExoPlayer (`startPositionMs`) quanto para `<video>` HTML5 (`currentTime`), permanecendo intocada.
+
+### Arquivos Alterados
+- `app/src/main/assets/app/js/player/player-core.js`
+- `app/src/main/assets/app/js/player/osd.js`
+- `app/src/main/assets/app/js/core/router.js`
+- `app/src/main/assets/app/js/ui/app-ui.js`
+- `app/src/main/assets/app/css/screens.css`
+- `RELATORIO-DE-BUGS.md`
+
+### Como testar na TV física
+1. Abrir um episódio de série com mais de 5 minutos, focar na barra de tempo (`CIMA` a partir do deck), segurar `DIREITA` para ver a bolha de tempo acelerar (`+10s`, `+30s`, `+1:00`, `+5:00`) e aguardar `700 ms` (ou apertar `OK`) para pular até os `30 s` finais.
+2. Confirmar que o banner `"Próximo episódio: ..."` aparece com `"Assistir agora"` e `"Dispensar"`, sem contagem regressiva e com o vídeo continuando a tocar.
+3. No deck do player, abrir `"Episódios"`, trocar de temporada com `ESQUERDA`/`DIREITA`, rolar episódios com `CIMA`/`BAIXO`, pressionar `Voltar` para fechar apenas a gaveta e testar `"Ep. anterior"` / `"Próx. ep."`.

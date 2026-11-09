@@ -20,6 +20,18 @@
   animation: screenSlideBack var(--dur-base) var(--ease-out) both;
 }
 
+/* Re-render na mesma rota (rolagem de janela virtual, troca de filtro ou temporada): não repete entrada da tela */
+.screen-in-place {
+  animation: none;
+}
+
+.screen-in-place .detail-poster-card,
+.screen-in-place .detail-stagger,
+.screen-in-place .home-row-section,
+.screen-in-place .home-banner {
+  animation: none !important;
+}
+
 @keyframes screenSlideForward {
   from {
     opacity: 0;
@@ -832,8 +844,7 @@
   justify-content: space-between;
   padding: 0 24px 0 10px;
   margin-bottom: 10px;
-  content-visibility: auto;
-  contain-intrinsic-size: 1668px 108px;
+  contain: layout paint;
 }
 
 .episode-row.is-focused {
@@ -1053,6 +1064,57 @@
 
 .osd-timeline-row.is-focused .osd-seek-thumb {
   transform: scale(1);
+}
+
+.osd-seek-bubble {
+  position: absolute;
+  bottom: 24px;
+  transform: translateX(-50%);
+  background: var(--bg-modal);
+  border: 2px solid var(--accent);
+  color: var(--text);
+  font-size: var(--fs-min);
+  font-weight: var(--fw-bold);
+  font-variant-numeric: tabular-nums;
+  padding: 6px 14px;
+  border-radius: 10px;
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 6;
+}
+
+.osd-ep-drawer {
+  margin-bottom: 16px;
+  padding: 20px 24px;
+  background: var(--bg-panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.osd-ep-row {
+  height: 68px;
+  border-radius: 12px;
+  background: var(--bg-elevated);
+  border: var(--focus-border-w) solid transparent;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 20px;
+  margin-bottom: 8px;
+  font-size: var(--fs-2);
+  color: var(--text);
+  contain: layout paint;
+}
+
+.osd-ep-row.is-current {
+  background: var(--sel-bg);
+  border-left: 6px solid var(--accent);
+}
+
+.osd-ep-row.is-focused {
+  border-color: var(--accent) !important;
+  background: var(--bg-elevated);
+  transform: scale(var(--focus-scale-row));
 }
 
 .osd-square-deck {

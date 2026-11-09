@@ -29,6 +29,7 @@
   var GLOBAL_FALLBACK_BUDGET_MS = 45000;
   var WATCHDOG_LIVE_MS = 20000;
   var WATCHDOG_VOD_MS = 30000;
+  var NEXT_EP_OFFER_SECS = 30;
 
   var state = STATES.IDLE;
   var currentItem = null;
@@ -37,8 +38,11 @@
   var fallbackIndex = 0;
   var connectTimeout = null;
   var progressSaveInterval = null;
+  var nextEpOfferTicker = null;
   var watchdogTimer = null;
   var nextEpCountdownTimer = null;
+  var offeredEpisodeId = null;
+  var dismissedNextEpForId = null;
   var openStartTime = 0;
   var stepStartTime = 0;
   var lastProgressAdvanceAt = 0;
@@ -108,6 +112,7 @@
   function clearTimers() {
     if (connectTimeout) { clearTimeout(connectTimeout); connectTimeout = null; }
     if (progressSaveInterval) { clearInterval(progressSaveInterval); progressSaveInterval = null; }
+    if (nextEpOfferTicker) { clearInterval(nextEpOfferTicker); nextEpOfferTicker = null; }
     if (watchdogTimer) { clearInterval(watchdogTimer); watchdogTimer = null; }
   }
 
@@ -445,45 +450,216 @@
     if (global.LuminaStorage) global.LuminaStorage.saveMeta('watchProgress', prog);
   }
 
-  function findNextEpisodeFor(epItem) {
-    if (!epItem || (epItem.kind !== 'episode' && epItem.kind !== 'series') || !epItem.seriesKey) return null;
+  function markCurrentEpisodeCompleted() {
+    if (!currentItem || currentItem.kind === 'live') return;
+    var st = global.LuminaPlayback ? global.LuminaPlayback.getState() : { duration: 0 };
+    var dur = st.duration || currentItem.durationSecs || 0;
+    var prog = (global.LuminaStore && global.LuminaStore.get('watchProgress')) || {};
+    prog[currentItem.id] = {
+      position: 0,
+      duration: dur,
+      percent: 100,
+      completed: true,
+      updatedAt: Date.now()
+    };
+    if (global.LuminaStore) global.LuminaStore.set('watchProgress', prog);
+    if (global.LuminaStorage) global.LuminaStorage.saveMeta('watchProgress', prog);
+  }
+
+  function dismissNextEpisodeOffer() {
+    if (currentItem) {
+      dismissedNextEpForId = currentItem.id;
+    }
+    cancelNextEpisodePrompt();
+    if (global.LuminaEventBus) {
+      global.LuminaEventBus.emit('player:next-ep-tick', null);
+    }
+  }
+
+  function getEpisodeContext(epItem) {
+    var target = epItem || currentItem;
+    if (!target || (target.kind !== 'episode' && target.kind !== 'series')) {
+      return null;
+    }
     var shows = [].concat(
       (global.LuminaStore && global.LuminaStore.get('seriesList')) || [],
       (global.LuminaStore && global.LuminaStore.get('novelasList')) || []
     );
     var targetShow = null;
-    for (var i = 0; i < shows.length; i++) {
-      if (shows[i].seriesKey === epItem.seriesKey) {
-        targetShow = shows[i];
+    var sKey = target.seriesKey || '';
+
+    if (sKey) {
+      for (var i = 0; i < shows.length; i++) {
+        if (shows[i].id === sKey || (shows[i].seriesKey && shows[i].seriesKey === sKey)) {
+          targetShow = shows[i];
+          break;
+        }
+      }
+    }
+
+    if (!targetShow) {
+      for (var j = 0; j < shows.length; j++) {
+        var sh = shows[j];
+        var shSeasons = sh.seasons || [];
+        for (var s = 0; s < shSeasons.length; s++) {
+          var eps = shSeasons[s].episodes || [];
+          for (var e = 0; e < eps.length; e++) {
+            if (eps[e].id === target.id) {
+              targetShow = sh;
+              break;
+            }
+          }
+          if (targetShow) break;
+        }
+        if (targetShow) break;
+      }
+    }
+
+    if (!targetShow && target.seriesTitle) {
+      var normTitle = String(target.seriesTitle).toLowerCase().trim();
+      for (var m = 0; m < shows.length; m++) {
+        if (String(shows[m].cleanTitle || '').toLowerCase().trim() === normTitle) {
+          targetShow = shows[m];
+          break;
+        }
+      }
+    }
+
+    if (!targetShow) {
+      return {
+        show: null,
+        seasons: [],
+        flatEpisodes: [],
+        currentIndex: -1,
+        prevEpisode: null,
+        nextEpisode: null,
+        needsLazyLoad: false
+      };
+    }
+
+    var seasons = targetShow.seasons || [];
+    var flat = [];
+    for (var si = 0; si < seasons.length; si++) {
+      var sEps = seasons[si].episodes || [];
+      for (var ei = 0; ei < sEps.length; ei++) {
+        flat.push(sEps[ei]);
+      }
+    }
+
+    var curIdx = -1;
+    for (var k = 0; k < flat.length; k++) {
+      if (flat[k].id === target.id) {
+        curIdx = k;
         break;
       }
     }
-    if (!targetShow || !targetShow.seasons) return null;
-    var flat = [];
-    for (var s = 0; s < targetShow.seasons.length; s++) {
-      var eps = targetShow.seasons[s].episodes || [];
-      for (var e = 0; e < eps.length; e++) flat.push(eps[e]);
-    }
-    for (var k = 0; k < flat.length; k++) {
-      if (flat[k].id === epItem.id && k + 1 < flat.length) {
-        return flat[k + 1];
+    if (curIdx === -1 && flat.length && target.season && target.episode) {
+      for (var k2 = 0; k2 < flat.length; k2++) {
+        if (Number(flat[k2].season || 1) === Number(target.season) && Number(flat[k2].episode || 1) === Number(target.episode)) {
+          curIdx = k2;
+          break;
+        }
       }
     }
-    return null;
+
+    var needsLazy = !!(targetShow.needsSeriesInfo || (!seasons.length && targetShow.xtreamSeriesId));
+
+    return {
+      show: targetShow,
+      seasons: seasons,
+      flatEpisodes: flat,
+      currentIndex: curIdx,
+      prevEpisode: (curIdx > 0) ? flat[curIdx - 1] : null,
+      nextEpisode: (curIdx >= 0 && curIdx + 1 < flat.length) ? flat[curIdx + 1] : null,
+      needsLazyLoad: needsLazy
+    };
+  }
+
+  function loadEpisodeListForCurrent(callback) {
+    var ctx = getEpisodeContext(currentItem);
+    if (!ctx || !ctx.show) {
+      if (callback) callback(new Error('Série não encontrada no catálogo.'));
+      return;
+    }
+    if (!ctx.needsLazyLoad && ctx.seasons && ctx.seasons.length) {
+      if (callback) callback(null, getEpisodeContext(currentItem));
+      return;
+    }
+    if (!global.LuminaXtream || typeof global.LuminaXtream.fetchSeriesInfo !== 'function') {
+      if (callback) callback(new Error('Cliente Xtream indisponível para carregar episódios.'));
+      return;
+    }
+    var creds = global.LuminaStore ? global.LuminaStore.get('xtreamCreds') : null;
+    global.LuminaXtream.fetchSeriesInfo(creds, ctx.show, function (err) {
+      if (err) {
+        if (callback) callback(err);
+        return;
+      }
+      if (global.LuminaEventBus) {
+        global.LuminaEventBus.emit('player:episodes-loaded', ctx.show);
+      }
+      if (callback) callback(null, getEpisodeContext(currentItem));
+    });
+  }
+
+  function findNextEpisodeFor(epItem) {
+    var ctx = getEpisodeContext(epItem);
+    return ctx ? ctx.nextEpisode : null;
+  }
+
+  function checkNextEpisodeOfferTick() {
+    if (!currentItem || (currentItem.kind !== 'episode' && currentItem.kind !== 'series')) return;
+    if (!global.LuminaPlayback || !global.LuminaStore) return;
+    var pb = global.LuminaPlayback.getState();
+    var pos = Number(pb.currentTime || 0);
+    var dur = Number(pb.duration || 0);
+    var curPrompt = global.LuminaStore.get('nextEpisodePrompt');
+
+    if (curPrompt && curPrompt.mode === 'offer') {
+      if (dur > 0 && (dur - pos) > (NEXT_EP_OFFER_SECS + 5)) {
+        offeredEpisodeId = null;
+        global.LuminaStore.set('nextEpisodePrompt', null);
+        if (global.LuminaEventBus) global.LuminaEventBus.emit('player:next-ep-tick', null);
+      }
+      return;
+    }
+
+    if (state !== STATES.PLAYING) return;
+    if (dur < 300 || pos <= 0) return;
+    var remaining = dur - pos;
+    if (remaining <= 0 || remaining > NEXT_EP_OFFER_SECS) return;
+    if (offeredEpisodeId === currentItem.id || dismissedNextEpForId === currentItem.id) return;
+    if (curPrompt) return;
+
+    var nextEp = findNextEpisodeFor(currentItem);
+    if (!nextEp) return;
+
+    offeredEpisodeId = currentItem.id;
+    var offerPrompt = {
+      nextEpisode: nextEp,
+      mode: 'offer',
+      secondsLeft: 0
+    };
+    global.LuminaStore.set('nextEpisodePrompt', offerPrompt);
+    if (global.LuminaEventBus) {
+      global.LuminaEventBus.emit('player:next-ep-tick', offerPrompt);
+    }
   }
 
   function triggerNextEpisodeFlow(finishedItem) {
+    if (finishedItem && dismissedNextEpForId === finishedItem.id) return;
     var nextEp = findNextEpisodeFor(finishedItem);
     if (!nextEp) return;
     cancelNextEpisodePrompt();
     var secLeft = 5;
-    global.LuminaStore.set('nextEpisodePrompt', { nextEpisode: nextEp, secondsLeft: secLeft });
-    global.LuminaEventBus.emit('player:next-ep-tick', { nextEpisode: nextEp, secondsLeft: secLeft });
+    var promptObj = { nextEpisode: nextEp, mode: 'countdown', secondsLeft: secLeft };
+    global.LuminaStore.set('nextEpisodePrompt', promptObj);
+    global.LuminaEventBus.emit('player:next-ep-tick', promptObj);
 
     nextEpCountdownTimer = setInterval(function () {
       secLeft--;
       var currentPrompt = global.LuminaStore.get('nextEpisodePrompt');
-      if (!currentPrompt) {
+      if (!currentPrompt || currentPrompt.mode !== 'countdown') {
         clearInterval(nextEpCountdownTimer);
         nextEpCountdownTimer = null;
         return;
@@ -492,8 +668,9 @@
         cancelNextEpisodePrompt();
         open(nextEp);
       } else {
-        global.LuminaStore.set('nextEpisodePrompt', { nextEpisode: nextEp, secondsLeft: secLeft });
-        global.LuminaEventBus.emit('player:next-ep-tick', { nextEpisode: nextEp, secondsLeft: secLeft });
+        var nextObj = { nextEpisode: nextEp, mode: 'countdown', secondsLeft: secLeft };
+        global.LuminaStore.set('nextEpisodePrompt', nextObj);
+        global.LuminaEventBus.emit('player:next-ep-tick', nextObj);
       }
     }, 1000);
   }
@@ -689,6 +866,8 @@
         if (!isLive) {
           if (progressSaveInterval) clearInterval(progressSaveInterval);
           progressSaveInterval = setInterval(saveCurrentWatchProgress, 5000);
+          if (nextEpOfferTicker) clearInterval(nextEpOfferTicker);
+          nextEpOfferTicker = setInterval(checkNextEpisodeOfferTick, 1000);
         }
       },
       onPaused: function () {
@@ -910,10 +1089,19 @@
     }
 
     currentItem = item;
+    offeredEpisodeId = null;
+    dismissedNextEpForId = null;
     openStartTime = Date.now();
     currentUaFallbackIdx = -1;
     currentStepServerRetried = false;
     currentStepWatchdogRetried = false;
+
+    if (item.kind === 'episode' || item.kind === 'series') {
+      var epCtxInit = getEpisodeContext(item);
+      if (epCtxInit && epCtxInit.needsLazyLoad) {
+        loadEpisodeListForCurrent();
+      }
+    }
 
     var stage = (typeof document !== 'undefined') ? document.getElementById('video-stage') : null;
     if (stage) stage.classList.add('is-active');
@@ -928,6 +1116,8 @@
   }
 
   function stop() {
+    offeredEpisodeId = null;
+    dismissedNextEpForId = null;
     cancelNextEpisodePrompt();
     saveCurrentWatchProgress();
     destroyEngine();
@@ -953,6 +1143,7 @@
     if (!currentItem || currentItem.kind === 'live' || !global.LuminaPlayback) return;
     global.LuminaPlayback.seekBy(deltaSec);
     saveCurrentWatchProgress();
+    checkNextEpisodeOfferTick();
   }
 
   function switchEngine() {
@@ -1020,6 +1211,7 @@
 
   var api = {
     STATES: STATES,
+    NEXT_EP_OFFER_SECS: NEXT_EP_OFFER_SECS,
     mapFriendlyErrorMessage: mapFriendlyErrorMessage,
     DEFAULT_USER_AGENT: DEFAULT_USER_AGENT,
     ALT_USER_AGENTS: ALT_USER_AGENTS,
@@ -1049,6 +1241,12 @@
     zapPrev: function () { zapChannel(-1); },
     zapLastChannel: zapLastChannel,
     cancelNextEpisode: cancelNextEpisodePrompt,
+    dismissNextEpisodeOffer: dismissNextEpisodeOffer,
+    markCurrentEpisodeCompleted: markCurrentEpisodeCompleted,
+    getEpisodeContext: getEpisodeContext,
+    loadEpisodeListForCurrent: loadEpisodeListForCurrent,
+    saveProgress: saveCurrentWatchProgress,
+    checkNextEpisodeOfferTick: checkNextEpisodeOfferTick,
     getCurrentItem: function () { return currentItem; },
     getState: function () { return state; },
     getVideoElement: function () { return global.LuminaPlayback ? global.LuminaPlayback.getVideoElement() : null; },

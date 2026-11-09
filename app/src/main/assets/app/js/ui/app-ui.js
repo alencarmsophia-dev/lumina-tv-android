@@ -97,6 +97,11 @@
   var sideMenuOpen = false;
   var lastFocusedBeforeMenuId = null;
   var lastRouteRendered = null;
+  var isCurrentRenderRouteChange = true;
+  var pendingWindowShift = null; // { vlist: string, dir: 'UP' | 'DOWN' }
+  var loadedImageUrls = {};
+  var loadedImageCount = 0;
+  var MAX_LOADED_IMAGE_CACHE = 2500;
 
   var bootCompleted = false;
   var introAnimationFinished = false;
@@ -799,18 +804,74 @@
     }, 30000);
   }
 
+  function markImageUrlLoaded(url) {
+    if (!url) return;
+    if (!loadedImageUrls[url]) {
+      if (loadedImageCount >= MAX_LOADED_IMAGE_CACHE) {
+        loadedImageUrls = {};
+        loadedImageCount = 0;
+      }
+      loadedImageUrls[url] = true;
+      loadedImageCount++;
+    }
+  }
+
+  global.__luminaImgLoaded = function (imgEl) {
+    if (!imgEl) return;
+    if (imgEl.classList) imgEl.classList.add('is-loaded');
+    var src = (imgEl.getAttribute && imgEl.getAttribute('src')) || imgEl.src;
+    if (src) markImageUrlLoaded(src);
+  };
+
+  function renderLazyImgTag(url, baseClass, extraStyle) {
+    if (!url) return '';
+    var alreadyLoaded = !!loadedImageUrls[url];
+    var cls = baseClass + ' lazy-fade' + (alreadyLoaded ? ' is-loaded' : '');
+    var loadMode = alreadyLoaded ? 'eager' : 'lazy';
+    var styleAttr = extraStyle ? (' style="' + extraStyle + '"') : '';
+    return '<img class="' + cls + '" src="' + escAttr(url) + '" alt="" loading="' + loadMode + '" decoding="async"' + styleAttr + ' onload="window.__luminaImgLoaded(this)" onerror="this.style.display=\'none\'">';
+  }
+
+  function syncLoadedImagesInViewport(container) {
+    if (!container || !container.querySelectorAll) return;
+    var imgs = container.querySelectorAll('img.lazy-fade');
+    for (var i = 0; i < imgs.length; i++) {
+      var img = imgs[i];
+      var src = (img.getAttribute && img.getAttribute('src')) || img.src;
+      if ((src && loadedImageUrls[src]) || (img.complete && img.naturalWidth > 0)) {
+        img.classList.add('is-loaded');
+        if (src) markImageUrlLoaded(src);
+      }
+    }
+  }
+
   function getScreenEnterClass() {
+    if (!isCurrentRenderRouteChange) {
+      return 'screen-in-place';
+    }
     var dir = global.LuminaStore ? global.LuminaStore.get('navDirection') : 'forward';
     return dir === 'back' ? 'screen-enter-back' : 'screen-enter-forward';
+  }
+
+  function getVirtualRowEnterClass(vlistName, slotIndex, visibleCount, isGrid, colsPerRow) {
+    if (!pendingWindowShift || pendingWindowShift.vlist !== vlistName) return '';
+    var dir = pendingWindowShift.dir;
+    if (isGrid) {
+      var cols = colsPerRow || POSTER_COLS;
+      if (dir === 'DOWN' && slotIndex >= Math.max(cols, visibleCount - cols)) return ' vrow-enter-down';
+      if (dir === 'UP' && slotIndex < cols) return ' vrow-enter-up';
+      return '';
+    }
+    if (dir === 'DOWN' && slotIndex === visibleCount - 1) return ' vrow-enter-down';
+    if (dir === 'UP' && slotIndex === 0) return ' vrow-enter-up';
+    return '';
   }
 
   function renderHomeTile(item, tileId, progressPct, actionAttr, isLeadContinue) {
     var grad = getTitleGradient(item.cleanTitle);
     var motifSvg = generateDeterministicArtSvg(item.cleanTitle);
     var mono = escHtml(getMonogram(item.cleanTitle));
-    var imgTag = item.logo
-      ? '<img class="home-tile-img lazy-fade" src="' + escAttr(item.logo) + '" alt="" loading="lazy" decoding="async" onload="this.classList.add(\'is-loaded\')" onerror="this.style.display=\'none\'">'
-      : '';
+    var imgTag = renderLazyImgTag(item.logo, 'home-tile-img');
     var progHtml = (typeof progressPct === 'number' && progressPct > 0)
       ? '<div class="progress-track"><b class="progress-fill" style="width:' + Math.min(100, Math.round(progressPct)) + '%"></b></div>'
       : '';
@@ -930,9 +991,7 @@
 
     var heroGrad = getTitleGradient(hero.cleanTitle);
     var heroMotif = generateDeterministicArtSvg(hero.cleanTitle);
-    var bannerImg = hero.logo
-      ? '<img class="home-banner-art lazy-fade" src="' + escAttr(hero.logo) + '" alt="" loading="lazy" decoding="async" onload="this.classList.add(\'is-loaded\')" onerror="this.style.display=\'none\'">'
-      : '';
+    var bannerImg = renderLazyImgTag(hero.logo, 'home-banner-art');
 
     var html =
       '<div class="' + enterCls + '">' +
@@ -1108,12 +1167,14 @@
 
     var catHtml = '';
     var catEnd = Math.min(categories.length, liveCatWindowStart + LIVE_CAT_WIN_SIZE);
+    var catVisCount = catEnd - liveCatWindowStart;
     for (var k = liveCatWindowStart; k < catEnd; k++) {
       var cat = categories[k];
       var slotIdx = k - liveCatWindowStart;
       var selCls = (cat.name === selectedLiveCat) ? ' is-selected' : '';
+      var catEnterCls = getVirtualRowEnterClass('live-cats', slotIdx, catVisCount, false, 1);
       catHtml +=
-        '<div id="live-cat-slot-' + slotIdx + '" class="cat-row focusable' + selCls + '" ' +
+        '<div id="live-cat-slot-' + slotIdx + '" class="cat-row focusable' + selCls + catEnterCls + '" ' +
              'data-col="live-cats" data-vlist="live-cats" data-vindex="' + k + '" data-vtotal="' + categories.length + '" ' +
              'data-cat-name="' + escAttr(cat.name) + '" data-scope="live">' +
           '<span class="cat-row-title">' + escHtml(cat.name) + '</span>' +
@@ -1127,6 +1188,7 @@
 
     var chHtml = '';
     var chEnd = Math.min(filtered.length, liveChWindowStart + LIVE_CH_WIN_SIZE);
+    var chVisCount = chEnd - liveChWindowStart;
     for (var j = liveChWindowStart; j < chEnd; j++) {
       var item = filtered[j];
       var chSlot = j - liveChWindowStart;
@@ -1135,9 +1197,10 @@
       var starHtml = isFav
         ? '<span class="channel-star"><svg class="i" viewBox="0 0 24 24"><use href="#icon-star"/></svg></span>'
         : '';
+      var chEnterCls = getVirtualRowEnterClass('live-channels', chSlot, chVisCount, false, 1);
 
       chHtml +=
-        '<div id="live-ch-slot-' + chSlot + '" class="channel-row focusable" ' +
+        '<div id="live-ch-slot-' + chSlot + '" class="channel-row focusable' + chEnterCls + '" ' +
              'data-col="live-list" data-vlist="live-channels" data-vindex="' + j + '" data-vtotal="' + filtered.length + '" ' +
              'data-channel-id="' + escAttr(item.id) + '" data-scope="live">' +
           '<span class="channel-num">#' + Number(item.channelNumber || (j + 1)) + '</span>' +
@@ -1159,7 +1222,7 @@
     var isPreviewFav = activeCh ? global.LuminaStore.isFavorite(activeCh.id) : false;
 
     viewport.innerHTML =
-      '<div class="screen-enter">' +
+      '<div class="' + getScreenEnterClass() + '">' +
         '<div class="screen-head">' +
           '<div class="screen-head-left"><h1>Canais</h1><span class="screen-count">' + fmtCountPt(filtered.length) + ' canais</span></div>' +
         '</div>' +
@@ -1176,7 +1239,7 @@
             (activeCh ? (
               '<div>' +
                 '<div class="live-preview-stage" style="background:' + getTitleGradient(activeCh.cleanTitle) + ';">' +
-                  (activeCh.logo ? '<img class="poster-img" src="' + escAttr(activeCh.logo) + '" alt="" loading="lazy" decoding="async" style="object-fit:contain;padding:24px;" onerror="this.style.display=\'none\'">' : '') +
+                  (activeCh.logo ? renderLazyImgTag(activeCh.logo, 'poster-img', 'object-fit:contain;padding:24px;') : '') +
                   '<div class="live-preview-play-icon"><svg viewBox="0 0 24 24"><use href="#icon-play"/></svg></div>' +
                 '</div>' +
                 '<div class="live-preview-title">' + escHtml(activeCh.cleanTitle) + '</div>' +
@@ -1215,18 +1278,21 @@
     return out;
   }
 
-  function renderPosterCard(item, slotId, sectionKey, vIndex, vTotal) {
+  function renderPosterCard(item, slotId, sectionKey, vIndex, vTotal, extraCls) {
     var grad = getTitleGradient(item.cleanTitle);
     var mono = escHtml(getMonogram(item.cleanTitle));
     var recentMap = global.LuminaStore.get('recentAddedIds') || {};
     var isNew = !!recentMap[item.id] || (Number(item.year || 0) >= 2024);
     var ratingStr = fmtRatingPt(item.rating);
     var isShow = (item.kind === 'series-show' || item.kind === 'novela-show');
+    var isLive = (item.kind === 'live');
 
     var subLine = '';
     if (isShow) {
       var sCount = (item.seasons && item.seasons.length) ? item.seasons.length : 1;
       subLine = sCount + (sCount === 1 ? ' temporada' : ' temporadas');
+    } else if (isLive) {
+      subLine = 'Ao vivo · ' + String(item.groupDisplay || item.groupOriginal || 'Canal');
     } else {
       var yr = item.year || 2024;
       var catLabel = String(item.groupDisplay || item.groupOriginal || 'Filme').replace(/^Filmes\s*\|\s*/i, '');
@@ -1234,15 +1300,16 @@
     }
 
     var motifSvg = generateDeterministicArtSvg(item.cleanTitle);
-    var imgTag = item.logo
-      ? '<img class="poster-img lazy-fade" src="' + escAttr(item.logo) + '" alt="" loading="lazy" decoding="async" onload="this.classList.add(\'is-loaded\')" onerror="this.style.display=\'none\'">'
-      : '';
+    var imgTag = renderLazyImgTag(item.logo, 'poster-img');
+    var itemActionAttr = isLive
+      ? ('data-play-id="' + escAttr(item.id) + '"')
+      : ('data-detail-id="' + escAttr(item.id) + '"');
 
     return (
-      '<div id="' + escAttr(slotId) + '" class="poster-card focusable" ' +
+      '<div id="' + escAttr(slotId) + '" class="poster-card focusable' + (extraCls || '') + '" ' +
            'data-col="catalog-grid" data-grid-col="' + (vIndex % POSTER_COLS) + '" ' +
            'data-vlist="poster-' + escAttr(sectionKey) + '" data-vindex="' + vIndex + '" data-vtotal="' + vTotal + '" ' +
-           'data-detail-id="' + escAttr(item.id) + '" data-scope="' + escAttr(sectionKey) + '">' +
+           itemActionAttr + ' data-scope="' + escAttr(sectionKey) + '">' +
         '<div class="card-focus-sheen"></div>' +
         (isNew ? '<span class="badge-new">NOVO</span>' : '') +
         (ratingStr ? '<span class="badge-rate">\u2605 ' + escHtml(ratingStr) + '</span>' : '') +
@@ -1370,12 +1437,14 @@
 
     var catRowsHtml = '';
     var catEnd = Math.min(normalizedCats.length, catWinStart + FILTER_CAT_WIN_SIZE);
+    var fcVisCount = catEnd - catWinStart;
     for (var k = catWinStart; k < catEnd; k++) {
       var cat = normalizedCats[k];
       var catSlot = k - catWinStart;
       var isSel = (cat.name === activeCat) ? ' is-selected' : '';
+      var fcEnterCls = getVirtualRowEnterClass('filter-cats-' + effectiveType, catSlot, fcVisCount, false, 1);
       catRowsHtml +=
-        '<div id="flt-cat-slot-' + catSlot + '" class="cat-row focusable' + isSel + '" ' +
+        '<div id="flt-cat-slot-' + catSlot + '" class="cat-row focusable' + isSel + fcEnterCls + '" ' +
              'data-col="filter-col" data-vlist="filter-cats-' + escAttr(effectiveType) + '" data-vindex="' + k + '" data-vtotal="' + normalizedCats.length + '" ' +
              'data-cat-section="' + escAttr(effectiveType) + '" data-cat-val="' + escAttr(cat.name) + '" data-scope="' + escAttr(routeType) + '">' +
           '<span class="cat-row-title">' + escHtml(cat.name) + '</span>' +
@@ -1385,14 +1454,16 @@
 
     var cardsHtml = '';
     var winEnd = Math.min(filtered.length, winStart + POSTER_WIN_SIZE);
+    var pVisCount = winEnd - winStart;
     for (var j = winStart; j < winEnd; j++) {
       var item = filtered[j];
       var slot = j - winStart;
-      cardsHtml += renderPosterCard(item, 'poster-' + routeType + '-slot-' + slot, routeType, j, filtered.length);
+      var cardEnterCls = getVirtualRowEnterClass('poster-' + routeType, slot, pVisCount, true, POSTER_COLS);
+      cardsHtml += renderPosterCard(item, 'poster-' + routeType + '-slot-' + slot, routeType, j, filtered.length, cardEnterCls);
     }
 
     viewport.innerHTML =
-      '<div class="screen-enter">' +
+      '<div class="' + getScreenEnterClass() + '">' +
         '<div class="screen-head">' +
           '<div class="screen-head-left">' +
             '<h1>' + escHtml(screenTitle) + '</h1>' +
@@ -1433,12 +1504,10 @@
     var enterCls = getScreenEnterClass();
 
     var backdropHtml = item.logo
-      ? '<img class="detail-backdrop-img lazy-fade" src="' + escAttr(item.logo) + '" alt="" loading="lazy" decoding="async" onload="this.classList.add(\'is-loaded\')" onerror="this.style.display=\'none\'">'
+      ? renderLazyImgTag(item.logo, 'detail-backdrop-img')
       : '<div class="detail-backdrop-generated" style="background:' + grad + ';">' + motifSvg + '</div>';
 
-    var posterImgHtml = item.logo
-      ? '<img class="poster-img lazy-fade" src="' + escAttr(item.logo) + '" alt="" loading="lazy" decoding="async" onload="this.classList.add(\'is-loaded\')" onerror="this.style.display=\'none\'">'
-      : '';
+    var posterImgHtml = renderLazyImgTag(item.logo, 'poster-img');
 
     var ratingStr = fmtRatingPt(item.rating) || '8,4';
     var ageBadgeText = item.adult ? '18' : (item.ageRating || '14');
@@ -1589,15 +1658,15 @@
       }
     }
 
+    var epVisCount = epEnd - detailEpWindowStart;
     for (var e = detailEpWindowStart; e < epEnd; e++) {
       var ep = activeEpisodes[e];
       var epSlot = e - detailEpWindowStart;
       var epProg = progMap[ep.id] || { percent: 0, completed: false };
       var epGrad = getTitleGradient(ep.cleanTitle || item.cleanTitle);
       var epMotif = generateDeterministicArtSvg(ep.cleanTitle || item.cleanTitle);
-      var epThumbImg = (ep.logo || item.logo)
-        ? '<img class="poster-img lazy-fade" src="' + escAttr(ep.logo || item.logo) + '" alt="" loading="lazy" decoding="async" onload="this.classList.add(\'is-loaded\')" onerror="this.style.display=\'none\'">'
-        : '';
+      var epThumbImg = renderLazyImgTag(ep.logo || item.logo, 'poster-img');
+      var epEnterCls = getVirtualRowEnterClass('detail-episodes', epSlot, epVisCount, false, 1);
       var epDur = formatDurationHuman(ep.durationSecs || 2700);
 
       var stateHtml = '<span style="font-size:22px;font-weight:700;color:var(--text);">Assistir</span>';
@@ -1614,7 +1683,7 @@
       }
 
       epRows +=
-        '<div id="ep-row-slot-' + epSlot + '" class="episode-row focusable" ' +
+        '<div id="ep-row-slot-' + epSlot + '" class="episode-row focusable' + epEnterCls + '" ' +
              'data-vlist="detail-episodes" data-vindex="' + e + '" data-vtotal="' + activeEpisodes.length + '" ' +
              'data-play-ep="' + escAttr(ep.id) + '" data-scope="detail">' +
           '<div style="display:flex;align-items:center;min-width:0;flex:1;">' +
@@ -1723,7 +1792,7 @@
     }
 
     viewport.innerHTML =
-      '<div class="screen-enter">' +
+      '<div class="' + getScreenEnterClass() + '">' +
         '<div class="screen-head">' +
           '<div class="screen-head-left"><h1>Busca</h1><span class="screen-count">' + fmtCountPt(results.total) + ' resultados</span></div>' +
         '</div>' +
@@ -1763,14 +1832,16 @@
 
     var cardsHtml = '';
     var end = Math.min(favs.length, favWindowStart + POSTER_WIN_SIZE);
+    var favVisCount = end - favWindowStart;
     for (var j = favWindowStart; j < end; j++) {
       var item = favs[j];
       var slot = j - favWindowStart;
-      cardsHtml += renderPosterCard(item, 'fav-slot-' + slot, 'favorites', j, favs.length);
+      var favEnterCls = getVirtualRowEnterClass('poster-favorites', slot, favVisCount, true, 5);
+      cardsHtml += renderPosterCard(item, 'fav-slot-' + slot, 'favorites', j, favs.length, favEnterCls);
     }
 
     viewport.innerHTML =
-      '<div class="screen-enter">' +
+      '<div class="' + getScreenEnterClass() + '">' +
         '<div class="screen-head">' +
           '<div class="screen-head-left"><h1>Favoritos</h1><span class="screen-count">' + fmtCountPt(favs.length) + ' títulos</span></div>' +
         '</div>' +
@@ -1850,7 +1921,7 @@
         return;
       }
       viewport.innerHTML =
-        '<div class="screen-enter">' +
+        '<div class="' + getScreenEnterClass() + '">' +
           '<div class="screen-head"><div class="screen-head-left"><h1>Pareamento pelo celular</h1></div></div>' +
           '<div class="settings-panel" style="height:auto;">' +
             '<div class="settings-panel-title">' + escHtml(pairErr ? 'Não foi possível concluir' : 'Gerando código de pareamento...') + '</div>' +
@@ -1869,7 +1940,7 @@
     var qrSvg = global.LuminaPairing.renderQrSvg(baseUrl + '/#' + code, 6);
 
     viewport.innerHTML =
-      '<div class="screen-enter">' +
+      '<div class="' + getScreenEnterClass() + '">' +
         '<div class="screen-head"><div class="screen-head-left"><h1>Pareamento pelo celular</h1></div></div>' +
         '<div class="settings-panel" style="flex-direction:row;align-items:center;justify-content:space-between;height:auto;padding:44px 52px;">' +
           '<div style="max-width:960px;">' +
@@ -2390,14 +2461,16 @@
       var targetLabels = { 'live': 'Canais', 'movie': 'Filmes', 'series': 'Séries', 'novela': 'Novelas', 'hidden': 'Oculto' };
       var gRows = '';
       var gEnd = Math.min(allGroups.length, orgGroupWindowStart + ORG_GROUP_WIN_SIZE);
+      var gVisCount = gEnd - orgGroupWindowStart;
       for (var gIdx = orgGroupWindowStart; gIdx < gEnd; gIdx++) {
         var grp = allGroups[gIdx];
         var slot = gIdx - orgGroupWindowStart;
         var curRule = (profile.mode === 'all_live')
           ? 'live'
           : ((profile.customGroupRules && profile.customGroupRules[grp.originalName]) || grp.suggested || 'live');
+        var orgEnterCls = getVirtualRowEnterClass('org-groups', slot, gVisCount, false, 1);
         gRows +=
-          '<div id="org-slot-' + slot + '" class="setting-row focusable" style="height:96px;" ' +
+          '<div id="org-slot-' + slot + '" class="setting-row focusable' + orgEnterCls + '" style="height:96px;" ' +
                'data-col="settings-panel" data-vlist="org-groups" data-vindex="' + gIdx + '" data-vtotal="' + allGroups.length + '" ' +
                'data-lr-control="org-group" data-org-group="' + escAttr(grp.originalName) + '" data-org-cur="' + escAttr(curRule) + '" data-action="cycle-org-group" data-scope="settings">' +
             '<div>' +
@@ -2524,7 +2597,7 @@
     }
 
     viewport.innerHTML =
-      '<div class="screen-enter">' +
+      '<div class="' + getScreenEnterClass() + '">' +
         '<div class="screen-head"><div class="screen-head-left"><h1>Ajustes</h1></div></div>' +
         '<div class="settings-columns">' +
           '<div class="settings-tabs-col">' + tabsHtml + '</div>' +
@@ -2549,6 +2622,14 @@
     var ctrl = focusedEl.getAttribute('data-lr-control');
     var focusId = focusedEl.id;
     var route = global.LuminaRouter.getCurrent();
+
+    if (ctrl === 'osd-seek' && global.LuminaOSD && typeof global.LuminaOSD.handleSeekKey === 'function') {
+      return global.LuminaOSD.handleSeekKey(dir);
+    }
+
+    if (ctrl === 'osd-ep-season' && global.LuminaOSD && typeof global.LuminaOSD.handleSeasonKey === 'function') {
+      return global.LuminaOSD.handleSeasonKey(dir);
+    }
 
     if (ctrl === 'safe-margin' && global.LuminaSettings && typeof global.LuminaSettings.stepSafeMargin === 'function') {
       var delta = (dir === 'RIGHT') ? 1 : -1;
@@ -2845,16 +2926,22 @@
     var vtotal = parseInt(focusedEl.getAttribute('data-vtotal') || '0', 10);
     if (!vlist || vtotal <= 0) return false;
 
+    if (vlist === 'osd-episodes' && global.LuminaOSD && typeof global.LuminaOSD.handleEpisodeBoundary === 'function') {
+      return global.LuminaOSD.handleEpisodeBoundary(focusedEl, dir);
+    }
+
     if (vlist === 'live-channels') {
       var chSlot = vindex - liveChWindowStart;
       if (dir === 'DOWN' && chSlot === LIVE_CH_WIN_SIZE - 1 && vindex + 1 < vtotal) {
         liveChWindowStart++;
+        pendingWindowShift = { vlist: 'live-channels', dir: 'DOWN' };
         renderCurrentRoute();
         global.LuminaFocus.setFocus(document.getElementById('live-ch-slot-' + (LIVE_CH_WIN_SIZE - 1)), 'live');
         return true;
       }
       if (dir === 'UP' && chSlot === 0 && liveChWindowStart > 0) {
         liveChWindowStart--;
+        pendingWindowShift = { vlist: 'live-channels', dir: 'UP' };
         renderCurrentRoute();
         global.LuminaFocus.setFocus(document.getElementById('live-ch-slot-0'), 'live');
         return true;
@@ -2863,12 +2950,14 @@
       var catSlot = vindex - liveCatWindowStart;
       if (dir === 'DOWN' && catSlot === LIVE_CAT_WIN_SIZE - 1 && vindex + 1 < vtotal) {
         liveCatWindowStart++;
+        pendingWindowShift = { vlist: 'live-cats', dir: 'DOWN' };
         renderCurrentRoute();
         global.LuminaFocus.setFocus(document.getElementById('live-cat-slot-' + (LIVE_CAT_WIN_SIZE - 1)), 'live');
         return true;
       }
       if (dir === 'UP' && catSlot === 0 && liveCatWindowStart > 0) {
         liveCatWindowStart--;
+        pendingWindowShift = { vlist: 'live-cats', dir: 'UP' };
         renderCurrentRoute();
         global.LuminaFocus.setFocus(document.getElementById('live-cat-slot-0'), 'live');
         return true;
@@ -2880,12 +2969,14 @@
       var curRoute = global.LuminaRouter.getCurrent();
       if (dir === 'DOWN' && fcSlot === FILTER_CAT_WIN_SIZE - 1 && vindex + 1 < vtotal) {
         filterCatWindowStart[effType] = fcStart + 1;
+        pendingWindowShift = { vlist: vlist, dir: 'DOWN' };
         renderCurrentRoute();
         global.LuminaFocus.setFocus(document.getElementById('flt-cat-slot-' + (FILTER_CAT_WIN_SIZE - 1)), curRoute);
         return true;
       }
       if (dir === 'UP' && fcSlot === 0 && fcStart > 0) {
         filterCatWindowStart[effType] = fcStart - 1;
+        pendingWindowShift = { vlist: vlist, dir: 'UP' };
         renderCurrentRoute();
         global.LuminaFocus.setFocus(document.getElementById('flt-cat-slot-0'), curRoute);
         return true;
@@ -2898,12 +2989,14 @@
         var fCol = fSlot % 5;
         if (dir === 'DOWN' && fSlot >= 5 && (favWindowStart + 10) < vtotal) {
           favWindowStart += 5;
+          pendingWindowShift = { vlist: 'poster-favorites', dir: 'DOWN' };
           renderCurrentRoute();
           global.LuminaFocus.setFocus(document.getElementById('fav-slot-' + Math.min(5 + fCol, vtotal - favWindowStart - 1)), 'favorites');
           return true;
         }
         if (dir === 'UP' && fSlot < 5 && favWindowStart >= 5) {
           favWindowStart = Math.max(0, favWindowStart - 5);
+          pendingWindowShift = { vlist: 'poster-favorites', dir: 'UP' };
           renderCurrentRoute();
           global.LuminaFocus.setFocus(document.getElementById('fav-slot-' + fCol), 'favorites');
           return true;
@@ -2919,6 +3012,7 @@
 
       if (dir === 'DOWN' && isBottomRow && (pStart + POSTER_WIN_SIZE) < vtotal) {
         posterWindowStart[secKey] = pStart + POSTER_COLS;
+        pendingWindowShift = { vlist: vlist, dir: 'DOWN' };
         renderCurrentRoute();
         var nextSlot = Math.min(POSTER_COLS + col, (vtotal - posterWindowStart[secKey]) - 1);
         global.LuminaFocus.setFocus(document.getElementById('poster-' + routeKey + '-slot-' + nextSlot), routeKey);
@@ -2926,6 +3020,7 @@
       }
       if (dir === 'UP' && isTopRow && pStart >= POSTER_COLS) {
         posterWindowStart[secKey] = Math.max(0, pStart - POSTER_COLS);
+        pendingWindowShift = { vlist: vlist, dir: 'UP' };
         renderCurrentRoute();
         global.LuminaFocus.setFocus(document.getElementById('poster-' + routeKey + '-slot-' + col), routeKey);
         return true;
@@ -2934,12 +3029,14 @@
       var epSlot = vindex - detailEpWindowStart;
       if (dir === 'DOWN' && epSlot === DETAIL_EP_WIN_SIZE - 1 && vindex + 1 < vtotal) {
         detailEpWindowStart++;
+        pendingWindowShift = { vlist: 'detail-episodes', dir: 'DOWN' };
         renderCurrentRoute();
         global.LuminaFocus.setFocus(document.getElementById('ep-row-slot-' + (DETAIL_EP_WIN_SIZE - 1)), 'detail');
         return true;
       }
       if (dir === 'UP' && epSlot === 0 && detailEpWindowStart > 0) {
         detailEpWindowStart--;
+        pendingWindowShift = { vlist: 'detail-episodes', dir: 'UP' };
         renderCurrentRoute();
         global.LuminaFocus.setFocus(document.getElementById('ep-row-slot-0'), 'detail');
         return true;
@@ -2948,12 +3045,14 @@
       var orgSlot = vindex - orgGroupWindowStart;
       if (dir === 'DOWN' && orgSlot === ORG_GROUP_WIN_SIZE - 1 && vindex + 1 < vtotal) {
         orgGroupWindowStart++;
+        pendingWindowShift = { vlist: 'org-groups', dir: 'DOWN' };
         renderCurrentRoute();
         global.LuminaFocus.setFocus(document.getElementById('org-slot-' + (ORG_GROUP_WIN_SIZE - 1)), 'settings');
         return true;
       }
       if (dir === 'UP' && orgSlot === 0 && orgGroupWindowStart > 0) {
         orgGroupWindowStart--;
+        pendingWindowShift = { vlist: 'org-groups', dir: 'UP' };
         renderCurrentRoute();
         global.LuminaFocus.setFocus(document.getElementById('org-slot-0'), 'settings');
         return true;
@@ -2977,12 +3076,20 @@
       route = 'home';
     }
 
+    isCurrentRenderRouteChange = (lastRouteRendered !== route);
+    if (isCurrentRenderRouteChange) {
+      pendingWindowShift = null;
+    }
+
     renderSideNav(route);
 
     if (route === 'player-fullscreen') {
       viewport.classList.add('hidden');
       osd.classList.remove('hidden');
       global.LuminaOSD.render();
+      lastRouteRendered = route;
+      isCurrentRenderRouteChange = false;
+      pendingWindowShift = null;
       renderDiagnosticsOverlay();
       return;
     }
@@ -3002,7 +3109,10 @@
     else if (route === 'settings') renderSettings(viewport);
     else renderHome(viewport);
 
+    syncLoadedImagesInViewport(viewport);
     lastRouteRendered = route;
+    isCurrentRenderRouteChange = false;
+    pendingWindowShift = null;
     renderDiagnosticsOverlay();
   }
 
@@ -3736,6 +3846,19 @@
         }
         var found = findShowOrItemById(detailId);
         if (found) {
+          if (found.kind === 'live') {
+            focusedLiveChannelId = found.id;
+            if (isItemLockedByParental(found)) {
+              openParentalPinModal(function () {
+                global.LuminaPlayer.open(found);
+                global.LuminaRouter.navigate('player-fullscreen');
+              });
+              return;
+            }
+            global.LuminaPlayer.open(found);
+            global.LuminaRouter.navigate('player-fullscreen');
+            return;
+          }
           if (isItemLockedByParental(found)) {
             openParentalPinModal(function () {
               detailEpWindowStart = 0;
