@@ -111,7 +111,13 @@ class NativePlayerController(
     private val probeExecutor = Executors.newCachedThreadPool()
     private var exoPlayer: ExoPlayer? = null
     private var trackSelector: DefaultTrackSelector? = null
+    private var currentUrl: String = ""
+    private var currentUserAgent: String = DEFAULT_USER_AGENT
+    private var currentHeaders: Map<String, String> = emptyMap()
+    private var currentStartPositionMs: Long = 0L
     private var currentIsLive: Boolean = false
+    private var currentUsingHls: Boolean = false
+    private var hasTriedAltMediaSource: Boolean = false
     private var currentResizeMode: String = "auto"
     private var wasPlayingBeforeActivityPause: Boolean = false
     private var hasAppliedInitialSubtitleRule: Boolean = false
@@ -119,6 +125,7 @@ class NativePlayerController(
     private val positionTicker = object : Runnable {
         override fun run() {
             val player = exoPlayer ?: return
+            val state = player.playbackState
             if (player.isPlaying) {
                 val payload = JSONObject().apply {
                     put("positionMs", player.currentPosition.coerceAtLeast(0L))
@@ -128,6 +135,8 @@ class NativePlayerController(
                     put("isLive", currentIsLive || player.isCurrentMediaItemLive)
                 }
                 emitToJs("position", payload)
+            }
+            if ((state == Player.STATE_READY || state == Player.STATE_BUFFERING) && player.playWhenReady) {
                 mainHandler.postDelayed(this, POSITION_POLL_INTERVAL_MS)
             }
         }
@@ -197,7 +206,13 @@ class NativePlayerController(
                 // Sempre para e libera qualquer instância anterior antes de abrir outra (evita estourar max_connections)
                 stopInternal(hideView = false)
 
+                currentUrl = url
+                currentUserAgent = userAgent
+                currentHeaders = extraHeaders.toMap()
+                currentStartPositionMs = startPositionMs
                 currentIsLive = isLive
+                currentUsingHls = HLS_PATH_REGEX.containsMatchIn(url)
+                hasTriedAltMediaSource = false
                 hasAppliedInitialSubtitleRule = false
 
                 val loadControl = buildLoadControl(isLive, bufferProfile)
@@ -233,7 +248,7 @@ class NativePlayerController(
 
                 player.addListener(playerListener)
 
-                val mediaSource = buildMediaSource(url, userAgent, extraHeaders, isLive)
+                val mediaSource = buildMediaSource(url, userAgent, extraHeaders, isLive, currentUsingHls)
                 player.setMediaSource(mediaSource)
                 if (!isLive && startPositionMs > 0L) {
                     player.seekTo(startPositionMs)
@@ -269,7 +284,8 @@ class NativePlayerController(
         url: String,
         userAgent: String,
         extraHeaders: Map<String, String>,
-        isLive: Boolean
+        isLive: Boolean,
+        forceHls: Boolean? = null
     ): MediaSource {
         val client = buildHttpClient(15L, 30L, true)
         val dataSourceFactory = OkHttpDataSource.Factory(client)
@@ -312,7 +328,7 @@ class NativePlayerController(
         }
 
         val mediaItem = MediaItem.fromUri(url)
-        val isHls = HLS_PATH_REGEX.containsMatchIn(url)
+        val isHls = forceHls ?: HLS_PATH_REGEX.containsMatchIn(url)
 
         return if (isHls) {
             HlsMediaSource.Factory(dataSourceFactory)
@@ -349,6 +365,10 @@ class NativePlayerController(
                             put("isLive", currentIsLive || player.isCurrentMediaItemLive)
                         }
                     )
+                    mainHandler.removeCallbacks(positionTicker)
+                    if (player.playWhenReady) {
+                        mainHandler.post(positionTicker)
+                    }
                 }
                 Player.STATE_ENDED -> {
                     mainHandler.removeCallbacks(positionTicker)
@@ -369,17 +389,30 @@ class NativePlayerController(
                 val player = exoPlayer
                 if (player != null && player.playbackState == Player.STATE_READY && !player.playWhenReady) {
                     emitToJs("paused", JSONObject())
+                } else if (player != null && player.playbackState == Player.STATE_BUFFERING && player.playWhenReady) {
+                    mainHandler.postDelayed(positionTicker, POSITION_POLL_INTERVAL_MS)
                 }
             }
         }
 
         override fun onVideoSizeChanged(videoSize: VideoSize) {
             if (videoSize.width > 0 && videoSize.height > 0) {
+                applyResizeModeInternal(currentResizeMode)
+                val parentView = playerView.parent as? View
+                val dm = activity.resources.displayMetrics
+                val scrW = parentView?.width?.takeIf { it > 0 } ?: dm.widthPixels
+                val scrH = parentView?.height?.takeIf { it > 0 } ?: dm.heightPixels
                 emitToJs(
                     "videoSize",
                     JSONObject().apply {
                         put("width", videoSize.width)
                         put("height", videoSize.height)
+                        put("pixelWidthHeightRatio", videoSize.pixelWidthHeightRatio.toDouble())
+                        put("surfaceWidth", playerView.width.takeIf { it > 0 } ?: scrW)
+                        put("surfaceHeight", playerView.height.takeIf { it > 0 } ?: scrH)
+                        put("screenWidth", scrW)
+                        put("screenHeight", scrH)
+                        put("resizeMode", currentResizeMode)
                     }
                 )
             }
@@ -459,6 +492,36 @@ class NativePlayerController(
                 player.prepare()
                 player.play()
                 return
+            }
+
+            // Fallback automático de contêiner (HLS <-> Progressive/MPEG-TS) quando a URL não tem extensão .m3u8 ou usa extensão trocada
+            val isContainerOrManifestError =
+                error.errorCode == PlaybackException.ERROR_CODE_PARSING_MANIFEST_MALFORMED ||
+                    error.errorCode == PlaybackException.ERROR_CODE_PARSING_MANIFEST_UNSUPPORTED ||
+                    error.errorCode == PlaybackException.ERROR_CODE_PARSING_CONTAINER_MALFORMED ||
+                    error.errorCode == PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED
+
+            if (isContainerOrManifestError && !hasTriedAltMediaSource && player != null && currentUrl.isNotEmpty()) {
+                hasTriedAltMediaSource = true
+                currentUsingHls = !currentUsingHls
+                try {
+                    val altSource = buildMediaSource(
+                        currentUrl,
+                        currentUserAgent,
+                        currentHeaders,
+                        currentIsLive,
+                        currentUsingHls
+                    )
+                    player.setMediaSource(altSource)
+                    if (!currentIsLive && currentStartPositionMs > 0L) {
+                        player.seekTo(currentStartPositionMs)
+                    }
+                    player.prepare()
+                    player.playWhenReady = true
+                    return
+                } catch (retryEx: Exception) {
+                    Log.w(TAG, "Falha ao alternar MediaSource: ${retryEx.message}")
+                }
             }
 
             mainHandler.removeCallbacks(positionTicker)
@@ -615,15 +678,29 @@ class NativePlayerController(
         }
     }
 
+    fun refreshLayout() {
+        mainHandler.post {
+            if (playerView.visibility == View.VISIBLE) {
+                applyResizeModeInternal(currentResizeMode)
+            }
+        }
+    }
+
     private fun applyResizeModeInternal(mode: String) {
+        val parentView = playerView.parent as? View
         val dm = activity.resources.displayMetrics
-        val screenW = dm.widthPixels.coerceAtLeast(1)
-        val screenH = dm.heightPixels.coerceAtLeast(1)
+        val containerW = (parentView?.width?.takeIf { it > 0 }
+            ?: activity.window?.decorView?.width?.takeIf { it > 0 }
+            ?: dm.widthPixels).coerceAtLeast(1)
+        val containerH = (parentView?.height?.takeIf { it > 0 }
+            ?: activity.window?.decorView?.height?.takeIf { it > 0 }
+            ?: dm.heightPixels).coerceAtLeast(1)
+
         val lp = (playerView.layoutParams as? FrameLayout.LayoutParams)
             ?: FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
 
         when (mode) {
-            "16:9", "16-9" -> {
+            "16:9", "16-9", "fill", "stretch" -> {
                 lp.width = ViewGroup.LayoutParams.MATCH_PARENT
                 lp.height = ViewGroup.LayoutParams.MATCH_PARENT
                 lp.gravity = Gravity.CENTER
@@ -631,13 +708,13 @@ class NativePlayerController(
                 playerView.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FILL
             }
             "4:3", "4-3" -> {
-                lp.width = (screenW * 0.75f).toInt()
-                lp.height = screenH
+                lp.width = ((containerH * 4) / 3).coerceAtMost(containerW)
+                lp.height = containerH
                 lp.gravity = Gravity.CENTER
                 playerView.layoutParams = lp
                 playerView.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FILL
             }
-            "fill", "zoom" -> {
+            "zoom", "crop" -> {
                 lp.width = ViewGroup.LayoutParams.MATCH_PARENT
                 lp.height = ViewGroup.LayoutParams.MATCH_PARENT
                 lp.gravity = Gravity.CENTER
@@ -652,6 +729,8 @@ class NativePlayerController(
                 playerView.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
             }
         }
+        playerView.requestLayout()
+        playerView.invalidate()
     }
 
     fun stop() {

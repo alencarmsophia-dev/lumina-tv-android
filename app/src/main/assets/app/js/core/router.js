@@ -13,6 +13,11 @@
     if (global.LuminaUI && typeof global.LuminaUI.closeSideMenu === 'function') {
       global.LuminaUI.closeSideMenu(false);
     }
+    if (current === 'player-fullscreen' && route !== 'player-fullscreen') {
+      if (global.LuminaPlayer && typeof global.LuminaPlayer.stop === 'function') {
+        global.LuminaPlayer.stop();
+      }
+    }
     if (current !== route) stack.push(route);
     global.LuminaStore.set('navDirection', 'forward');
     global.LuminaStore.set('currentRoute', route);
@@ -67,8 +72,9 @@
       if (curItem && curItem.adult && global.LuminaSettings && global.LuminaSettings.lockParentalSession) {
         global.LuminaSettings.lockParentalSession();
       }
-      if (prev !== 'live' || (curItem && curItem.kind !== 'live')) {
-        if (global.LuminaPlayer && global.LuminaPlayer.stop) global.LuminaPlayer.stop();
+      // Sempre encerra e libera o player ao sair de player-fullscreen (libera conexão e restaura fundo opaco da UI)
+      if (global.LuminaPlayer && typeof global.LuminaPlayer.stop === 'function') {
+        global.LuminaPlayer.stop();
       }
       global.LuminaStore.set('navDirection', 'back');
       global.LuminaStore.set('currentRoute', prev);

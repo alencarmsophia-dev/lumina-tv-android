@@ -4,6 +4,7 @@
   var M3U_DOWNLOAD_TIMEOUT_MS = 180000; // 180s para listas M3U grandes (Seção C5)
   var M3U_RETRY_DELAYS_MS = [1500, 3000];
   var STAGE_WATCHDOG_TIMEOUT_MS = 60000; // 60s de segurança contra travamento pós-download
+  var MAX_RECENT_DIFF_IDS = 2000;
   var activeCancelToken = null;
   var cancelTokenSeq = 0;
 
@@ -19,12 +20,25 @@
     return !!(err.isCancelled || err.code === 'CANCELLED' || /cancelad[ao]\s+pelo\s+usu/i.test(String(err.message || err)));
   }
 
+  function getApproxHeapUsedMb() {
+    try {
+      if (typeof performance !== 'undefined' && performance && performance.memory && performance.memory.usedJSHeapSize) {
+        return Math.round((performance.memory.usedJSHeapSize / 1048576) * 10) / 10;
+      }
+      if (typeof process !== 'undefined' && process && typeof process.memoryUsage === 'function') {
+        return Math.round((process.memoryUsage().heapUsed / 1048576) * 10) / 10;
+      }
+    } catch (e) {}
+    return 0;
+  }
+
   function recordListStage(engine, code, message, extra) {
     if (!global.LuminaDiagLog || typeof global.LuminaDiagLog.record !== 'function') return;
     var payload = {
       engine: engine || 'Repository',
       code: code || 'STAGE',
-      message: message || ''
+      message: message || '',
+      heapMb: getApproxHeapUsedMb()
     };
     if (extra) {
       if (extra.url) payload.url = extra.url;
@@ -109,6 +123,7 @@
     var nextCounts = { live: 0, movie: 0, series: 0 };
     var newIds = {};
     var newCount = 0;
+    var trackedNewIds = 0;
 
     for (var i = 0; i < (prevRaw || []).length; i++) {
       var p = prevRaw[i];
@@ -119,7 +134,7 @@
       else prevCounts.series++;
     }
 
-    var hasPrev = (prevRaw && prevRaw.length > 0);
+    var hasPrev = !!(prevRaw && prevRaw.length > 0);
     for (var j = 0; j < (nextRaw || []).length; j++) {
       var n = nextRaw[j];
       if (!n) continue;
@@ -128,7 +143,10 @@
       else nextCounts.series++;
 
       if (hasPrev && !prevIds[n.id]) {
-        newIds[n.id] = Date.now();
+        if (trackedNewIds < MAX_RECENT_DIFF_IDS) {
+          newIds[n.id] = Date.now();
+          trackedNewIds++;
+        }
         newCount++;
       }
     }
@@ -191,12 +209,13 @@
     return it;
   }
 
+  // Classifica e agrupa o catálogo IN-PLACE sem clonar um segundo array 'processed' na memória (Problem C)
   function rebuildCatalogFromRawAsync(rawItems, onProgress, onDone, alreadyClassified, cancelToken) {
     var profile = (global.LuminaStore && global.LuminaStore.get('mappingProfile')) || { mode: 'auto', customGroupRules: {}, renamedGroups: {}, groupOrder: [] };
-    var list = rawItems || [];
+    var list = Array.isArray(rawItems) ? rawItems : [];
     var total = list.length;
-    var processed = [];
     var idx = 0;
+    var writeIdx = 0;
     var BATCH_SIZE = 3000;
     var rebuildDone = false;
 
@@ -221,7 +240,7 @@
           } else {
             it = applyProfileMappingToItem(it, profile);
           }
-          processed.push(it);
+          list[writeIdx++] = it;
         }
 
         if (onProgress && total > 0) {
@@ -231,6 +250,9 @@
         if (idx < total) {
           setTimeout(processSlice, 0);
         } else {
+          if (writeIdx < list.length) {
+            list.length = writeIdx;
+          }
           finalizeGrouping();
         }
       } catch (sliceErr) {
@@ -245,16 +267,17 @@
       }
       try {
         var grouped = (global.LuminaGrouper && typeof global.LuminaGrouper.groupCatalog === 'function')
-          ? global.LuminaGrouper.groupCatalog(processed)
-          : global.LuminaGrouper.groupSeriesAndNovelas(processed);
+          ? global.LuminaGrouper.groupCatalog(list)
+          : global.LuminaGrouper.groupSeriesAndNovelas(list);
         var channels = [];
         var movies = [];
         var unclassified = [];
         var itemByIdMap = {};
         var groupMap = {};
 
-        for (var i = 0; i < processed.length; i++) {
-          var item = processed[i];
+        for (var i = 0; i < list.length; i++) {
+          var item = list[i];
+          if (!item) continue;
           itemByIdMap[item.id] = item;
           var origG = item.groupOriginal || 'Sem Grupo';
           if (!groupMap[origG]) {
@@ -268,7 +291,7 @@
           groupMap[origG].count++;
         }
 
-        var standaloneSource = Array.isArray(grouped.standaloneItems) ? grouped.standaloneItems : processed;
+        var standaloneSource = Array.isArray(grouped.standaloneItems) ? grouped.standaloneItems : list;
         for (var j = 0; j < standaloneSource.length; j++) {
           var st = standaloneSource[j];
           if (!st || st.kind === 'hidden' || st.kind === 'episode' || st.kind === 'series' || st.kind === 'series-show' || st.kind === 'novela-show') continue;
@@ -293,8 +316,8 @@
         origGroupsArr.sort(function (a, b) { return b.count - a.count; });
 
         if (global.LuminaStore) {
-          global.LuminaStore.set('rawItems', processed);
-          global.LuminaStore.set('items', processed);
+          global.LuminaStore.set('rawItems', list);
+          global.LuminaStore.set('items', list);
           global.LuminaStore.set('channels', channels);
           global.LuminaStore.set('movies', movies);
           global.LuminaStore.set('seriesList', grouped.seriesList);
@@ -308,7 +331,7 @@
           global.LuminaStore.set('novelaCategories', buildCategoryCounts(grouped.novelasList, 'Todas as Novelas'));
         }
 
-        finishRebuild(null, processed);
+        finishRebuild(null, list);
       } catch (groupErr) {
         finishRebuild(groupErr || new Error('Erro ao agrupar catálogo na TV.'), null);
       }
@@ -362,6 +385,7 @@
     try {
       var prevRaw = (global.LuminaStore && global.LuminaStore.get('rawItems')) || [];
       var diff = computeCatalogDiff(prevRaw, newRawItems);
+      prevRaw = null;
 
       if (refreshWatchdog) refreshWatchdog();
       recordListStage('Repository', 'SAVE_BATCH_START', 'Gravando catálogo no armazenamento da TV', {
@@ -653,8 +677,10 @@
       recordListStage('M3ULoader', 'PARSE_START', 'Iniciando leitura dos canais e filmes M3U');
 
       try {
+        var rawText = text;
+        text = null;
         global.LuminaM3UParser.parseChunkedAsync(
-          text,
+          rawText,
           sourceId || 'm3u',
           global.LuminaClassifier.classifyEntry,
           function (p) {
@@ -667,6 +693,7 @@
             );
           },
           function (parseErr, items) {
+            rawText = null;
             if (token.cancelled) return session.finishOnce(createCancelledError(), null, null);
             if (parseErr) return session.finishOnce(parseErr, null, null);
             if (!items || !items.length) {
@@ -720,6 +747,14 @@
     } catch (xtEx) {
       session.finishOnce(xtEx || new Error('Erro ao conectar ao servidor Xtream.'), null, null);
     }
+  }
+
+  // Consulta sob demanda de seções/categorias a partir do armazenamento (Load on Demand)
+  function querySectionOnDemand(options, callback) {
+    if (global.LuminaStorage && typeof global.LuminaStorage.queryCatalogSection === 'function') {
+      return global.LuminaStorage.queryCatalogSection(options, callback);
+    }
+    if (callback) callback(null, { items: [], totalMatched: 0, generation: '' });
   }
 
   // Troca entre listas salvas preservando favoritos e progresso por lista (Seção B6)
@@ -899,6 +934,7 @@
     applyMappingAndPersist: applyMappingAndPersist,
     undoLastMappingChange: undoLastMappingChange,
     computeCatalogDiff: computeCatalogDiff,
+    querySectionOnDemand: querySectionOnDemand,
     cancelActiveLoad: cancelActiveLoad,
     isCancelledError: isCancelledError,
     activateSavedList: activateSavedList,

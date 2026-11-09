@@ -128,7 +128,7 @@
     clearTimers();
     if (global.LuminaPlayback) {
       global.LuminaPlayback.stop();
-    } else if (activeEngine) {
+    } else if (activeEngine && typeof activeEngine.destroy === 'function') {
       var v = (typeof document !== 'undefined') ? document.getElementById('main-video') : null;
       activeEngine.destroy(v);
     }
@@ -821,6 +821,16 @@
 
     step.classRef.play(videoEl, step.url, {
       onReady: function () {
+        if (connectTimeout) {
+          clearTimeout(connectTimeout);
+          connectTimeout = setTimeout(function () {
+            handleStepError({
+              code: 'IO_NETWORK_CONNECTION_TIMEOUT',
+              httpStatus: 0,
+              message: 'Timeout aguardando primeiro quadro em ' + step.engine
+            });
+          }, 12000);
+        }
         if (global.LuminaDiagLog) {
           global.LuminaDiagLog.record('ready', {
             engine: step.engine,
@@ -837,6 +847,7 @@
       },
       onPlaying: function () {
         clearTimeout(connectTimeout);
+        connectTimeout = null;
         var ttff = Date.now() - stepStartTime;
         var host = extractHost(step.url);
         if (host && currentUaFallbackIdx >= 0) {
@@ -870,6 +881,27 @@
           nextEpOfferTicker = setInterval(checkNextEpisodeOfferTick, 1000);
         }
       },
+      onVideoSize: function (sz) {
+        if (!sz) return;
+        var vw = Number(sz.width || 0);
+        var vh = Number(sz.height || 0);
+        var sw = Number(sz.surfaceWidth || 0);
+        var sh = Number(sz.surfaceHeight || 0);
+        updateDiagnosticsStore({
+          videoResolution: (vw > 0 && vh > 0) ? (vw + 'x' + vh) : '-',
+          surfaceResolution: (sw > 0 && sh > 0) ? (sw + 'x' + sh) : '-'
+        });
+        if (global.LuminaDiagLog && vw > 0 && vh > 0) {
+          global.LuminaDiagLog.record('video-size', {
+            engine: step.engine,
+            url: step.url,
+            format: step.formatLabel,
+            code: vw + 'x' + vh,
+            elapsedMs: Date.now() - stepStartTime,
+            message: 'Video ' + vw + 'x' + vh + (sw > 0 ? (' em superficie ' + sw + 'x' + sh) : '')
+          });
+        }
+      },
       onPaused: function () {
         if (state === STATES.PLAYING || state === STATES.BUFFERING) {
           setState(STATES.PAUSED);
@@ -896,6 +928,7 @@
     }, {
       isLive: isLive,
       startPositionMs: startPosMs,
+      timeoutMs: stepTimeoutMs,
       userAgent: uaToUse,
       referer: refererToUse,
       bufferProfile: bufferProfile,
@@ -1105,6 +1138,9 @@
 
     var stage = (typeof document !== 'undefined') ? document.getElementById('video-stage') : null;
     if (stage) stage.classList.add('is-active');
+    if (global.LuminaViewportFit && typeof global.LuminaViewportFit.applyFit === 'function') {
+      global.LuminaViewportFit.applyFit();
+    }
 
     fallbackPlan = buildFallbackPlan(item);
     fallbackIndex = 0;

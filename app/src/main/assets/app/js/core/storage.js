@@ -24,9 +24,10 @@
     return null;
   }
 
-  function computeCatalogChecksum(items) {
+  function computeCatalogChecksum(items, limitCount) {
     var h = 2166136261;
     var len = items ? items.length : 0;
+    if (typeof limitCount === 'number' && limitCount < len) len = limitCount;
     for (var i = 0; i < len; i++) {
       var it = items[i];
       var s = (it.id || '') + ':' + (it.kind || '') + ':' + (it.isNovela ? '1' : '0');
@@ -38,7 +39,7 @@
     return ((h >>> 0).toString(16)) + '_' + len;
   }
 
-  function computeCatalogStats(items) {
+  function computeCatalogStats(items, limitCount) {
     var stats = {
       total: 0,
       live: 0,
@@ -50,8 +51,10 @@
       hidden: 0
     };
     if (!items || !items.length) return stats;
-    stats.total = items.length;
-    for (var i = 0; i < items.length; i++) {
+    var len = items.length;
+    if (typeof limitCount === 'number' && limitCount < len) len = limitCount;
+    stats.total = len;
+    for (var i = 0; i < len; i++) {
       var it = items[i];
       var k = it.kind || 'unclassified';
       if (k === 'live') stats.live++;
@@ -421,15 +424,15 @@
   }
 
   // Gravação atômica por geração (B1):
-  // 1. Grava todos os blocos g<genId>:chunk:<idx>
+  // 1. Grava todos os blocos g<genId>:chunk:<idx> sem clonar o array inteiro na memória
   // 2. Só atualiza meta.catalogGeneration quando 100% dos blocos foram confirmados
   // 3. Se falhar no meio, a geração anterior continua intacta!
   function saveCatalogBatchInternal(items, options, stripMedia, cb, onProgress) {
     var opts = options || {};
     var maxItems = opts.maxItems || MAX_PERSISTED_RAW_ITEMS;
+    var effectiveLen = Math.min(items.length, maxItems);
     var truncated = items.length > maxItems;
-    var slice = truncated ? items.slice(0, maxItems) : items;
-    var totalChunks = Math.max(1, Math.ceil(slice.length / CHUNK_SIZE));
+    var totalChunks = Math.max(1, Math.ceil(effectiveLen / CHUNK_SIZE));
     var genId = String(Date.now()) + '_' + (++genSequence);
     var idx = 0;
     var batchDone = false;
@@ -471,8 +474,8 @@
     function writeNextChunk() {
       if (batchDone) return;
       if (idx >= totalChunks) {
-        var stats = computeCatalogStats(slice);
-        var checksum = computeCatalogChecksum(slice);
+        var stats = computeCatalogStats(items, effectiveLen);
+        var checksum = computeCatalogChecksum(items, effectiveLen);
         var genMeta = {
           schemaVersion: SCHEMA_VERSION,
           generation: genId,
@@ -500,10 +503,10 @@
       }
 
       var from = idx * CHUNK_SIZE;
-      var to = Math.min(from + CHUNK_SIZE, slice.length);
+      var to = Math.min(from + CHUNK_SIZE, effectiveLen);
       var batch = [];
       for (var i = from; i < to; i++) {
-        batch.push(compactItemForStorage(slice[i], stripMedia));
+        batch.push(compactItemForStorage(items[i], stripMedia));
       }
 
       var chunkKey = 'g' + genId + ':chunk:' + idx;
@@ -529,6 +532,89 @@
 
   function saveCatalogBatch(items, cb, onProgress, options) {
     saveCatalogBatchInternal(items || [], options || {}, false, cb, onProgress);
+  }
+
+  // Carrega apenas o índice leve da geração ativa sem ler os blocos de itens (Index First)
+  function loadCatalogIndex(cb) {
+    loadMeta('catalogGeneration', null, function (genMeta) {
+      if (!genMeta || !genMeta.generation) {
+        return cb(null, null);
+      }
+      cb(null, {
+        generation: genMeta.generation,
+        totalChunks: genMeta.totalChunks || 0,
+        chunkSize: genMeta.chunkSize || CHUNK_SIZE,
+        stats: genMeta.stats || { total: 0, live: 0, movie: 0, series: 0, novela: 0 },
+        classifierVersion: genMeta.classifierVersion,
+        updatedAt: genMeta.updatedAt
+      });
+    });
+  }
+
+  // Consulta itens de uma seção/categoria/busca sob demanda no IndexedDB com limite de memória (Load on Demand)
+  function queryCatalogSection(options, cb) {
+    var opts = options || {};
+    var targetKind = opts.kind || '';
+    var targetCategory = opts.category || '';
+    var searchTerm = String(opts.query || '').toLowerCase().trim();
+    var offset = Math.max(0, Number(opts.offset || 0));
+    var limit = Math.max(1, Number(opts.limit || 200));
+
+    loadMeta('catalogGeneration', null, function (genMeta) {
+      if (!genMeta || !genMeta.generation || !genMeta.totalChunks) {
+        return cb(null, { items: [], totalMatched: 0, generation: '' });
+      }
+      var totalChunks = genMeta.totalChunks;
+      var genId = genMeta.generation;
+      var matched = [];
+      var totalMatched = 0;
+      var idx = 0;
+
+      function scanNextChunk() {
+        if (idx >= totalChunks) {
+          return cb(null, {
+            items: matched,
+            totalMatched: totalMatched,
+            generation: genId
+          });
+        }
+        var chunkKey = 'g' + genId + ':chunk:' + idx;
+        getRecord('items', chunkKey, function (err, rec) {
+          if (!err && rec && Array.isArray(rec.batch)) {
+            var b = rec.batch;
+            for (var i = 0; i < b.length; i++) {
+              var it = b[i];
+              if (!it) continue;
+              if (targetKind) {
+                if (targetKind === 'novela') {
+                  if (!it.isNovela && it.kind !== 'novela-show') continue;
+                } else if (targetKind === 'series') {
+                  if (it.isNovela || (it.kind !== 'series' && it.kind !== 'series-show' && it.kind !== 'episode')) continue;
+                } else if (it.kind !== targetKind) {
+                  continue;
+                }
+              }
+              if (targetCategory) {
+                var grp = it.groupDisplay || it.groupOriginal || '';
+                if (grp !== targetCategory) continue;
+              }
+              if (searchTerm) {
+                var hay = String((it.cleanTitle || it.title || '') + ' ' + (it.groupDisplay || '')).toLowerCase();
+                if (hay.indexOf(searchTerm) === -1) continue;
+              }
+              if (totalMatched >= offset && matched.length < limit) {
+                matched.push(it);
+              }
+              totalMatched++;
+            }
+          }
+          idx++;
+          setTimeout(scanNextChunk, 0);
+        });
+      }
+
+      scanNextChunk();
+    });
   }
 
   // Carrega a geração ativa verificando integridade (contagens + checksum) sem usar .concat em loop
@@ -655,6 +741,8 @@
     loadMeta: loadMeta,
     saveCatalogBatch: saveCatalogBatch,
     loadCatalog: loadCatalog,
+    loadCatalogIndex: loadCatalogIndex,
+    queryCatalogSection: queryCatalogSection,
     saveSeriesDetail: saveSeriesDetail,
     loadSeriesDetail: loadSeriesDetail,
     computeCatalogStats: computeCatalogStats,

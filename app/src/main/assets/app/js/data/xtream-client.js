@@ -311,6 +311,35 @@
     nextCat();
   }
 
+  // Busca sob demanda de categorias (Index First)
+  function fetchCategoriesIndex(creds, callback, cancelToken) {
+    authenticateAndCheckAccount(creds, function (authErr, accountInfo) {
+      if (authErr) return callback(authErr, null);
+      xhrJsonWithRetry(buildApiUrl(creds, 'get_live_categories'), TIMEOUT_SMALL_API_MS, function (_, liveCats) {
+        xhrJsonWithRetry(buildApiUrl(creds, 'get_vod_categories'), TIMEOUT_SMALL_API_MS, function (_, vodCats) {
+          xhrJsonWithRetry(buildApiUrl(creds, 'get_series_categories'), TIMEOUT_SMALL_API_MS, function (_, seriesCats) {
+            callback(null, {
+              accountInfo: accountInfo,
+              liveCategories: Array.isArray(liveCats) ? liveCats : [],
+              vodCategories: Array.isArray(vodCats) ? vodCats : [],
+              seriesCategories: Array.isArray(seriesCats) ? seriesCats : []
+            });
+          }, cancelToken);
+        }, cancelToken);
+      }, cancelToken);
+    }, cancelToken);
+  }
+
+  // Busca sob demanda de uma categoria específica (Load on Demand)
+  function fetchCategoryStreams(creds, kind, categoryId, callback, cancelToken) {
+    var action = kind === 'live' ? 'get_live_streams' : (kind === 'movie' ? 'get_vod_streams' : 'get_series');
+    var params = categoryId ? { category_id: String(categoryId) } : null;
+    xhrJsonWithRetry(buildApiUrl(creds, action, params), TIMEOUT_SMALL_API_MS, function (err, list) {
+      if (err) return callback(err, []);
+      callback(null, Array.isArray(list) ? list : []);
+    }, cancelToken);
+  }
+
   function fetchCompleteCatalog(creds, onProgress, callback, cancelToken) {
     if (!creds || !creds.server || !creds.username || !creds.password) {
       return callback(new Error('Credenciais Xtream incompletas.'), null);
@@ -342,77 +371,88 @@
 
           xhrJsonWithRetry(buildApiUrl(creds, 'get_series_categories'), TIMEOUT_SMALL_API_MS, function (_, seriesCats) {
             var seriesCatMap = mapCategoriesToById(seriesCats);
+            var rawItems = [];
+            var now = Date.now();
+            var liveCount = 0;
+            var vodCount = 0;
+            var seriesCount = 0;
 
             if (onProgress) onProgress({ stage: '3/4 \u00B7 Baixando canais ao vivo\u2026', percent: 32 });
             xhrJsonWithRetry(buildApiUrl(creds, 'get_live_streams'), TIMEOUT_LIVE_MS, function (liveErr, liveStreams) {
               var lives = (!liveErr && Array.isArray(liveStreams)) ? liveStreams : [];
+              liveCount = lives.length;
+
+              // Converte e libera o array bruto de canais imediatamente antes de baixar filmes (reduz pico de RAM em ~50%)
+              for (var i = 0; i < lives.length; i++) {
+                var l = lives[i];
+                var streamId = l.stream_id || (i + 1);
+                var catName = liveCatMap[String(l.category_id)] || 'Canais Ao Vivo';
+                rawItems.push(global.LuminaClassifier.classifyEntry({
+                  id: 'xt_live_' + streamId,
+                  title: l.name || ('Canal ' + streamId),
+                  groupTitle: catName,
+                  tvgLogo: l.stream_icon || '',
+                  tvgId: l.epg_channel_id || '',
+                  url: base + '/live/' + user + '/' + pass + '/' + streamId + '.' + liveExt,
+                  addedAt: l.added ? Number(l.added) * 1000 : (now - i),
+                  sourceId: 'xtream',
+                  forcedKind: 'live'
+                }));
+              }
+              lives.length = 0;
+              liveStreams = null;
 
               if (onProgress) {
                 onProgress({
-                  stage: '3/4 \u00B7 Canais: ' + lives.length + ' \u00B7 Baixando filmes\u2026',
+                  stage: '3/4 \u00B7 Canais: ' + liveCount + ' \u00B7 Baixando filmes\u2026',
                   percent: 54
                 });
               }
 
               xhrJsonWithRetry(buildApiUrl(creds, 'get_vod_streams'), TIMEOUT_VOD_SERIES_MS, function (vodErr, vodStreams) {
                 function afterVods(vods) {
+                  vodCount = vods.length;
+                  // Converte e libera o array bruto de filmes imediatamente antes de baixar séries
+                  for (var j = 0; j < vods.length; j++) {
+                    var v = vods[j];
+                    var vodId = v.stream_id || (j + 1);
+                    var ext = v.container_extension || 'mp4';
+                    var vCatName = vodCatMap[String(v.category_id)] || 'Filmes';
+                    var ratingNum = parseFloat(v.rating || v.rating_5based || '0') || 0;
+                    rawItems.push(global.LuminaClassifier.classifyEntry({
+                      id: 'xt_vod_' + vodId,
+                      title: v.name || ('Filme ' + vodId),
+                      groupTitle: vCatName,
+                      tvgLogo: v.stream_icon || v.cover || '',
+                      tvgRating: ratingNum,
+                      url: base + '/movie/' + user + '/' + pass + '/' + vodId + '.' + ext,
+                      addedAt: v.added ? Number(v.added) * 1000 : (now - j),
+                      sourceId: 'xtream',
+                      forcedKind: 'movie'
+                    }));
+                  }
+                  vods.length = 0;
+                  vodStreams = null;
+
                   if (onProgress) {
                     onProgress({
-                      stage: '3/4 \u00B7 Canais: ' + lives.length + ' \u00B7 Filmes: ' + vods.length + ' \u00B7 Baixando séries\u2026',
+                      stage: '3/4 \u00B7 Canais: ' + liveCount + ' \u00B7 Filmes: ' + vodCount + ' \u00B7 Baixando séries\u2026',
                       percent: 76
                     });
                   }
 
                   xhrJsonWithRetry(buildApiUrl(creds, 'get_series'), TIMEOUT_VOD_SERIES_MS, function (serErr, seriesStreams) {
                     function afterSeries(seriesArr) {
-                      if (!lives.length && !vods.length && !seriesArr.length) {
+                      seriesCount = seriesArr.length;
+                      if (!liveCount && !vodCount && !seriesCount) {
                         return callback(new Error('Nenhum canal, filme ou série retornado pelo servidor Xtream.'), null);
                       }
 
                       if (onProgress) {
                         onProgress({
-                          stage: '3/4 \u00B7 Canais: ' + lives.length + ' \u00B7 Filmes: ' + vods.length + ' \u00B7 Séries: ' + seriesArr.length,
+                          stage: '3/4 \u00B7 Canais: ' + liveCount + ' \u00B7 Filmes: ' + vodCount + ' \u00B7 Séries: ' + seriesCount,
                           percent: 90
                         });
-                      }
-
-                      var rawItems = [];
-                      var now = Date.now();
-
-                      for (var i = 0; i < lives.length; i++) {
-                        var l = lives[i];
-                        var streamId = l.stream_id || (i + 1);
-                        var catName = liveCatMap[String(l.category_id)] || 'Canais Ao Vivo';
-                        rawItems.push(global.LuminaClassifier.classifyEntry({
-                          id: 'xt_live_' + streamId,
-                          title: l.name || ('Canal ' + streamId),
-                          groupTitle: catName,
-                          tvgLogo: l.stream_icon || '',
-                          tvgId: l.epg_channel_id || '',
-                          url: base + '/live/' + user + '/' + pass + '/' + streamId + '.' + liveExt,
-                          addedAt: l.added ? Number(l.added) * 1000 : (now - i),
-                          sourceId: 'xtream',
-                          forcedKind: 'live'
-                        }));
-                      }
-
-                      for (var j = 0; j < vods.length; j++) {
-                        var v = vods[j];
-                        var vodId = v.stream_id || (j + 1);
-                        var ext = v.container_extension || 'mp4';
-                        var vCatName = vodCatMap[String(v.category_id)] || 'Filmes';
-                        var ratingNum = parseFloat(v.rating || v.rating_5based || '0') || 0;
-                        rawItems.push(global.LuminaClassifier.classifyEntry({
-                          id: 'xt_vod_' + vodId,
-                          title: v.name || ('Filme ' + vodId),
-                          groupTitle: vCatName,
-                          tvgLogo: v.stream_icon || v.cover || '',
-                          tvgRating: ratingNum,
-                          url: base + '/movie/' + user + '/' + pass + '/' + vodId + '.' + ext,
-                          addedAt: v.added ? Number(v.added) * 1000 : (now - j),
-                          sourceId: 'xtream',
-                          forcedKind: 'movie'
-                        }));
                       }
 
                       for (var k = 0; k < seriesArr.length; k++) {
@@ -436,6 +476,8 @@
                         });
                         rawItems.push(classified);
                       }
+                      seriesArr.length = 0;
+                      seriesStreams = null;
 
                       if (global.LuminaDiagLog) {
                         global.LuminaDiagLog.record('list-load', {
@@ -444,16 +486,16 @@
                           httpStatus: 200,
                           code: 'OK',
                           elapsedMs: Date.now() - now,
-                          message: 'Xtream carregado: ' + lives.length + ' canais, ' + vods.length + ' filmes, ' + seriesArr.length + ' séries'
+                          message: 'Xtream carregado: ' + liveCount + ' canais, ' + vodCount + ' filmes, ' + seriesCount + ' séries'
                         });
                       }
 
                       callback(null, rawItems, {
                         accountInfo: accountInfo,
                         counts: {
-                          channels: lives.length,
-                          movies: vods.length,
-                          series: seriesArr.length
+                          channels: liveCount,
+                          movies: vodCount,
+                          series: seriesCount
                         }
                       });
                     }
@@ -756,6 +798,8 @@
     parseAccountInfo: parseAccountInfo,
     authenticateAndCheckAccount: authenticateAndCheckAccount,
     pickPreferredLiveExtension: pickPreferredLiveExtension,
+    fetchCategoriesIndex: fetchCategoriesIndex,
+    fetchCategoryStreams: fetchCategoryStreams,
     fetchCompleteCatalog: fetchCompleteCatalog,
     fetchSeriesInfo: fetchSeriesInfo,
     searchCatalog: searchCatalog

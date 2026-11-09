@@ -155,6 +155,7 @@
 
     function step() {
       if (cancelToken && cancelToken.cancelled) {
+        str = '';
         return onDone(new Error('Importação cancelada pelo usuário.'), []);
       }
 
@@ -195,8 +196,95 @@
       if (pos < totalBytes) {
         setTimeout(step, 4);
       } else {
+        str = '';
         onDone(null, results);
       }
+    }
+    step();
+  }
+
+  // Parser em lotes limitados (bounded-memory batch streaming) para grandes catálogos
+  function parseBatchedAsync(text, sourceId, classifierFn, batchSize, onBatch, onProgress, onDone, cancelToken) {
+    var str = String(text || '');
+    var totalBytes = str.length;
+    var pos = 0;
+    var currentMeta = null;
+    var stickyHeaders = { userAgent: '', referrer: '' };
+    var currentBatch = [];
+    var totalItems = 0;
+    var processedLines = 0;
+    var maxBatch = (batchSize && batchSize > 0) ? batchSize : 2500;
+    var baseNow = Date.now();
+    var BYTES_PER_SLICE = 512 * 1024;
+
+    function step() {
+      if (cancelToken && cancelToken.cancelled) {
+        str = '';
+        currentBatch = [];
+        return onDone(new Error('Importação cancelada pelo usuário.'), 0);
+      }
+
+      var targetEnd = Math.min(pos + BYTES_PER_SLICE, totalBytes);
+      while (pos < targetEnd || (pos < totalBytes && currentMeta !== null)) {
+        var nextNl = str.indexOf('\n', pos);
+        if (nextNl === -1) nextNl = totalBytes;
+        var line = str.slice(pos, nextNl).replace(/\r+$/, '').trim();
+        pos = nextNl + 1;
+        processedLines++;
+
+        if (!line) continue;
+        if (line.charCodeAt(0) === 35) {
+          currentMeta = parseDirectiveLine(line, currentMeta, stickyHeaders);
+          if (currentMeta && !currentMeta.addedAt) {
+            currentMeta.addedAt = baseNow - totalItems;
+          }
+        } else if (currentMeta) {
+          currentMeta.url = line;
+          currentMeta.sourceId = sourceId || 'm3u';
+          currentBatch.push(classifierFn ? classifierFn(currentMeta) : currentMeta);
+          totalItems++;
+          currentMeta = null;
+          stickyHeaders.userAgent = '';
+          stickyHeaders.referrer = '';
+          if (currentBatch.length >= maxBatch) break;
+          if (pos >= targetEnd) break;
+        }
+      }
+
+      if (onProgress) {
+        onProgress({
+          processedLines: processedLines,
+          totalLines: processedLines,
+          itemsCount: totalItems,
+          percent: totalBytes ? Math.min(100, Math.round((pos / totalBytes) * 100)) : 100
+        });
+      }
+
+      function continueOrFinish() {
+        if (pos < totalBytes) {
+          setTimeout(step, 4);
+        } else {
+          str = '';
+          onDone(null, totalItems);
+        }
+      }
+
+      if (currentBatch.length >= maxBatch || (pos >= totalBytes && currentBatch.length > 0)) {
+        var batchToEmit = currentBatch;
+        currentBatch = [];
+        if (onBatch) {
+          onBatch(batchToEmit, function (batchErr) {
+            if (batchErr) {
+              str = '';
+              return onDone(batchErr, totalItems);
+            }
+            continueOrFinish();
+          });
+          return;
+        }
+      }
+
+      continueOrFinish();
     }
     step();
   }
@@ -205,7 +293,8 @@
     findTitleCommaIndex: findTitleCommaIndex,
     parseExtInfLine: parseExtInfLine,
     parseM3UText: parseM3UText,
-    parseChunkedAsync: parseChunkedAsync
+    parseChunkedAsync: parseChunkedAsync,
+    parseBatchedAsync: parseBatchedAsync
   };
 
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

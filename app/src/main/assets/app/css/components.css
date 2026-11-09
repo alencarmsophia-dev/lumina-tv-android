@@ -367,8 +367,98 @@
   font-weight: var(--fw-semi);
   color: var(--text);
   border: var(--focus-border-w) solid transparent;
-  content-visibility: auto;
-  contain-intrinsic-size: 360px 68px;
+  contain: layout paint;
+}
+
+/* Transição curta (140ms, apenas transform e opacity) somente no item/linha que entra ao deslocar janela virtual */
+@keyframes vrowEnterDown {
+  from {
+    opacity: 0;
+    transform: translateY(18px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes vrowEnterUp {
+  from {
+    opacity: 0;
+    transform: translateY(-18px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes vrowEnterDownFocusedCard {
+  from {
+    opacity: 0;
+    transform: translateY(18px) scale(var(--focus-scale-card));
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(var(--focus-scale-card));
+  }
+}
+
+@keyframes vrowEnterUpFocusedCard {
+  from {
+    opacity: 0;
+    transform: translateY(-18px) scale(var(--focus-scale-card));
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(var(--focus-scale-card));
+  }
+}
+
+@keyframes vrowEnterDownFocusedRow {
+  from {
+    opacity: 0;
+    transform: translateY(18px) scale(var(--focus-scale-row));
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(var(--focus-scale-row));
+  }
+}
+
+@keyframes vrowEnterUpFocusedRow {
+  from {
+    opacity: 0;
+    transform: translateY(-18px) scale(var(--focus-scale-row));
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(var(--focus-scale-row));
+  }
+}
+
+.vrow-enter-down {
+  animation: vrowEnterDown 140ms var(--ease-out);
+}
+
+.vrow-enter-up {
+  animation: vrowEnterUp 140ms var(--ease-out);
+}
+
+.vrow-enter-down.is-focused {
+  animation: vrowEnterDownFocusedCard 140ms var(--ease-out);
+}
+
+.vrow-enter-up.is-focused {
+  animation: vrowEnterUpFocusedCard 140ms var(--ease-out);
+}
+
+.episode-row.vrow-enter-down.is-focused {
+  animation: vrowEnterDownFocusedRow 140ms var(--ease-out);
+}
+
+.episode-row.vrow-enter-up.is-focused {
+  animation: vrowEnterUpFocusedRow 140ms var(--ease-out);
 }
 
 .cat-row-title {
@@ -660,8 +750,7 @@
   padding: 0 20px;
   gap: 18px;
   margin-bottom: 10px;
-  content-visibility: auto;
-  contain-intrinsic-size: 620px 84px;
+  contain: layout paint;
 }
 
 .channel-row.is-selected {

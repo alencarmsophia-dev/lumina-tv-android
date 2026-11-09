@@ -132,7 +132,7 @@ class MainActivity : Activity() {
             setBackgroundColor(Color.parseColor("#0B0F17"))
         }
 
-        // 1. PlayerView nativo (Media3 ExoPlayer) no fundo do rootContainer
+        // 1. PlayerView nativo (Media3 ExoPlayer) no fundo do rootContainer (100% da tela)
         nativePlayerView = PlayerView(this).apply {
             layoutParams = FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
@@ -218,6 +218,7 @@ class MainActivity : Activity() {
             val oldW = oldRight - oldLeft
             val oldH = oldBottom - oldTop
             if (w > 0 && h > 0 && (w != oldW || h != oldH)) {
+                nativePlayerController?.refreshLayout()
                 createdWebView.evaluateJavascript(
                     "if(window.__luminaFitViewport){window.__luminaFitViewport();}",
                     null
@@ -303,6 +304,7 @@ class MainActivity : Activity() {
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
         applyImmersiveFullscreen()
+        nativePlayerController?.refreshLayout()
         webView?.evaluateJavascript(
             "if(window.__luminaFitViewport){window.__luminaFitViewport();}",
             null
@@ -399,6 +401,7 @@ class MainActivity : Activity() {
         applyImmersiveFullscreen()
         requestAudioFocus()
         nativePlayerController?.onActivityResume()
+        nativePlayerController?.refreshLayout()
         webView?.let { wv ->
             wv.onResume()
             wv.resumeTimers()
@@ -409,7 +412,7 @@ class MainActivity : Activity() {
             if (wasPlayingBeforePause) {
                 wasPlayingBeforePause = false
                 wv.evaluateJavascript(
-                    "(function(){try{if(window.LuminaPlayer&&window.LuminaPlayer.getState()==='PAUSED'){window.LuminaPlayer.togglePlayPause();}}catch(e){}})();",
+                    "(function(){try{var v=document.getElementById('main-video');if(v&&v.paused&&v.src){var p=v.play();if(p&&p.catch)p.catch(function(){});}}catch(e){}})();",
                     null
                 )
             }
@@ -421,7 +424,7 @@ class MainActivity : Activity() {
         nativePlayerController?.onActivityPause()
         webView?.let { wv ->
             wv.evaluateJavascript(
-                "(function(){try{var v=document.getElementById('main-video');if(v&&!v.paused){window.LuminaAndroidBridge.notifyWasPlaying(true);v.pause();}if(window.LuminaPlayer&&window.LuminaPlayer.getState()==='PLAYING'){window.LuminaAndroidBridge.notifyWasPlaying(true);window.LuminaPlayer.togglePlayPause();}}catch(e){}})();",
+                "(function(){try{if(window.LuminaPlayer&&window.LuminaPlayer.saveProgress){window.LuminaPlayer.saveProgress();}var v=document.getElementById('main-video');if(v&&!v.paused){window.LuminaAndroidBridge.notifyWasPlaying(true);v.pause();}}catch(e){}})();",
                 null
             )
             CookieManager.getInstance().flush()
@@ -450,6 +453,7 @@ class MainActivity : Activity() {
         super.onWindowFocusChanged(hasFocus)
         if (hasFocus) {
             applyImmersiveFullscreen()
+            nativePlayerController?.refreshLayout()
             webView?.let { wv ->
                 wv.requestFocus()
                 wv.evaluateJavascript(

@@ -155,6 +155,27 @@
         root.style.transform = transformValue;
         root.style.webkitTransform = transformValue;
       }
+
+      // Garante que #video-stage sempre ocupe 100% da área física da tela mesmo quando safeMargin > 0
+      var stage = document.getElementById('video-stage');
+      if (stage && stage.style) {
+        if (margin > 0 && fit.scale > 0) {
+          var fullW = Math.round(dims.w / fit.scale);
+          var fullH = Math.round(dims.h / fit.scale);
+          var stageLeft = -Math.round(fit.offsetX / fit.scale);
+          var stageTop = -Math.round(fit.offsetY / fit.scale);
+          stage.style.left = stageLeft + 'px';
+          stage.style.top = stageTop + 'px';
+          stage.style.width = fullW + 'px';
+          stage.style.height = fullH + 'px';
+        } else {
+          stage.style.left = '0px';
+          stage.style.top = '0px';
+          stage.style.width = DESIGN_W + 'px';
+          stage.style.height = DESIGN_H + 'px';
+        }
+      }
+
       updateHeaderDiagnosticDom(lastViewportInfo);
     }
 
