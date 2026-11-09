@@ -110,6 +110,8 @@
       aspectRatioByContent: {},
       screenSafeMargin: 0,
       autoUpdateHours: 12,
+      catalogUpdatePolicy: '12h',
+      searchHistoryBySection: { live: [], movie: [], series: [] },
       preferOutputFormat: 'auto',
       playerEngine: 'auto',
       playerUserAgent: 'vlc',
@@ -153,6 +155,8 @@
       def.screenSafeMargin = sanitizeSafeMargin(raw.screenSafeMargin);
     }
     if (typeof raw.autoUpdateHours === 'number') def.autoUpdateHours = raw.autoUpdateHours;
+    if (raw.catalogUpdatePolicy === 'on_open_tab' || raw.catalogUpdatePolicy === '6h' || raw.catalogUpdatePolicy === '12h' || raw.catalogUpdatePolicy === '24h' || raw.catalogUpdatePolicy === 'manual') def.catalogUpdatePolicy = raw.catalogUpdatePolicy;
+    if (raw.searchHistoryBySection && typeof raw.searchHistoryBySection === 'object') def.searchHistoryBySection = raw.searchHistoryBySection;
     if (raw.preferOutputFormat === 'auto' || raw.preferOutputFormat === 'm3u8' || raw.preferOutputFormat === 'ts') {
       def.preferOutputFormat = raw.preferOutputFormat;
     }
@@ -214,6 +218,8 @@
     global.LuminaStore.set('aspectRatioByContent', s.aspectRatioByContent);
     global.LuminaStore.set('screenSafeMargin', s.screenSafeMargin);
     global.LuminaStore.set('autoUpdateHours', s.autoUpdateHours);
+    global.LuminaStore.set('catalogUpdatePolicy', s.catalogUpdatePolicy || '12h');
+    global.LuminaStore.set('searchHistoryBySection', s.searchHistoryBySection || { live: [], movie: [], series: [] });
     global.LuminaStore.set('preferOutputFormat', s.preferOutputFormat);
     global.LuminaStore.set('playerEngine', s.playerEngine);
     global.LuminaStore.set('playerUserAgent', s.playerUserAgent);
@@ -259,6 +265,8 @@
       aspectRatioByContent: global.LuminaStore.get('aspectRatioByContent'),
       screenSafeMargin: global.LuminaStore.get('screenSafeMargin'),
       autoUpdateHours: global.LuminaStore.get('autoUpdateHours'),
+      catalogUpdatePolicy: global.LuminaStore.get('catalogUpdatePolicy'),
+      searchHistoryBySection: global.LuminaStore.get('searchHistoryBySection'),
       preferOutputFormat: global.LuminaStore.get('preferOutputFormat'),
       playerEngine: global.LuminaStore.get('playerEngine'),
       playerUserAgent: global.LuminaStore.get('playerUserAgent'),

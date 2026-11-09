@@ -1,4 +1,4 @@
-name: Build & Release Lumina TV APK (v2.0.0)
+name: Build & Release Lumina TV APK (v2.2.0)
 
 on:
   push:
@@ -90,7 +90,7 @@ jobs:
       - name: Publicar APK de Release como Artefato
         uses: actions/upload-artifact@v4
         with:
-          name: lumina-tv-v2.0.0-firetv-release-apk
+          name: lumina-tv-v2.2.0-firetv-release-apk
           path: |
             app/build/outputs/apk/release/lumina-tv.apk
             app/build/outputs/apk/release/lumina-tv.apk.sha256

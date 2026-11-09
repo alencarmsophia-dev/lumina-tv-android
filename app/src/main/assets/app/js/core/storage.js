@@ -2,24 +2,114 @@
   'use strict';
 
   var DB_NAME = 'LuminaTV_DB';
-  var DB_VER = 2;
-  var SCHEMA_VERSION = 2;
+  var DB_VER = 3;
+  var SCHEMA_VERSION = 3;
   var dbInstance = null;
-  var MAX_PERSISTED_RAW_ITEMS = 400000;
+  var MAX_PERSISTED_RAW_ITEMS = 2000000;
   var CHUNK_SIZE = 2500;
   var genSequence = 0;
-  var simulatedFailAtChunk = -1; // usado apenas em testes automatizados de atomicidade
+  var simulatedFailAtChunk = -1;
+  var simulatedQuotaExceeded = false;
 
-  // Mock de IndexedDB em memória para execução em Node.js (testes automatizados) ou ambientes sem IDB
+  var STORE_NAMES = [
+    'meta',
+    'groups',
+    'pages',
+    'orders',
+    'searchIndex',
+    'episodes',
+    'checkpoints',
+    'items',
+    'seriesDetail'
+  ];
+
   var memoryStoreData = {
     meta: {},
+    groups: {},
+    pages: {},
+    orders: {},
+    searchIndex: {},
+    episodes: {},
+    checkpoints: {},
     items: {},
     seriesDetail: {}
   };
 
+  var nodeDiskFd = null;
+  var nodeDiskPath = "";
+  var nodeDiskOffset = 0;
+  var v8Mod = null;
+  var fsMod = null;
+
+  function enableNodeDiskBackend(filePath) {
+    if (typeof process === "undefined" || !process.versions || !process.versions.node) return false;
+    try {
+      fsMod = require("fs");
+      v8Mod = require("v8");
+      if (nodeDiskFd !== null) {
+        try { fsMod.closeSync(nodeDiskFd); } catch (e) {}
+      }
+      nodeDiskPath = filePath || "/tmp/lumina_idb_v22.bin";
+      nodeDiskFd = fsMod.openSync(nodeDiskPath, "w+");
+      nodeDiskOffset = 0;
+      resetMemoryStoreForTests();
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function disableNodeDiskBackend() {
+    if (nodeDiskFd !== null && fsMod) {
+      try { fsMod.closeSync(nodeDiskFd); } catch (e) {}
+      try { if (nodeDiskPath) fsMod.unlinkSync(nodeDiskPath); } catch (e) {}
+    }
+    nodeDiskFd = null;
+    nodeDiskPath = "";
+    nodeDiskOffset = 0;
+  }
+
+  var DISK_LEN_MOD = 8388608; // 8 MB max por registro, suporta ate 1.07 GB por arquivo // 16 MB max por registro individual
+
+  function writeDiskRecord(storeName, pk, record) {
+    var buf = v8Mod.serialize(record);
+    var pos = nodeDiskOffset;
+    var len = buf.length;
+    fsMod.writeSync(nodeDiskFd, buf, 0, len, pos);
+    nodeDiskOffset += len;
+    memoryStoreData[storeName][pk] = pos * DISK_LEN_MOD + len;
+  }
+
+  function readDiskRecord(packedNum) {
+    if (typeof packedNum !== "number" || nodeDiskFd === null) return packedNum;
+    var len = packedNum % DISK_LEN_MOD;
+    var pos = Math.floor(packedNum / DISK_LEN_MOD);
+    var buf = Buffer.allocUnsafe(len);
+    fsMod.readSync(nodeDiskFd, buf, 0, len, pos);
+    return v8Mod.deserialize(buf);
+  }
+
   function getLocalStoreObj() {
     if (typeof localStorage !== 'undefined' && localStorage) return localStorage;
     return null;
+  }
+
+  function getPrimaryKeyForStore(storeName, record) {
+    if (!record) return '';
+    if (storeName === 'meta') return record.key;
+    if (storeName === 'seriesDetail') return record.seriesId;
+    if (storeName === 'items') return record.id;
+    return record.key || record.id || record.listId || '';
+  }
+
+  function computeStringChecksum(str) {
+    var s = String(str || '');
+    var h = 2166136261 >>> 0;
+    for (var i = 0; i < s.length; i++) {
+      h ^= s.charCodeAt(i);
+      h = (h + ((h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24))) >>> 0;
+    }
+    return (h >>> 0).toString(16) + '_' + s.length;
   }
 
   function computeCatalogChecksum(items) {
@@ -65,6 +155,289 @@
     return stats;
   }
 
+  function openDB(cb) {
+    if (dbInstance) return cb(null, dbInstance);
+    if (typeof indexedDB === 'undefined' || !indexedDB) {
+      return cb(null, null);
+    }
+    try {
+      var req = indexedDB.open(DB_NAME, DB_VER);
+      req.onupgradeneeded = function (e) {
+        var db = e.target.result;
+        if (!db.objectStoreNames.contains('meta')) db.createObjectStore('meta', { keyPath: 'key' });
+        if (!db.objectStoreNames.contains('groups')) db.createObjectStore('groups', { keyPath: 'key' });
+        if (!db.objectStoreNames.contains('pages')) db.createObjectStore('pages', { keyPath: 'key' });
+        if (!db.objectStoreNames.contains('orders')) db.createObjectStore('orders', { keyPath: 'key' });
+        if (!db.objectStoreNames.contains('searchIndex')) db.createObjectStore('searchIndex', { keyPath: 'key' });
+        if (!db.objectStoreNames.contains('episodes')) db.createObjectStore('episodes', { keyPath: 'key' });
+        if (!db.objectStoreNames.contains('checkpoints')) db.createObjectStore('checkpoints', { keyPath: 'key' });
+        if (!db.objectStoreNames.contains('items')) db.createObjectStore('items', { keyPath: 'id' });
+        if (!db.objectStoreNames.contains('seriesDetail')) db.createObjectStore('seriesDetail', { keyPath: 'seriesId' });
+      };
+      req.onsuccess = function (e) {
+        dbInstance = e.target.result;
+        cb(null, dbInstance);
+      };
+      req.onerror = function (e) {
+        cb(e.target.error || new Error('Erro ao abrir IndexedDB'));
+      };
+    } catch (err) {
+      cb(err);
+    }
+  }
+
+  function putRecord(storeName, record, cb) {
+    if (simulatedQuotaExceeded) {
+      var qErr = new Error('QuotaExceededError: espaço insuficiente no armazenamento.');
+      qErr.name = 'QuotaExceededError';
+      return cb && cb(qErr);
+    }
+    openDB(function (err, db) {
+      if (err) return cb && cb(err);
+      if (!db) {
+        var pk = getPrimaryKeyForStore(storeName, record);
+        if (nodeDiskFd !== null && storeName !== "meta" && storeName !== "groups") {
+          writeDiskRecord(storeName, pk, record);
+        } else {
+          memoryStoreData[storeName][pk] = record;
+        }
+        return cb && cb(null);
+      }
+      try {
+        var tx = db.transaction(storeName, 'readwrite');
+        tx.objectStore(storeName).put(record);
+        tx.oncomplete = function () { if (cb) cb(null); };
+        tx.onerror = function (e) { if (cb) cb(e.target && e.target.error ? e.target.error : new Error('Erro de escrita IDB')); };
+      } catch (ex) {
+        if (cb) cb(ex);
+      }
+    });
+  }
+
+  // Grava múltiplos registros em uma única transação (ex.: até 8 páginas por vez, Parte 6.4)
+  function putRecordsBatch(storeName, records, cb) {
+    if (!records || !records.length) return cb && cb(null);
+    if (simulatedQuotaExceeded) {
+      var qErr = new Error('QuotaExceededError: espaço insuficiente no armazenamento.');
+      qErr.name = 'QuotaExceededError';
+      return cb && cb(qErr);
+    }
+    openDB(function (err, db) {
+      if (err) return cb && cb(err);
+      if (!db) {
+        var map = memoryStoreData[storeName];
+        var useDisk = (nodeDiskFd !== null && storeName !== "meta" && storeName !== "groups");
+        for (var i = 0; i < records.length; i++) {
+          var rec = records[i];
+          var pk = getPrimaryKeyForStore(storeName, rec);
+          if (useDisk) writeDiskRecord(storeName, pk, rec);
+          else map[pk] = rec;
+        }
+        return cb && cb(null);
+      }
+      try {
+        var tx = db.transaction(storeName, 'readwrite');
+        var store = tx.objectStore(storeName);
+        for (var j = 0; j < records.length; j++) {
+          store.put(records[j]);
+        }
+        tx.oncomplete = function () { if (cb) cb(null); };
+        tx.onerror = function (e) { if (cb) cb(e.target && e.target.error ? e.target.error : new Error('Erro em transação IDB')); };
+      } catch (ex) {
+        if (cb) cb(ex);
+      }
+    });
+  }
+
+  function getRecord(storeName, key, cb) {
+    openDB(function (err, db) {
+      if (err) return cb(err, null);
+      if (!db) {
+        var found = memoryStoreData[storeName] ? memoryStoreData[storeName][key] : null;
+        if (typeof found === "number") {
+          return cb(null, readDiskRecord(found));
+        }
+        return cb(null, found || null);
+      }
+      try {
+        var tx = db.transaction(storeName, 'readonly');
+        var req = tx.objectStore(storeName).get(key);
+        req.onsuccess = function () { cb(null, req.result || null); };
+        req.onerror = function (e) { cb(e.target && e.target.error ? e.target.error : new Error('Erro de leitura IDB'), null); };
+      } catch (ex) {
+        cb(ex, null);
+      }
+    });
+  }
+
+  function deleteRecord(storeName, key, cb) {
+    openDB(function (err, db) {
+      if (err) return cb && cb(err);
+      if (!db) {
+        if (memoryStoreData[storeName]) delete memoryStoreData[storeName][key];
+        return cb && cb(null);
+      }
+      try {
+        var tx = db.transaction(storeName, 'readwrite');
+        tx.objectStore(storeName).delete(key);
+        tx.oncomplete = function () { if (cb) cb(null); };
+        tx.onerror = function () { if (cb) cb(null); };
+      } catch (ex) {
+        if (cb) cb(null);
+      }
+    });
+  }
+
+  function listAllKeys(storeName, cb) {
+    openDB(function (err, db) {
+      if (err) return cb(err, []);
+      if (!db) {
+        return cb(null, Object.keys(memoryStoreData[storeName] || {}));
+      }
+      try {
+        var tx = db.transaction(storeName, 'readonly');
+        var store = tx.objectStore(storeName);
+        if (typeof store.getAllKeys === 'function') {
+          var req = store.getAllKeys();
+          req.onsuccess = function () { cb(null, req.result || []); };
+          req.onerror = function () { cb(null, []); };
+        } else {
+          var keys = [];
+          var curReq = store.openCursor();
+          curReq.onsuccess = function (e) {
+            var cursor = e.target.result;
+            if (cursor) {
+              keys.push(cursor.key);
+              cursor.continue();
+            } else {
+              cb(null, keys);
+            }
+          };
+          curReq.onerror = function () { cb(null, keys); };
+        }
+      } catch (ex) {
+        cb(null, []);
+      }
+    });
+  }
+
+  function deleteRecordsByPrefix(storeName, prefix, keepPrefix, cb) {
+    listAllKeys(storeName, function (err, keys) {
+      if (err || !keys || !keys.length) return cb && cb(null, 0);
+      var toDelete = [];
+      for (var i = 0; i < keys.length; i++) {
+        var k = String(keys[i]);
+        if (k.indexOf(prefix) === 0 && (!keepPrefix || k.indexOf(keepPrefix) !== 0)) {
+          toDelete.push(k);
+        }
+      }
+      if (!toDelete.length) return cb && cb(null, 0);
+
+      openDB(function (dbErr, db) {
+        if (dbErr || !db) {
+          var map = memoryStoreData[storeName] || {};
+          for (var m = 0; m < toDelete.length; m++) {
+            delete map[toDelete[m]];
+          }
+          return cb && cb(null, toDelete.length);
+        }
+        var idx = 0;
+        var BATCH = 50;
+        function delNextBatch() {
+          if (idx >= toDelete.length) return cb && cb(null, toDelete.length);
+          var end = Math.min(idx + BATCH, toDelete.length);
+          try {
+            var tx = db.transaction(storeName, 'readwrite');
+            var st = tx.objectStore(storeName);
+            for (; idx < end; idx++) st.delete(toDelete[idx]);
+            tx.oncomplete = function () { setTimeout(delNextBatch, 0); };
+            tx.onerror = function () { setTimeout(delNextBatch, 0); };
+          } catch (e) {
+            cb && cb(null, idx);
+          }
+        }
+        delNextBatch();
+      });
+    });
+  }
+
+  // Parte 10.2: Apaga blocos antigos g*:chunk:* da v2.1.0 em pequenos lotes sem travar
+  function cleanupLegacyV21ChunksInBatches(maxKeysPerBatch, cb) {
+    var limit = maxKeysPerBatch || 20;
+    listAllKeys('items', function (err, keys) {
+      if (err || !keys || !keys.length) return cb && cb(null, 0);
+      var batch = keys.slice(0, limit);
+      var i = 0;
+      function next() {
+        if (i >= batch.length) return cb && cb(null, batch.length, keys.length - batch.length);
+        deleteRecord('items', batch[i++], next);
+      }
+      next();
+    });
+  }
+
+  // Estima o uso de armazenamento em bytes (Parte 6.4)
+  function estimateStorageUsage(cb) {
+    if (typeof navigator !== 'undefined' && navigator.storage && typeof navigator.storage.estimate === 'function') {
+      navigator.storage.estimate().then(function (est) {
+        cb(null, {
+          usageBytes: Number(est.usage || 0),
+          quotaBytes: Number(est.quota || 0)
+        });
+      }, function () {
+        estimateMemoryUsageFallback(cb);
+      });
+      return;
+    }
+    estimateMemoryUsageFallback(cb);
+  }
+
+  function estimateMemoryUsageFallback(cb) {
+    var totalBytes = 0;
+    for (var s = 0; s < STORE_NAMES.length; s++) {
+      var stName = STORE_NAMES[s];
+      var map = memoryStoreData[stName] || {};
+      var keys = Object.keys(map);
+      for (var i = 0; i < keys.length; i++) {
+        var rec = map[keys[i]];
+        if (!rec) continue;
+        if (typeof rec.payloadStr === 'string') {
+          totalBytes += rec.payloadStr.length + keys[i].length + 24;
+        } else {
+          try { totalBytes += JSON.stringify(rec).length; } catch (e) { totalBytes += 128; }
+        }
+      }
+    }
+    cb(null, { usageBytes: totalBytes, quotaBytes: 512 * 1024 * 1024 });
+  }
+
+  function saveMeta(key, value, cb) {
+    var ls = getLocalStoreObj();
+    if (ls && key !== 'tmdbCache') {
+      try { ls.setItem('lumina_' + key, JSON.stringify(value)); } catch (e) {}
+    }
+    putRecord('meta', { key: key, value: value, updatedAt: Date.now() }, function (err) {
+      if (cb) cb(err || null);
+    });
+  }
+
+  function loadMeta(key, defaultVal, cb) {
+    getRecord('meta', key, function (err, rec) {
+      if (!err && rec && typeof rec.value !== 'undefined') {
+        return cb(rec.value);
+      }
+      var ls = getLocalStoreObj();
+      if (ls) {
+        try {
+          var raw = ls.getItem('lumina_' + key);
+          if (raw) return cb(JSON.parse(raw));
+        } catch (e) {}
+      }
+      cb(defaultVal);
+    });
+  }
+
+  // Compatibilidade legada para testes v1.6.0 (saveCatalogBatch / loadCatalog)
   function compactItemForStorage(it, stripMediaMeta) {
     if (!it) return null;
     var out = {
@@ -95,189 +468,14 @@
     if (it.xtreamSeriesId) out.xtreamSeriesId = it.xtreamSeriesId;
     if (it.needsSeriesInfo) out.needsSeriesInfo = true;
     if (it.totalEpisodes) out.totalEpisodes = it.totalEpisodes;
-    if (it.httpUserAgent) out.httpUserAgent = it.httpUserAgent;
-    if (it.httpReferrer) out.httpReferrer = it.httpReferrer;
     if (!stripMediaMeta) {
       if (it.logo) out.logo = it.logo;
       if (it.epgNow) out.epgNow = it.epgNow;
-      if (it.epgNext) out.epgNext = it.epgNext;
       if (it.synopsis) out.synopsis = it.synopsis;
     }
     return out;
   }
 
-  function openDB(cb) {
-    if (dbInstance) return cb(null, dbInstance);
-    if (typeof indexedDB === 'undefined' || !indexedDB) {
-      return cb(null, null); // fallback para memoryStoreData + localStorage
-    }
-    try {
-      var req = indexedDB.open(DB_NAME, DB_VER);
-      req.onupgradeneeded = function (e) {
-        var db = e.target.result;
-        if (!db.objectStoreNames.contains('meta')) {
-          db.createObjectStore('meta', { keyPath: 'key' });
-        }
-        if (!db.objectStoreNames.contains('items')) {
-          db.createObjectStore('items', { keyPath: 'id' });
-        }
-        if (!db.objectStoreNames.contains('seriesDetail')) {
-          db.createObjectStore('seriesDetail', { keyPath: 'seriesId' });
-        }
-      };
-      req.onsuccess = function (e) {
-        dbInstance = e.target.result;
-        cb(null, dbInstance);
-      };
-      req.onerror = function (e) {
-        cb(e.target.error || new Error('Erro ao abrir IndexedDB'));
-      };
-    } catch (err) {
-      cb(err);
-    }
-  }
-
-  function putRecord(storeName, record, cb) {
-    openDB(function (err, db) {
-      if (err) return cb && cb(err);
-      if (!db) {
-        var pk = storeName === 'meta' ? record.key : (storeName === 'seriesDetail' ? record.seriesId : record.id);
-        memoryStoreData[storeName][pk] = JSON.parse(JSON.stringify(record));
-        return cb && cb(null);
-      }
-      try {
-        var tx = db.transaction(storeName, 'readwrite');
-        tx.objectStore(storeName).put(record);
-        tx.oncomplete = function () { if (cb) cb(null); };
-        tx.onerror = function (e) { if (cb) cb(e.target && e.target.error ? e.target.error : new Error('Erro de escrita IDB')); };
-      } catch (ex) {
-        if (cb) cb(ex);
-      }
-    });
-  }
-
-  function getRecord(storeName, key, cb) {
-    openDB(function (err, db) {
-      if (err) return cb(err, null);
-      if (!db) {
-        var found = memoryStoreData[storeName][key];
-        return cb(null, found ? JSON.parse(JSON.stringify(found)) : null);
-      }
-      try {
-        var tx = db.transaction(storeName, 'readonly');
-        var req = tx.objectStore(storeName).get(key);
-        req.onsuccess = function () { cb(null, req.result || null); };
-        req.onerror = function (e) { cb(e.target && e.target.error ? e.target.error : new Error('Erro de leitura IDB'), null); };
-      } catch (ex) {
-        cb(ex, null);
-      }
-    });
-  }
-
-  function deleteRecord(storeName, key, cb) {
-    openDB(function (err, db) {
-      if (err) return cb && cb(err);
-      if (!db) {
-        delete memoryStoreData[storeName][key];
-        return cb && cb(null);
-      }
-      try {
-        var tx = db.transaction(storeName, 'readwrite');
-        tx.objectStore(storeName).delete(key);
-        tx.oncomplete = function () { if (cb) cb(null); };
-        tx.onerror = function () { if (cb) cb(null); };
-      } catch (ex) {
-        if (cb) cb(null);
-      }
-    });
-  }
-
-  function listAllKeys(storeName, cb) {
-    openDB(function (err, db) {
-      if (err) return cb(err, []);
-      if (!db) {
-        return cb(null, Object.keys(memoryStoreData[storeName]));
-      }
-      try {
-        var tx = db.transaction(storeName, 'readonly');
-        var store = tx.objectStore(storeName);
-        if (typeof store.getAllKeys === 'function') {
-          var req = store.getAllKeys();
-          req.onsuccess = function () { cb(null, req.result || []); };
-          req.onerror = function () { cb(null, []); };
-        } else {
-          var keys = [];
-          var curReq = store.openCursor();
-          curReq.onsuccess = function (e) {
-            var cursor = e.target.result;
-            if (cursor) {
-              keys.push(cursor.key);
-              cursor.continue();
-            } else {
-              cb(null, keys);
-            }
-          };
-          curReq.onerror = function () { cb(null, keys); };
-        }
-      } catch (ex) {
-        cb(null, []);
-      }
-    });
-  }
-
-  function saveMeta(key, value, cb) {
-    var ls = getLocalStoreObj();
-    if (ls && key !== 'tmdbCache') {
-      try { ls.setItem('lumina_' + key, JSON.stringify(value)); } catch (e) {}
-    }
-    putRecord('meta', { key: key, value: value, updatedAt: Date.now() }, function (err) {
-      if (cb) cb(err || null);
-    });
-  }
-
-  function loadMeta(key, defaultVal, cb) {
-    getRecord('meta', key, function (err, rec) {
-      if (!err && rec && typeof rec.value !== 'undefined') {
-        return cb(rec.value);
-      }
-      var ls = getLocalStoreObj();
-      if (ls) {
-        try {
-          var raw = ls.getItem('lumina_' + key);
-          if (raw) return cb(JSON.parse(raw));
-        } catch (e) {}
-      }
-      cb(defaultVal);
-    });
-  }
-
-  function cleanupOldGenerations(keepGenId, cb) {
-    listAllKeys('items', function (err, keys) {
-      if (err || !keys || !keys.length) return cb && cb(null);
-      var prefixKeep = 'g' + keepGenId + ':';
-      var toDelete = [];
-      for (var i = 0; i < keys.length; i++) {
-        var k = String(keys[i]);
-        if (k.indexOf(prefixKeep) !== 0) {
-          toDelete.push(k);
-        }
-      }
-      var idx = 0;
-      function delNext() {
-        if (idx >= toDelete.length) return cb && cb(null);
-        var key = toDelete[idx++];
-        deleteRecord('items', key, function () {
-          setTimeout(delNext, 0);
-        });
-      }
-      delNext();
-    });
-  }
-
-  // Gravação atômica por geração (B1):
-  // 1. Grava todos os blocos g<genId>:chunk:<idx>
-  // 2. Só atualiza meta.catalogGeneration quando 100% dos blocos foram confirmados
-  // 3. Se falhar no meio, a geração anterior continua intacta!
   function saveCatalogBatchInternal(items, options, stripMedia, cb, onProgress) {
     var opts = options || {};
     var maxItems = opts.maxItems || MAX_PERSISTED_RAW_ITEMS;
@@ -288,14 +486,7 @@
     var idx = 0;
 
     function abortGeneration(err) {
-      // Remove os blocos parciais da geração que falhou sem tocar na geração ativa anterior
-      listAllKeys('items', function (_, keys) {
-        var badPrefix = 'g' + genId + ':';
-        for (var k = 0; k < (keys || []).length; k++) {
-          if (String(keys[k]).indexOf(badPrefix) === 0) {
-            deleteRecord('items', keys[k]);
-          }
-        }
+      deleteRecordsByPrefix('items', 'g' + genId + ':', null, function () {
         if (cb) cb(err || new Error('Falha ao gravar catálogo no armazenamento.'));
       });
     }
@@ -311,7 +502,7 @@
           chunkSize: CHUNK_SIZE,
           stats: stats,
           checksum: checksum,
-          classifierVersion: opts.classifierVersion || '2.0.0',
+          classifierVersion: opts.classifierVersion || '2.2.0',
           truncated: truncated,
           originalTotal: items.length,
           strippedMedia: !!stripMedia,
@@ -319,7 +510,7 @@
         };
         saveMeta('catalogGeneration', genMeta, function (metaErr) {
           if (metaErr) return abortGeneration(metaErr);
-          cleanupOldGenerations(genId, function () {
+          deleteRecordsByPrefix('items', 'g', 'g' + genId + ':', function () {
             if (cb) cb(null, genMeta);
           });
         });
@@ -339,20 +530,12 @@
 
       var chunkKey = 'g' + genId + ':chunk:' + idx;
       putRecord('items', { id: chunkKey, generation: genId, chunkIndex: idx, batch: batch }, function (err) {
-        if (err) {
-          var isQuota = err && (err.name === 'QuotaExceededError' || /quota/i.test(String(err.message || err)));
-          if (isQuota && !stripMedia) {
-            // Fallback automático: tenta salvar sem URLs de logos/EPG para caber em aparelhos com pouco espaço
-            return saveCatalogBatchInternal(items, options, true, cb, onProgress);
-          }
-          return abortGeneration(err);
-        }
+        if (err) return abortGeneration(err);
         idx++;
         if (onProgress) onProgress(idx / totalChunks);
         setTimeout(writeNextChunk, 0);
       });
     }
-
     writeNextChunk();
   }
 
@@ -360,7 +543,6 @@
     saveCatalogBatchInternal(items || [], options || {}, false, cb, onProgress);
   }
 
-  // Carrega a geração ativa verificando integridade (contagens + checksum) sem usar .concat em loop
   function loadCatalog(cb, onProgress) {
     loadMeta('catalogGeneration', null, function (genMeta) {
       if (genMeta && genMeta.generation && typeof genMeta.totalChunks === 'number') {
@@ -401,54 +583,16 @@
               });
             }
             var b = rec.batch;
-            for (var j = 0; j < b.length; j++) {
-              out.push(b[j]);
-            }
+            for (var j = 0; j < b.length; j++) out.push(b[j]);
             idx++;
             if (onProgress) onProgress(idx / totalChunks);
             setTimeout(readNextChunk, 0);
           });
         }
-
         readNextChunk();
         return;
       }
-
-      // Migração v1 -> v2: procura blocos antigos 'chunk_0', 'chunk_1'...
-      listAllKeys('items', function (err, keys) {
-        if (err || !keys || !keys.length) {
-          return cb(null, [], { migratedFromV1: false, integrityOk: true });
-        }
-        var v1Keys = [];
-        for (var i = 0; i < keys.length; i++) {
-          if (String(keys[i]).indexOf('chunk_') === 0) v1Keys.push(String(keys[i]));
-        }
-        v1Keys.sort(function (a, b) {
-          return parseInt(a.replace('chunk_', ''), 10) - parseInt(b.replace('chunk_', ''), 10);
-        });
-        if (!v1Keys.length) {
-          return cb(null, [], { migratedFromV1: false, integrityOk: true });
-        }
-
-        var outV1 = [];
-        var kIdx = 0;
-        function readV1Next() {
-          if (kIdx >= v1Keys.length) {
-            return cb(null, outV1, {
-              migratedFromV1: true,
-              wasTruncatedAt25k: outV1.length >= 25000,
-              integrityOk: true
-            });
-          }
-          getRecord('items', v1Keys[kIdx++], function (_, rec) {
-            if (rec && Array.isArray(rec.batch)) {
-              for (var m = 0; m < rec.batch.length; m++) outV1.push(rec.batch[m]);
-            }
-            setTimeout(readV1Next, 0);
-          });
-        }
-        readV1Next();
-      });
+      cb(null, [], { migratedFromV1: false, integrityOk: true });
     });
   }
 
@@ -471,14 +615,39 @@
 
   function resetMemoryStoreForTests(simulateChunkFailureIndex) {
     dbInstance = null;
-    memoryStoreData = { meta: {}, items: {}, seriesDetail: {} };
+    memoryStoreData = {
+      meta: {},
+      groups: {},
+      pages: {},
+      orders: {},
+      searchIndex: {},
+      episodes: {},
+      checkpoints: {},
+      items: {},
+      seriesDetail: {}
+    };
     simulatedFailAtChunk = typeof simulateChunkFailureIndex === 'number' ? simulateChunkFailureIndex : -1;
+    if (nodeDiskFd !== null && fsMod) {
+      try { fsMod.ftruncateSync(nodeDiskFd, 0); } catch (e) {}
+      nodeDiskOffset = 0;
+    }
+    simulatedQuotaExceeded = false;
   }
 
   var api = {
     SCHEMA_VERSION: SCHEMA_VERSION,
     MAX_PERSISTED_RAW_ITEMS: MAX_PERSISTED_RAW_ITEMS,
     CHUNK_SIZE: CHUNK_SIZE,
+    STORE_NAMES: STORE_NAMES,
+    putRecord: putRecord,
+    putRecordsBatch: putRecordsBatch,
+    getRecord: getRecord,
+    deleteRecord: deleteRecord,
+    listAllKeys: listAllKeys,
+    deleteRecordsByPrefix: deleteRecordsByPrefix,
+    cleanupLegacyV21ChunksInBatches: cleanupLegacyV21ChunksInBatches,
+    estimateStorageUsage: estimateStorageUsage,
+    computeStringChecksum: computeStringChecksum,
     saveMeta: saveMeta,
     loadMeta: loadMeta,
     saveCatalogBatch: saveCatalogBatch,
@@ -488,7 +657,13 @@
     computeCatalogStats: computeCatalogStats,
     computeCatalogChecksum: computeCatalogChecksum,
     resetMemoryStoreForTests: resetMemoryStoreForTests,
-    setSimulatedChunkFailure: function (idx) { simulatedFailAtChunk = idx; }
+    enableNodeDiskBackend: enableNodeDiskBackend,
+    disableNodeDiskBackend: disableNodeDiskBackend,
+    getDiskBytesUsed: function () { return nodeDiskOffset; },
+    dumpAllStoresForTests: function () { return memoryStoreData; },
+    setSimulatedChunkFailure: function (idx) { simulatedFailAtChunk = idx; },
+    setSimulatedQuotaExceeded: function (flag) { simulatedQuotaExceeded = !!flag; },
+    getSimulatedFailAtChunk: function () { return simulatedFailAtChunk; }
   };
 
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

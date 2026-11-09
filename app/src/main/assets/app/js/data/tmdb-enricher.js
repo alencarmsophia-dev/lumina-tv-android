@@ -1,95 +1,76 @@
 (function (global) {
   'use strict';
 
+  var TMDB_API_BASE = 'https://api.themoviedb.org/3';
+  var TMDB_IMG_BASE = 'https://image.tmdb.org/t/p/w500';
   var memoryCache = {};
-  var MAX_PER_RUN = 80;
 
-  function normalizeLookupKey(title) {
-    return String(title || '')
-      .toLowerCase()
-      .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '')
-      .replace(/[^a-z0-9\s]/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim();
-  }
-
-  // Aplica um resultado REAL do TMDB ({ overview, vote_average, release_date | first_air_date }) ao item.
-  function applyTmdbResult(item, hit) {
-    if (!item || !hit) return item;
-    if (hit.overview) item.synopsis = hit.overview;
-    if (hit.vote_average) item.rating = String(Math.round(hit.vote_average * 10) / 10);
-    var date = hit.release_date || hit.first_air_date || '';
-    if (date && !item.year) item.year = parseInt(date.slice(0, 4), 10) || item.year;
+  function applyTmdbResult(item, tmdbItem) {
+    if (!item || !tmdbItem) return item;
+    if (tmdbItem.overview) item.synopsis = tmdbItem.overview;
+    if (tmdbItem.poster_path && !item.logo) item.logo = TMDB_IMG_BASE + tmdbItem.poster_path;
+    if (tmdbItem.backdrop_path) item.backdrop = TMDB_IMG_BASE + tmdbItem.backdrop_path;
+    if (typeof tmdbItem.vote_average === 'number' && tmdbItem.vote_average > 0) {
+      item.rating = tmdbItem.vote_average.toFixed(1);
+    }
+    var dateStr = tmdbItem.release_date || tmdbItem.first_air_date || '';
+    if (dateStr && /^\d{4}/.test(dateStr)) {
+      item.year = parseInt(dateStr.slice(0, 4), 10);
+    }
     item.tmdbEnriched = true;
     return item;
   }
 
-  // Reaplica o que já foi baixado antes (cache), sem rede.
-  function enrichItem(item) {
-    if (!item) return item;
-    var hit = memoryCache[normalizeLookupKey(item.cleanTitle)];
-    return hit ? applyTmdbResult(item, hit) : item;
-  }
-
-  function searchTmdb(cfg, item, cb) {
-    var type = item.kind === 'movie' ? 'movie' : 'tv';
-    var url = 'https://api.themoviedb.org/3/search/' + type +
+  // Parte 6.8: Enriquece apenas o item individual ao abrir a tela de detalhes, com cache
+  function enrichSingleItemOnDemand(item, tmdbConfig, cb) {
+    if (!item || item.tmdbEnriched) return cb && cb(null, item);
+    var cfg = tmdbConfig || (global.LuminaStore ? global.LuminaStore.get('tmdb') : null) || {};
+    if (!cfg.enabled || !cfg.apiKey) {
+      return cb && cb(null, item);
+    }
+    var cacheKey = (item.section || item.kind || 'movie') + ':' + String(item.cleanTitle || '').toLowerCase();
+    if (memoryCache[cacheKey]) {
+      applyTmdbResult(item, memoryCache[cacheKey]);
+      return cb && cb(null, item);
+    }
+    if (typeof XMLHttpRequest === 'undefined') {
+      return cb && cb(null, item);
+    }
+    var endpoint = (item.section === 'series' || item.kind === 'series-show') ? '/search/tv' : '/search/movie';
+    var url = TMDB_API_BASE + endpoint +
       '?api_key=' + encodeURIComponent(cfg.apiKey) +
       '&language=' + encodeURIComponent(cfg.language || 'pt-BR') +
       '&query=' + encodeURIComponent(item.cleanTitle || '');
+
     var xhr = new XMLHttpRequest();
     xhr.open('GET', url, true);
-    xhr.timeout = 8000;
+    xhr.timeout = 6000;
     xhr.onload = function () {
-      if (xhr.status === 401) return cb(new Error('Chave TMDB inválida.'));
-      try { cb(null, (JSON.parse(xhr.responseText).results || [])[0] || null); } catch (e) { cb(null, null); }
+      try {
+        var data = JSON.parse(xhr.responseText);
+        var hit = data && data.results && data.results[0];
+        if (hit) {
+          memoryCache[cacheKey] = hit;
+          applyTmdbResult(item, hit);
+        }
+      } catch (e) {}
+      if (cb) cb(null, item);
     };
-    xhr.onerror = function () { cb(null, null); };
-    xhr.ontimeout = function () { cb(null, null); };
+    xhr.onerror = function () { if (cb) cb(null, item); };
+    xhr.ontimeout = function () { if (cb) cb(null, item); };
     xhr.send();
   }
 
-  function enrichCatalogBatch(cfg, callback) {
-    if (!cfg || !cfg.apiKey) {
-      return callback(new Error('Informe sua chave TMDB em app-config.json (tmdb.apiKey) para enriquecer o catálogo.'), 0);
-    }
-    var store = global.LuminaStore;
-    var all = (store.get('movies') || []).concat(store.get('seriesList') || [], store.get('novelasList') || []);
-    var queue = [];
-    var done = 0;
-    for (var i = 0; i < all.length && queue.length < MAX_PER_RUN; i++) {
-      var it = all[i];
-      if (it.tmdbEnriched || !it.cleanTitle) continue;
-      var key = normalizeLookupKey(it.cleanTitle);
-      if (memoryCache[key]) { applyTmdbResult(it, memoryCache[key]); done++; continue; }
-      queue.push({ item: it, key: key });
-    }
-
-    function finish(err) {
-      if (global.LuminaStorage) global.LuminaStorage.saveMeta('tmdbCache', memoryCache);
-      callback(err || null, done);
-    }
-    function next() {
-      var job = queue.shift();
-      if (!job) return finish(null);
-      searchTmdb(cfg, job.item, function (err, hit) {
-        if (err) return finish(err);
-        if (hit) { memoryCache[job.key] = hit; applyTmdbResult(job.item, hit); done++; }
-        next();
-      });
-    }
-    next();
+  function enrichCatalogBatch(tmdbConfig, cb) {
+    if (cb) cb(null, 0);
   }
 
-  global.LuminaTMDB = {
-    enrichItem: enrichItem,
+  var api = {
     applyTmdbResult: applyTmdbResult,
-    enrichCatalogBatch: enrichCatalogBatch,
-    getCache: function () { return memoryCache; }
+    enrichSingleItemOnDemand: enrichSingleItemOnDemand,
+    enrichCatalogBatch: enrichCatalogBatch
   };
 
-  if (typeof module !== 'undefined' && module.exports) {
-    module.exports = global.LuminaTMDB;
-  }
+  if (typeof module !== 'undefined' && module.exports) module.exports = api;
+  global.LuminaTMDB = api;
 })(typeof window !== 'undefined' ? window : global);

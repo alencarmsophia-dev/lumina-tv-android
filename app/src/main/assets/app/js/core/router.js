@@ -3,8 +3,10 @@
   var stack = ['home'];
 
   function navigate(route) {
+    // Parte 7.9: Qualquer atalho antigo para a rota universal 'search' redireciona para o Início
+    var targetRoute = (route === 'search') ? 'home' : route;
     var current = stack[stack.length - 1];
-    if (current === 'onboarding' && route !== 'onboarding' && global.LuminaPairing) {
+    if (current === 'onboarding' && targetRoute !== 'onboarding' && global.LuminaPairing) {
       global.LuminaPairing.stopPolling();
     }
     if (global.LuminaKeyboard && typeof global.LuminaKeyboard.isOpen === 'function' && global.LuminaKeyboard.isOpen()) {
@@ -13,10 +15,13 @@
     if (global.LuminaUI && typeof global.LuminaUI.closeSideMenu === 'function') {
       global.LuminaUI.closeSideMenu(false);
     }
-    if (current !== route) stack.push(route);
+    if (current && current !== targetRoute && global.LuminaNetQueue) {
+      global.LuminaNetQueue.abortByTag('tab_' + current);
+    }
+    if (current !== targetRoute) stack.push(targetRoute);
     global.LuminaStore.set('navDirection', 'forward');
-    global.LuminaStore.set('currentRoute', route);
-    global.LuminaEventBus.emit('route:changed', route);
+    global.LuminaStore.set('currentRoute', targetRoute);
+    global.LuminaEventBus.emit('route:changed', targetRoute);
   }
 
   function back() {
@@ -25,7 +30,6 @@
       return;
     }
 
-    // Se o teclado na tela (LuminaKeyboard) estiver aberto, Voltar fecha apenas o teclado mantendo o valor digitado (Seção B3)
     if (global.LuminaKeyboard && typeof global.LuminaKeyboard.isOpen === 'function' && global.LuminaKeyboard.isOpen()) {
       global.LuminaKeyboard.close(false);
       return;
@@ -50,6 +54,38 @@
     }
 
     var current = stack[stack.length - 1];
+
+    // Parte 8.6: Na tela de busca de uma aba (#filmes/busca, #series/busca, #canais/busca):
+    // Voltar com campo preenchido limpa a busca; com campo vazio sai da busca e devolve foco ao botão Buscar da aba!
+    if (current === 'live/search' || current === 'movies/search' || current === 'series/search') {
+      var secSearch = (global.LuminaStore && global.LuminaStore.get('activeSectionSearch')) || {};
+      if (secSearch.query && String(secSearch.query).length > 0) {
+        secSearch.query = '';
+        secSearch.results = [];
+        secSearch.totalMatched = 0;
+        secSearch.hasMore = false;
+        secSearch.cursor = 0;
+        global.LuminaStore.set('activeSectionSearch', secSearch);
+        if (global.LuminaUI && global.LuminaUI.renderCurrentRoute) {
+          global.LuminaUI.renderCurrentRoute();
+        }
+        return;
+      }
+      stack.pop();
+      var parentTab = current.split('/')[0] || 'home';
+      if (stack[stack.length - 1] !== parentTab) {
+        stack.push(parentTab);
+      }
+      global.LuminaStore.set('navDirection', 'back');
+      global.LuminaStore.set('currentRoute', parentTab);
+      global.LuminaEventBus.emit('route:changed', parentTab);
+      if (typeof document !== 'undefined' && global.LuminaFocus) {
+        var searchBtn = document.getElementById('tab-btn-search');
+        if (searchBtn) global.LuminaFocus.setFocus(searchBtn, parentTab);
+      }
+      return;
+    }
+
     if (current === 'player-fullscreen') {
       stack.pop();
       var prev = stack[stack.length - 1] || 'home';

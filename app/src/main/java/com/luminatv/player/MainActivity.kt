@@ -5,6 +5,7 @@ import android.app.Activity
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.content.SharedPreferences
 import android.content.pm.ApplicationInfo
 import android.content.res.Configuration
 import android.graphics.Color
@@ -48,15 +49,19 @@ class MainActivity : Activity() {
     companion object {
         const val APP_ENTRY_URL = "https://appassets.androidplatform.net/assets/app/index.html"
         const val UPDATE_REPO = "alencarmsophia-dev/lumina-tv-android"
-        const val APP_VERSION_NAME = "2.1.0"
+        const val APP_VERSION_NAME = "2.2.0"
         private const val MIN_CHROMIUM_MAJOR = 50
+        private const val BOOT_PREFS_NAME = "lumina_boot_guard"
+        private const val BOOT_WINDOW_MS = 3 * 60 * 1000L // 3 minutos
     }
 
     private lateinit var rootContainer: FrameLayout
     private lateinit var nativePlayerView: PlayerView
     private lateinit var fullscreenVideoContainer: FrameLayout
     private lateinit var splashImageView: ImageView
+    private lateinit var bootPrefs: SharedPreferences
     private var nativePlayerController: NativePlayerController? = null
+    private var listDownloader: ListDownloader? = null
     private var webView: WebView? = null
     private var webViewClientInstance: LuminaWebViewClient? = null
     private var keyBridge: KeyBridge? = null
@@ -111,6 +116,9 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        bootPrefs = getSharedPreferences(BOOT_PREFS_NAME, Context.MODE_PRIVATE)
+        recordBootStart()
+
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         window.decorView.setBackgroundColor(Color.parseColor("#0B0F17"))
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
@@ -132,7 +140,6 @@ class MainActivity : Activity() {
             setBackgroundColor(Color.parseColor("#0B0F17"))
         }
 
-        // 1. PlayerView nativo (Media3 ExoPlayer) no fundo do rootContainer
         nativePlayerView = PlayerView(this).apply {
             layoutParams = FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
@@ -150,6 +157,16 @@ class MainActivity : Activity() {
                 val safePayload = JSONObject.quote(payloadObj.toString())
                 sendJsCallback(
                     "if(window.__luminaNative&&window.__luminaNative.emit){window.__luminaNative.emit($safeName,$safePayload);}"
+                )
+            }
+        )
+
+        listDownloader = ListDownloader(
+            activity = this,
+            emitToJs = { payloadObj ->
+                val safePayload = JSONObject.quote(payloadObj.toString())
+                sendJsCallback(
+                    "if(window.__luminaListDownload&&window.__luminaListDownload.emit){window.__luminaListDownload.emit($safePayload);}"
                 )
             }
         )
@@ -197,8 +214,6 @@ class MainActivity : Activity() {
 
         setupWebView(createdWebView)
 
-        // Ordem de empilhamento (de trás para a frente):
-        // (1) PlayerView nativo -> (2) WebView transparente -> (3) fullscreenVideoContainer -> (4) splashImageView
         rootContainer.addView(nativePlayerView)
         rootContainer.addView(
             createdWebView,
@@ -218,7 +233,7 @@ class MainActivity : Activity() {
             val oldW = oldRight - oldLeft
             val oldH = oldBottom - oldTop
             if (w > 0 && h > 0 && (w != oldW || h != oldH)) {
-                createdWebView.evaluateJavascript(
+                webView?.evaluateJavascript(
                     "if(window.__luminaFitViewport){window.__luminaFitViewport();}",
                     null
                 )
@@ -228,12 +243,67 @@ class MainActivity : Activity() {
         createdWebView.loadUrl(APP_ENTRY_URL)
     }
 
+    // Parte 9.2: Detector de ciclo de falha persistido em SharedPreferences
+    private fun recordBootStart() {
+        val now = System.currentTimeMillis()
+        val wasInProgress = bootPrefs.getBoolean("bootInProgress", false)
+        val lastBootTs = bootPrefs.getLong("lastBootAt", 0L)
+        var failCount = bootPrefs.getInt("failCount", 0)
+        var safeMode = bootPrefs.getBoolean("safeMode", false)
+
+        if (wasInProgress && (now - lastBootTs) <= BOOT_WINDOW_MS) {
+            failCount += 1
+            if (failCount >= 2) {
+                safeMode = true
+            }
+        } else if (!wasInProgress && (now - lastBootTs) > BOOT_WINDOW_MS) {
+            failCount = 0
+        }
+
+        bootPrefs.edit()
+            .putBoolean("bootInProgress", true)
+            .putLong("lastBootAt", now)
+            .putInt("failCount", failCount)
+            .putBoolean("safeMode", safeMode)
+            .apply()
+    }
+
+    private fun handleWebViewRenderCrash() {
+        runOnUiThread {
+            val now = System.currentTimeMillis()
+            val fails = bootPrefs.getInt("failCount", 0) + 1
+            bootPrefs.edit()
+                .putBoolean("bootInProgress", true)
+                .putLong("lastBootAt", now)
+                .putInt("failCount", fails)
+                .putBoolean("safeMode", true)
+                .apply()
+
+            nativePlayerController?.stop()
+            webView?.let { oldWv ->
+                (oldWv.parent as? ViewGroup)?.removeView(oldWv)
+                try { oldWv.destroy() } catch (_: Exception) {}
+            }
+            val newWv = try { WebView(this) } catch (_: Throwable) { null } ?: return@runOnUiThread
+            webView = newWv
+            setupWebView(newWv)
+            rootContainer.addView(
+                newWv,
+                1,
+                FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT
+                )
+            )
+            newWv.loadUrl(APP_ENTRY_URL)
+        }
+    }
+
     @SuppressLint("SetJavaScriptEnabled")
     private fun setupWebView(wv: WebView) {
         val isDebugBuild = (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
         WebView.setWebContentsDebuggingEnabled(isDebugBuild)
 
-        // Fundo transparente para permitir ver o SurfaceView do ExoPlayer abaixo quando html.native-video-active estiver ativo
         wv.setBackgroundColor(Color.TRANSPARENT)
         wv.setLayerType(View.LAYER_TYPE_HARDWARE, null)
         wv.isFocusable = true
@@ -278,11 +348,15 @@ class MainActivity : Activity() {
 
         val defaultUa = settings.userAgentString
         val client = LuminaWebViewClient(
+            context = this,
             assetLoader = assetLoader,
             defaultUserAgent = defaultUa,
             onAppReady = {
                 wv.evaluateJavascript("if(window.__luminaFitViewport){window.__luminaFitViewport();}", null)
                 hideNativeSplash()
+            },
+            onWebViewCrash = {
+                handleWebViewRenderCrash()
             }
         )
         webViewClientInstance = client
@@ -581,7 +655,70 @@ class MainActivity : Activity() {
             return clipText
         }
 
-        // ── Métodos da Ponte do Player Nativo (Seção A4) ──
+        // ── Métodos do Detector Anti-Loop e Modo Seguro (Parte 9.2) ──
+        @JavascriptInterface
+        fun getBootGuardState(): String {
+            return JSONObject().apply {
+                put("bootInProgress", bootPrefs.getBoolean("bootInProgress", false))
+                put("failCount", bootPrefs.getInt("failCount", 0))
+                put("safeMode", bootPrefs.getBoolean("safeMode", false))
+                put("lastBootAt", bootPrefs.getLong("lastBootAt", 0L))
+            }.toString()
+        }
+
+        @JavascriptInterface
+        fun markBootStable() {
+            bootPrefs.edit()
+                .putBoolean("bootInProgress", false)
+                .putInt("failCount", 0)
+                .apply()
+        }
+
+        @JavascriptInterface
+        fun setSafeMode(enabled: Boolean) {
+            bootPrefs.edit()
+                .putBoolean("safeMode", enabled)
+                .putBoolean("bootInProgress", false)
+                .putInt("failCount", 0)
+                .apply()
+        }
+
+        // ── Métodos do ListDownloader Nativo (Parte 3.2 e 3.3) ──
+        @JavascriptInterface
+        fun listDownloadStart(configJson: String) {
+            listDownloader?.start(configJson)
+        }
+
+        @JavascriptInterface
+        fun listDownloadPause(listId: String) {
+            listDownloader?.pause(listId)
+        }
+
+        @JavascriptInterface
+        fun listDownloadResume(listId: String) {
+            listDownloader?.resume(listId)
+        }
+
+        @JavascriptInterface
+        fun listDownloadCancel(listId: String) {
+            listDownloader?.cancel(listId)
+        }
+
+        @JavascriptInterface
+        fun listFileSize(listId: String): Long = listDownloader?.getFileSize(listId) ?: 0L
+
+        @JavascriptInterface
+        fun listDelete(listId: String): Boolean = listDownloader?.deleteListFiles(listId) ?: false
+
+        @JavascriptInterface
+        fun getFreeSpaceBytes(): Long = listDownloader?.getFreeSpaceBytes() ?: (500L * 1024L * 1024L)
+
+        @JavascriptInterface
+        fun listReadSlice(listId: String, offset: Long, length: Int): String {
+            return listDownloader?.readSliceBase64(listId, offset, length) ?: ""
+        }
+
+        // ── Métodos da Ponte do Player Nativo (v2.1.0) ──
         @JavascriptInterface
         fun nativeIsAvailable(): Boolean = nativePlayerController != null
 

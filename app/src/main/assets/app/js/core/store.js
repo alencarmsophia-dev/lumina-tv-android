@@ -7,11 +7,28 @@
     ? global.LuminaSettings.hashPinWithSalt('0000', defaultSalt)
     : '';
 
+  // Parte 6.1: As chaves gigantes do catálogo foram removidas do LuminaStore.
+  // O estado em memória guarda apenas metadados leves, configurações e retratos de favoritos/progresso.
   var state = {
-    appVersion: '2.1.0',
+    appVersion: '2.2.0',
     currentRoute: 'home',
-    searchQuery: '',
-    searchHistory: [],
+    activeSectionSearch: {
+      section: 'movie',
+      scope: 'all',
+      groupId: 'all',
+      query: '',
+      cursor: 0,
+      results: [],
+      totalMatched: 0,
+      hasMore: false,
+      loading: false,
+      indexingProgress: null
+    },
+    searchHistoryBySection: {
+      live: [],
+      movie: [],
+      series: []
+    },
     heroBannerIndex: 0,
     pairingBaseUrl: 'https://surubim-player-pairing.vercel.app',
     pairingStep: 'cards',
@@ -20,8 +37,26 @@
     source: null,
     savedLists: [],
     activeListId: '',
+    listCatalogMeta: {
+      live: { status: 'empty', count: 0, updatedAt: 0 },
+      movie: { status: 'empty', count: 0, updatedAt: 0 },
+      series: { status: 'empty', count: 0, updatedAt: 0 }
+    },
+    importStatus: {
+      active: false,
+      paused: false,
+      stage: '',
+      percent: 0,
+      availableItems: 0,
+      bytesDone: 0,
+      bytesTotal: null,
+      speedBps: 0,
+      etaSec: null,
+      error: null
+    },
+    needsV22Migration: false,
+    safeMode: false,
     lastUpdateInfo: null,
-    recentAddedIds: {},
     pairingError: null,
     parental: {
       enabled: true,
@@ -40,19 +75,6 @@
       language: 'pt-BR',
       enrichedCount: 0
     },
-    rawItems: [],
-    items: [],
-    channels: [],
-    movies: [],
-    seriesList: [],
-    novelasList: [],
-    unclassifiedList: [],
-    categories: [],
-    movieCategories: [],
-    seriesCategories: [],
-    novelaCategories: [],
-    originalGroups: [],
-    itemByIdMap: {},
     mappingProfile: {
       mode: 'auto',
       customGroupRules: {},
@@ -66,6 +88,7 @@
     detailError: null,
     favorites: {},
     watchProgress: {},
+    recentChannels: [],
     aspectRatioByContent: {},
     defaultAspectRatio: 'auto',
     screenSafeMargin: 0,
@@ -74,6 +97,7 @@
     navDirection: 'forward',
     sleepTimerMinutes: 0,
     autoUpdateHours: 12,
+    catalogUpdatePolicy: '12h', // 'on_open_tab' | '6h' | '12h' | '24h' | 'manual'
     preferOutputFormat: 'auto',
     playerEngine: 'auto',
     playerUserAgent: 'vlc',
@@ -83,12 +107,14 @@
     liteModeActive: false,
     lastChannelId: null,
     currentChannelId: null,
+    activeLiveGroupId: 'all',
     playerState: 'IDLE',
     nextEpisodePrompt: null,
     appUpdateInfo: null,
     appUpdateProgress: null,
     streamTestResults: null,
     streamTestRunning: false,
+    storageUsageText: 'Calculando…',
     diagnosticsVisible: false,
     diagnostics: {
       engine: 'ExoPlayer',
@@ -135,13 +161,14 @@
       key === 'parental' ||
       key === 'tmdb' ||
       key === 'autoUpdateHours' ||
+      key === 'catalogUpdatePolicy' ||
       key === 'preferOutputFormat' ||
       key === 'playerEngine' ||
       key === 'playerUserAgent' ||
       key === 'playerUserAgentCustom' ||
       key === 'bufferProfile' ||
       key === 'includeCredentialsInBackup' ||
-      key === 'searchHistory'
+      key === 'searchHistoryBySection'
     ) {
       global.LuminaSettings.saveCurrentSettings();
     }
@@ -153,7 +180,7 @@
       return 'xt_' + String(entry.creds.server || '').replace(/[^a-z0-9]/gi, '_') + '_' + String(entry.creds.username || '');
     }
     if (entry && entry.type === 'm3u' && entry.url) {
-      return 'm3u_' + String(entry.url || '').slice(0, 64).replace(/[^a-z0-9]/gi, '_');
+      return 'm3u_' + String(entry.url || '').slice(0, 48).replace(/[^a-z0-9]/gi, '_');
     }
     return 'list_' + Date.now();
   }
@@ -171,10 +198,11 @@
       }
     }
 
+    var meta = state.listCatalogMeta || {};
     var counts = countsObj || {
-      channels: (state.channels || []).length,
-      movies: (state.movies || []).length,
-      series: (state.seriesList || []).length + (state.novelasList || []).length
+      channels: (meta.live && meta.live.count) || 0,
+      movies: (meta.movie && meta.movie.count) || 0,
+      series: (meta.series && meta.series.count) || 0
     };
     var acc = accountInfoObj || state.accountInfo || null;
 
@@ -206,7 +234,7 @@
     return record;
   }
 
-  function removeSavedList(listId) {
+  function removeSavedList(listId, cb) {
     var listArr = Array.isArray(state.savedLists) ? state.savedLists.slice() : [];
     var nextArr = [];
     for (var i = 0; i < listArr.length; i++) {
@@ -215,6 +243,11 @@
     state.savedLists = nextArr;
     if (global.LuminaStorage) {
       global.LuminaStorage.saveMeta('savedLists', nextArr);
+    }
+    if (global.LuminaCatalog && global.LuminaCatalog.clearList) {
+      global.LuminaCatalog.clearList(listId, cb);
+    } else if (cb) {
+      cb(null);
     }
     return nextArr;
   }
@@ -304,7 +337,7 @@
         };
       });
       var backup = {
-        version: '2.1.0',
+        version: '2.2.0',
         exportedAt: new Date().toISOString(),
         includesCredentials: withSecrets,
         pairingBaseUrl: state.pairingBaseUrl,
@@ -319,10 +352,12 @@
         screenSafeMargin: state.screenSafeMargin,
         performanceMode: state.performanceMode,
         autoUpdateHours: state.autoUpdateHours,
+        catalogUpdatePolicy: state.catalogUpdatePolicy,
         preferOutputFormat: state.preferOutputFormat,
         playerEngine: state.playerEngine,
         playerUserAgent: state.playerUserAgent,
         bufferProfile: state.bufferProfile,
+        searchHistoryBySection: state.searchHistoryBySection,
         parental: {
           enabled: state.parental.enabled,
           hideAdultInSearchAndHome: state.parental.hideAdultInSearchAndHome,
@@ -380,10 +415,14 @@
         applyLiteModeClass(data.performanceMode === 'lite');
       }
       if (typeof data.autoUpdateHours === 'number') state.autoUpdateHours = data.autoUpdateHours;
+      if (data.catalogUpdatePolicy) state.catalogUpdatePolicy = data.catalogUpdatePolicy;
       if (data.preferOutputFormat) state.preferOutputFormat = data.preferOutputFormat;
       if (data.playerEngine) state.playerEngine = data.playerEngine;
       if (data.playerUserAgent) state.playerUserAgent = data.playerUserAgent;
       if (data.bufferProfile) state.bufferProfile = data.bufferProfile;
+      if (data.searchHistoryBySection && typeof data.searchHistoryBySection === 'object') {
+        state.searchHistoryBySection = data.searchHistoryBySection;
+      }
       if (data.parental) {
         state.parental.enabled = !!data.parental.enabled;
         if (typeof data.parental.hideAdultInSearchAndHome === 'boolean') {
@@ -392,10 +431,6 @@
         if (data.parental.pinHash && data.parental.pinSalt) {
           state.parental.pinSalt = data.parental.pinSalt;
           state.parental.pinHash = data.parental.pinHash;
-        } else if (data.parental.pin && global.LuminaSettings) {
-          var s = 'lumina_bkp_' + Date.now();
-          state.parental.pinSalt = s;
-          state.parental.pinHash = global.LuminaSettings.hashPinWithSalt(String(data.parental.pin), s);
         }
       }
       if (data.tmdb) {
@@ -407,10 +442,23 @@
       }
       return true;
     },
-    toggleFavorite: function (itemId) {
+    // Parte 6.5: Grava retrato junto do registro de favorito para funcionar no Início e Favoritos sem carregar o catálogo
+    toggleFavorite: function (itemOrId, optionalItemObj) {
+      var itemId = typeof itemOrId === 'string' ? itemOrId : (itemOrId && itemOrId.id);
+      var itemObj = typeof itemOrId === 'object' ? itemOrId : optionalItemObj;
+      if (!itemId) return false;
+
       var favs = state.favorites;
-      if (favs[itemId]) delete favs[itemId];
-      else favs[itemId] = Date.now();
+      if (favs[itemId]) {
+        delete favs[itemId];
+      } else {
+        var portrait = (itemObj && global.LuminaCatalog && global.LuminaCatalog.createItemPortrait)
+          ? global.LuminaCatalog.createItemPortrait(itemObj)
+          : (itemObj || null);
+        favs[itemId] = portrait
+          ? { addedAt: Date.now(), portrait: portrait }
+          : Date.now();
+      }
       if (global.LuminaStorage) {
         global.LuminaStorage.saveMeta('favorites', favs);
         if (state.activeListId) {
@@ -420,11 +468,76 @@
       if (global.LuminaEventBus) global.LuminaEventBus.emit('favorites:changed', favs);
       return !!favs[itemId];
     },
+    // Parte 10.3: Preenche retrato de favorito legado na primeira vez que o item é encontrado
+    backfillFavoritePortraitIfNeeded: function (item) {
+      if (!item || !item.id) return;
+      var fav = state.favorites && state.favorites[item.id];
+      if (fav && (typeof fav === 'number' || !fav.portrait)) {
+        var portrait = (global.LuminaCatalog && global.LuminaCatalog.createItemPortrait)
+          ? global.LuminaCatalog.createItemPortrait(item)
+          : item;
+        state.favorites[item.id] = {
+          addedAt: typeof fav === 'number' ? fav : Date.now(),
+          portrait: portrait
+        };
+        if (global.LuminaStorage) {
+          global.LuminaStorage.saveMeta('favorites', state.favorites);
+          if (state.activeListId) {
+            global.LuminaStorage.saveMeta('favorites_' + state.activeListId, state.favorites);
+          }
+        }
+      }
+    },
     isFavorite: function (itemId) {
       if (!itemId) return false;
       if (state.favorites[itemId]) return true;
       var rawKey = String(itemId).replace(/^[isn]:/, '');
       return !!state.favorites[rawKey];
+    },
+    recordRecentChannelPortrait: function (chItem) {
+      if (!chItem || !chItem.id) return;
+      var portrait = (global.LuminaCatalog && global.LuminaCatalog.createItemPortrait)
+        ? global.LuminaCatalog.createItemPortrait(chItem)
+        : chItem;
+      var list = (state.recentChannels || []).slice();
+      for (var i = list.length - 1; i >= 0; i--) {
+        if (list[i].id === portrait.id) list.splice(i, 1);
+      }
+      list.unshift(portrait);
+      if (list.length > 20) list = list.slice(0, 20);
+      state.recentChannels = list;
+      if (global.LuminaStorage) {
+        global.LuminaStorage.saveMeta('recentChannels_' + (state.activeListId || 'default'), list);
+      }
+    },
+    saveWatchProgress: function (itemId, position, duration, optionalItemObj) {
+      if (!itemId) return null;
+      if (!state.watchProgress) state.watchProgress = {};
+      var existing = state.watchProgress[itemId] || {};
+      var portrait = existing.portrait || null;
+      if (optionalItemObj) {
+        portrait = (global.LuminaCatalog && global.LuminaCatalog.createItemPortrait)
+          ? global.LuminaCatalog.createItemPortrait(optionalItemObj)
+          : optionalItemObj;
+      }
+      var rec = {
+        position: Number(position || 0),
+        duration: Number(duration || 0),
+        updatedAt: Date.now(),
+        portrait: portrait
+      };
+      state.watchProgress[itemId] = rec;
+      if (global.LuminaStorage) {
+        global.LuminaStorage.saveMeta("watchProgress", state.watchProgress);
+        if (state.activeListId) {
+          global.LuminaStorage.saveMeta("watchProgress_" + state.activeListId, state.watchProgress);
+        }
+      }
+      return rec;
+    },
+    getWatchProgress: function (itemId) {
+      if (!itemId || !state.watchProgress) return null;
+      return state.watchProgress[itemId] || null;
     },
     removeWatchProgress: function (itemId) {
       if (state.watchProgress && state.watchProgress[itemId]) {
@@ -438,15 +551,19 @@
         if (global.LuminaEventBus) global.LuminaEventBus.emit('progress:changed', state.watchProgress);
       }
     },
-    addSearchHistory: function (term) {
+    // Parte 8.1: Histórico de busca separado por aba (últimas 8 consultas por aba)
+    addSectionSearchHistory: function (section, term) {
+      var sec = section || 'movie';
       var clean = String(term || '').trim();
       if (clean.length < 2) return;
-      var hist = (state.searchHistory || []).slice();
+      var map = state.searchHistoryBySection || { live: [], movie: [], series: [] };
+      var hist = (map[sec] || []).slice();
       var existingIdx = hist.indexOf(clean);
       if (existingIdx !== -1) hist.splice(existingIdx, 1);
       hist.unshift(clean);
-      if (hist.length > 10) hist = hist.slice(0, 10);
-      this.set('searchHistory', hist);
+      if (hist.length > 8) hist = hist.slice(0, 8);
+      map[sec] = hist;
+      this.set('searchHistoryBySection', map);
     }
   };
 

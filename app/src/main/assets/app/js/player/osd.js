@@ -180,7 +180,7 @@
 
     var quickChannelDrawer = '';
     if (isLive && quickListOpen) {
-      var allCh = global.LuminaStore.get('channels') || [];
+      var allCh = global.LuminaStore.get('recentChannels') || [];
       var winSize = 6;
       var maxStart = Math.max(0, allCh.length - winSize);
       if (quickListOffset > maxStart) quickListOffset = maxStart;
@@ -294,7 +294,7 @@
     if (targetEl) {
       var qChId = targetEl.getAttribute('data-osd-ch-id');
       if (qChId) {
-        var allCh = global.LuminaStore.get('channels') || [];
+        var allCh = global.LuminaStore.get('recentChannels') || [];
         for (var i = 0; i < allCh.length; i++) {
           if (allCh[i].id === qChId) {
             quickListOpen = false;
@@ -330,7 +330,7 @@
     } else if (action === 'toggle-qch') {
       quickListOpen = !quickListOpen;
       if (quickListOpen) {
-        var chs = global.LuminaStore.get('channels') || [];
+        var chs = global.LuminaStore.get('recentChannels') || [];
         for (var c = 0; c < chs.length; c++) {
           if (chs[c].id === item.id) {
             quickListOffset = Math.max(0, c - 2);
@@ -344,7 +344,7 @@
       renderOsd();
       global.LuminaFocus.setFocus(document.getElementById('osd-qch-prev'), 'osd');
     } else if (action === 'qch-next') {
-      var totalCh = (global.LuminaStore.get('channels') || []).length;
+      var totalCh = (global.LuminaStore.get('recentChannels') || []).length;
       if (quickListOffset + 6 < totalCh) quickListOffset += 6;
       renderOsd();
       global.LuminaFocus.setFocus(document.getElementById('osd-qch-next'), 'osd');

@@ -1,419 +1,317 @@
 (function (global) {
   'use strict';
 
-  var M3U_DOWNLOAD_TIMEOUT_MS = 180000; // 180s para listas M3U grandes (Seção C5)
-  var M3U_RETRY_DELAYS_MS = [1500, 3000];
-  var activeCancelToken = null;
+  var M3U_DOWNLOAD_TIMEOUT_MS = 180000;
+  var SLICE_READ_BYTES = 1024 * 1024; // 1 MB por fatia (Parte 3.3 e 4.1)
+  var activeDownloadSource = null;
+  var activeImportControl = null;
 
-  function createCancelToken() {
-    if (activeCancelToken) {
-      activeCancelToken.cancelled = true;
-      if (activeCancelToken.activeXhr) {
-        try { activeCancelToken.activeXhr.abort(); } catch (e) {}
+  // Parte 7.7 e 13.8h: Verifica se a atualização em segundo plano precisa de reflow comparando os 40 primeiros IDs
+  function evaluateBackgroundUpdateDiff(oldFirst40Ids, newFirst40Ids) {
+    if (!Array.isArray(oldFirst40Ids) || !Array.isArray(newFirst40Ids)) {
+      return { sameTop40: false, needsReflow: true };
+    }
+    if (oldFirst40Ids.length !== newFirst40Ids.length || oldFirst40Ids.length === 0) {
+      return { sameTop40: false, needsReflow: true };
+    }
+    var limit = Math.min(40, oldFirst40Ids.length);
+    for (var i = 0; i < limit; i++) {
+      if (oldFirst40Ids[i] !== newFirst40Ids[i]) {
+        return { sameTop40: false, needsReflow: true };
       }
     }
-    activeCancelToken = { cancelled: false, activeXhr: null };
-    return activeCancelToken;
+    return { sameTop40: true, needsReflow: false };
+  }
+
+  function updateStoreImportStatus(patch) {
+    if (!global.LuminaStore) return;
+    var cur = global.LuminaStore.get('importStatus') || {};
+    var keys = Object.keys(patch || {});
+    for (var i = 0; i < keys.length; i++) {
+      cur[keys[i]] = patch[keys[i]];
+    }
+    global.LuminaStore.set('importStatus', cur);
   }
 
   function cancelActiveLoad() {
-    if (activeCancelToken) {
-      activeCancelToken.cancelled = true;
-      if (activeCancelToken.activeXhr) {
-        try { activeCancelToken.activeXhr.abort(); } catch (e) {}
-      }
-      activeCancelToken = null;
-      return true;
+    if (activeDownloadSource && typeof activeDownloadSource.cancel === 'function') {
+      activeDownloadSource.cancel();
+      activeDownloadSource = null;
     }
-    return false;
+    if (activeImportControl) {
+      activeImportControl.cancelled = true;
+      activeImportControl = null;
+    }
+    updateStoreImportStatus({ active: false, paused: false, stage: 'Cancelado' });
+    return true;
   }
 
-  function buildCategoryCounts(items, allLabel) {
-    var counts = {};
-    var order = [];
-    for (var i = 0; i < items.length; i++) {
-      var g = items[i].groupDisplay || items[i].groupOriginal || 'Geral';
-      if (!counts[g]) {
-        counts[g] = 0;
-        order.push(g);
-      }
-      counts[g]++;
+  function pauseActiveImport() {
+    if (activeDownloadSource && typeof activeDownloadSource.pause === 'function') {
+      activeDownloadSource.pause();
     }
-    var out = [{ name: allLabel, count: items.length }];
-    for (var j = 0; j < order.length; j++) {
-      out.push({ name: order[j], count: counts[order[j]] });
+    if (activeImportControl) {
+      activeImportControl.paused = true;
     }
-    return out;
+    updateStoreImportStatus({ paused: true, stage: 'Pausado' });
   }
 
-  function computeCatalogDiff(prevRaw, nextRaw) {
-    var prevIds = {};
-    var prevCounts = { live: 0, movie: 0, series: 0 };
-    var nextCounts = { live: 0, movie: 0, series: 0 };
-    var newIds = {};
-    var newCount = 0;
-
-    for (var i = 0; i < (prevRaw || []).length; i++) {
-      var p = prevRaw[i];
-      if (!p) continue;
-      prevIds[p.id] = true;
-      if (p.kind === 'live') prevCounts.live++;
-      else if (p.kind === 'movie') prevCounts.movie++;
-      else prevCounts.series++;
+  function resumeActiveImport() {
+    if (activeDownloadSource && typeof activeDownloadSource.resume === 'function') {
+      activeDownloadSource.resume();
     }
-
-    var hasPrev = (prevRaw && prevRaw.length > 0);
-    for (var j = 0; j < (nextRaw || []).length; j++) {
-      var n = nextRaw[j];
-      if (!n) continue;
-      if (n.kind === 'live') nextCounts.live++;
-      else if (n.kind === 'movie') nextCounts.movie++;
-      else nextCounts.series++;
-
-      if (hasPrev && !prevIds[n.id]) {
-        newIds[n.id] = Date.now();
-        newCount++;
+    if (activeImportControl && activeImportControl.paused) {
+      activeImportControl.paused = false;
+      if (typeof activeImportControl.continueStep === 'function') {
+        activeImportControl.continueStep();
       }
     }
+    updateStoreImportStatus({ paused: false });
+  }
 
-    return {
-      hasPrev: hasPrev,
-      liveDelta: nextCounts.live - prevCounts.live,
-      movieDelta: nextCounts.movie - prevCounts.movie,
-      seriesDelta: nextCounts.series - prevCounts.series,
-      newAddedCount: newCount,
-      recentAddedIds: newIds
+  // Importa um arquivo/buffer M3U em fatias de 1 MB com suporte a checkpoint e retomada exata (Parte 4.1–4.7)
+  function runChunkedM3uImportFromSource(listId, sourceReader, totalBytes, options, onProgress, callback) {
+    var opts = options || {};
+    var sliceSize = opts.sliceSize || SLICE_READ_BYTES;
+    var session = global.LuminaImportWorker.createStreamingImportSession({
+      listId: listId,
+      generationId: opts.generationId || ('gen_' + Date.now()),
+      storage: opts.storage || global.LuminaStorage,
+      classifier: opts.classifier || global.LuminaClassifier,
+      simulateCrashAtByteOffset: opts.simulateCrashAtByteOffset || -1
+    });
+
+    var control = {
+      cancelled: false,
+      paused: false,
+      continueStep: null
     };
-  }
+    activeImportControl = control;
 
-  function rebuildCatalogFromRawAsync(rawItems, onProgress, onDone, alreadyClassified) {
-    var profile = (global.LuminaStore && global.LuminaStore.get('mappingProfile')) || { mode: 'auto', customGroupRules: {}, renamedGroups: {}, groupOrder: [] };
-    var list = rawItems || [];
-    var total = list.length;
-    var processed = [];
-    var idx = 0;
-    var BATCH_SIZE = 3000;
+    function startReadingFrom(startOffset) {
+      var offset = startOffset;
 
-    function processSlice() {
-      var end = Math.min(idx + BATCH_SIZE, total);
-      for (; idx < end; idx++) {
-        var it = list[idx];
-        if (!it) continue;
-        if (!alreadyClassified || !it.cleanTitle || !it.kind) {
-          it = global.LuminaClassifier.classifyEntry(it);
+      function nextSlice() {
+        if (control.cancelled) {
+          return callback(new Error('Importação cancelada pelo usuário.'), null);
         }
-        processed.push(global.LuminaClassifier.applyProfileMapping(it, profile));
-      }
-
-      if (onProgress && total > 0) {
-        onProgress({ stage: 'Organizando catálogo...', percent: Math.round((idx / total) * 70) });
-      }
-
-      if (idx < total) {
-        setTimeout(processSlice, 0);
-      } else {
-        finalizeGrouping();
-      }
-    }
-
-    function finalizeGrouping() {
-      var grouped = global.LuminaGrouper.groupCatalog(processed);
-      var channels = [];
-      var movies = [];
-      var unclassified = [];
-      var itemByIdMap = {};
-      var groupMap = {};
-
-      for (var i = 0; i < processed.length; i++) {
-        var item = processed[i];
-        itemByIdMap[item.id] = item;
-        var origG = item.groupOriginal || 'Sem Grupo';
-        if (!groupMap[origG]) {
-          groupMap[origG] = {
-            originalName: origG,
-            displayName: (profile.renamedGroups && profile.renamedGroups[origG]) || item.groupDisplay || origG,
-            count: 0,
-            suggested: item.kind === 'episode' ? (item.isNovela ? 'novela' : 'series') : item.kind
-          };
-        }
-        groupMap[origG].count++;
-      }
-
-      for (var j = 0; j < grouped.standaloneItems.length; j++) {
-        var st = grouped.standaloneItems[j];
-        if (st.kind === 'hidden') continue;
-        if (st.kind === 'live') {
-          st.channelNumber = channels.length + 1;
-          channels.push(st);
-        } else if (st.kind === 'movie') {
-          movies.push(st);
-        } else {
-          unclassified.push(st);
-        }
-      }
-
-      for (var s = 0; s < grouped.seriesList.length; s++) {
-        itemByIdMap[grouped.seriesList[s].id] = grouped.seriesList[s];
-      }
-      for (var n = 0; n < grouped.novelasList.length; n++) {
-        itemByIdMap[grouped.novelasList[n].id] = grouped.novelasList[n];
-      }
-
-      var origGroupsArr = Object.keys(groupMap).map(function (k) { return groupMap[k]; });
-      origGroupsArr.sort(function (a, b) { return b.count - a.count; });
-
-      if (global.LuminaStore) {
-        global.LuminaStore.set('rawItems', processed);
-        global.LuminaStore.set('items', processed);
-        global.LuminaStore.set('channels', channels);
-        global.LuminaStore.set('movies', movies);
-        global.LuminaStore.set('seriesList', grouped.seriesList);
-        global.LuminaStore.set('novelasList', grouped.novelasList);
-        global.LuminaStore.set('unclassifiedList', unclassified);
-        global.LuminaStore.set('itemByIdMap', itemByIdMap);
-        global.LuminaStore.set('originalGroups', origGroupsArr);
-        global.LuminaStore.set('categories', buildCategoryCounts(channels, 'Todos os Canais'));
-        global.LuminaStore.set('movieCategories', buildCategoryCounts(movies, 'Todos os Filmes'));
-        global.LuminaStore.set('seriesCategories', buildCategoryCounts(grouped.seriesList, 'Todas as Séries'));
-        global.LuminaStore.set('novelaCategories', buildCategoryCounts(grouped.novelasList, 'Todas as Novelas'));
-      }
-
-      if (onDone) onDone(null, processed);
-    }
-
-    processSlice();
-  }
-
-  function applyMappingAndPersist(newProfile, cb) {
-    var curProfile = global.LuminaStore.get('mappingProfile');
-    if (curProfile) {
-      var undoStack = (global.LuminaStore.get('organizerUndoStack') || []).slice(-9);
-      undoStack.push(JSON.parse(JSON.stringify(curProfile)));
-      global.LuminaStore.set('organizerUndoStack', undoStack);
-    }
-    global.LuminaStore.set('mappingProfile', newProfile);
-    if (global.LuminaStorage) global.LuminaStorage.saveMeta('mappingProfile', newProfile);
-    var raw = global.LuminaStore.get('rawItems') || [];
-    rebuildCatalogFromRawAsync(raw, null, function () {
-      if (cb) cb();
-    }, true);
-  }
-
-  function undoLastMappingChange(cb) {
-    var stack = (global.LuminaStore.get('organizerUndoStack') || []).slice();
-    if (!stack.length) return cb && cb(false);
-    var prev = stack.pop();
-    global.LuminaStore.set('organizerUndoStack', stack);
-    global.LuminaStore.set('mappingProfile', prev);
-    if (global.LuminaStorage) global.LuminaStorage.saveMeta('mappingProfile', prev);
-    var raw = global.LuminaStore.get('rawItems') || [];
-    rebuildCatalogFromRawAsync(raw, null, function () {
-      if (cb) cb(true);
-    }, true);
-  }
-
-  function commitIncomingCatalog(newRawItems, onProgress, callback) {
-    var prevRaw = (global.LuminaStore && global.LuminaStore.get('rawItems')) || [];
-    var diff = computeCatalogDiff(prevRaw, newRawItems);
-
-    if (onProgress) onProgress({ stage: '4/4 \u00B7 Salvando catálogo na TV\u2026', percent: 92 });
-    global.LuminaStorage.saveCatalogBatch(
-      newRawItems,
-      function (saveErr, genMeta) {
-        if (saveErr) {
-          return callback(saveErr, null);
-        }
-        rebuildCatalogFromRawAsync(newRawItems, onProgress, function () {
-          var updateRecord = {
-            updatedAt: Date.now(),
-            generation: genMeta ? genMeta.generation : '',
-            stats: genMeta ? genMeta.stats : null,
-            diff: diff
-          };
-          if (global.LuminaStore) {
-            global.LuminaStore.set('recentAddedIds', diff.recentAddedIds);
-            global.LuminaStore.set('lastUpdateInfo', updateRecord);
-          }
-          if (global.LuminaStorage) {
-            global.LuminaStorage.saveMeta('lastUpdateInfo', updateRecord);
-          }
-          callback(null, newRawItems, updateRecord);
-        }, true);
-      },
-      function (ratio) {
-        if (onProgress) {
-          onProgress({ stage: '4/4 \u00B7 Salvando catálogo na TV\u2026', percent: 90 + Math.round(ratio * 10) });
-        }
-      },
-      { classifierVersion: global.LuminaClassifier.CLASSIFIER_VERSION }
-    );
-  }
-
-  function downloadM3uTextWithRetry(url, onProgress, cancelToken, cb) {
-    var maxRetries = M3U_RETRY_DELAYS_MS.length;
-    var attempt = 0;
-
-    function runAttempt() {
-      if (cancelToken && cancelToken.cancelled) {
-        return cb(new Error('Importação cancelada pelo usuário.'));
-      }
-      var xhr = new XMLHttpRequest();
-      cancelToken.activeXhr = xhr;
-      var startMs = Date.now();
-
-      try {
-        xhr.open('GET', url, true);
-        xhr.timeout = M3U_DOWNLOAD_TIMEOUT_MS;
-      } catch (e) {
-        return cb(new Error('URL M3U inválida: ' + e.message));
-      }
-
-      xhr.onprogress = function (e) {
-        if (!onProgress) return;
-        if (e.lengthComputable && e.total > 0) {
-          var pct = Math.min(48, Math.round((e.loaded / e.total) * 48));
-          var mb = (e.loaded / 1048576).toFixed(1);
-          onProgress({ stage: '2/4 \u00B7 Baixando arquivo M3U (' + mb + ' MB)\u2026', percent: pct });
-        } else if (e.loaded > 0) {
-          var mb2 = (e.loaded / 1048576).toFixed(1);
-          onProgress({ stage: '2/4 \u00B7 Baixando arquivo M3U (' + mb2 + ' MB)\u2026', percent: 28 });
-        }
-      };
-
-      function retryOrFail(errObj) {
-        var status = errObj.httpStatus || 0;
-        var proxyErr = errObj.proxyError || '';
-        var canRetry = !(cancelToken && cancelToken.cancelled) &&
-          attempt < maxRetries &&
-          status !== 401 && status !== 403 && status !== 404 &&
-          proxyErr !== 'SSL' && proxyErr !== 'DNS';
-
-        if (canRetry) {
-          var wait = M3U_RETRY_DELAYS_MS[attempt++];
-          setTimeout(runAttempt, wait);
+        if (control.paused) {
+          control.continueStep = nextSlice;
           return;
         }
-        if (global.LuminaDiagLog) {
-          global.LuminaDiagLog.record('list-load', {
-            engine: 'M3ULoader',
-            url: url,
-            httpStatus: status,
-            code: errObj.code || 'M3U_ERR',
-            elapsedMs: Date.now() - startMs,
-            message: errObj.message
-          });
+        // Parte 14: Pausa importação em 2º plano enquanto um vídeo estiver tocando para não competir com o player
+        if (!opts.ignorePlayerPause && global.LuminaPlayer && global.LuminaPlayer.getState && global.LuminaPlayer.getState() === 'PLAYING') {
+          setTimeout(nextSlice, 1000);
+          return;
         }
-        cb(errObj);
+
+        sourceReader(offset, sliceSize, function (readErr, chunk) {
+          if (readErr) return callback(readErr, null);
+          var len = chunk ? chunk.length : 0;
+          var isLast = (len === 0) || (totalBytes > 0 && (offset + len) >= totalBytes);
+
+          session.processByteOrTextSlice(chunk, len, isLast, function (procErr) {
+            if (procErr) {
+              // Se ocorreu falha/interrupção, grava checkpoint para retomar depois! (Parte 4.3)
+              session.saveCheckpointSnapshot(function () {
+                callback(procErr, null);
+              });
+              return;
+            }
+
+            offset += len;
+            var st = session.getStats();
+            var pct = totalBytes > 0 ? Math.min(99, Math.round((offset / totalBytes) * 100)) : 50;
+
+            updateStoreImportStatus({
+              active: true,
+              paused: false,
+              stage: 'Indexando lista… ' + pct + '%',
+              percent: pct,
+              availableItems: st.totalEntries
+            });
+
+            if (onProgress) {
+              onProgress({
+                stage: 'Indexando (' + pct + '% \u00B7 ' + st.totalEntries + ' itens)',
+                percent: pct,
+                itemsCount: st.totalEntries,
+                stats: st
+              });
+            }
+
+            if (isLast) {
+              session.finalizeImport(function (finErr, listMeta) {
+                activeImportControl = null;
+                updateStoreImportStatus({
+                  active: false,
+                  paused: false,
+                  stage: 'Pronto',
+                  percent: 100,
+                  availableItems: st.totalEntries
+                });
+                if (finErr) return callback(finErr, null);
+                if (global.LuminaStore) {
+                  global.LuminaStore.set('listCatalogMeta', listMeta.sections);
+                  global.LuminaStore.set('needsV22Migration', false);
+                }
+                if (global.LuminaCatalog) {
+                  global.LuminaCatalog.clearMemoryCaches();
+                  global.LuminaCatalog.notifySubscribers('all', { type: 'import-complete', listMeta: listMeta });
+                }
+                callback(null, listMeta);
+              });
+            } else {
+              if (opts.syncLoopForTests) {
+                nextSlice();
+              } else {
+                setTimeout(nextSlice, 0);
+              }
+            }
+          });
+        });
       }
 
-      xhr.onload = function () {
-        if (cancelToken && cancelToken.cancelled) {
-          return cb(new Error('Importação cancelada pelo usuário.'));
-        }
-        var proxyHeader = '';
-        try { proxyHeader = xhr.getResponseHeader('X-Lumina-Proxy-Error') || ''; } catch (e) {}
-
-        if (xhr.status === 502 && proxyHeader) {
-          var pJson = null;
-          try { pJson = JSON.parse(xhr.responseText); } catch (e) {}
-          var pMsg = (pJson && pJson.message) || '';
-          var sslErr = new Error(
-            proxyHeader === 'SSL'
-              ? 'O certificado de segurança (HTTPS) deste servidor é inválido ou autoassinado.'
-              : (proxyHeader === 'DNS'
-                ? 'Não foi possível encontrar este servidor (erro de DNS). Confira o endereço digitado.'
-                : ('Falha de conexão com o servidor (' + (pMsg || proxyHeader) + ').'))
-          );
-          sslErr.httpStatus = 502;
-          sslErr.proxyError = proxyHeader;
-          sslErr.isSslError = (proxyHeader === 'SSL');
-          return retryOrFail(sslErr);
-        }
-
-        if (xhr.status < 200 || xhr.status >= 300) {
-          var httpErr = new Error(
-            (xhr.status === 401 || xhr.status === 403)
-              ? 'Acesso negado ao baixar a lista M3U (HTTP ' + xhr.status + '). Confira o link ou sua assinatura.'
-              : ('Falha ao baixar lista M3U (HTTP ' + xhr.status + ').')
-          );
-          httpErr.httpStatus = xhr.status;
-          return retryOrFail(httpErr);
-        }
-
-        var text = String(xhr.responseText || '');
-        var trimmed = text.trim();
-        if (!trimmed) {
-          return cb(new Error('A lista foi baixada, mas está vazia.'));
-        }
-        if (/^<!DOCTYPE\s+html|^<html/i.test(trimmed)) {
-          return cb(new Error('O servidor pediu login ou retornou uma página web em vez da lista M3U.'));
-        }
-        if (trimmed.indexOf('#EXTM3U') === -1 && trimmed.indexOf('#EXTINF') === -1) {
-          return cb(new Error('O arquivo baixado não é uma lista M3U válida (cabeçalho #EXTM3U ausente).'));
-        }
-
-        cb(null, text);
-      };
-
-      xhr.onerror = function () {
-        var netErr = new Error('Erro de rede ao baixar lista M3U. Verifique a conexão e a URL.');
-        netErr.httpStatus = 0;
-        retryOrFail(netErr);
-      };
-
-      xhr.ontimeout = function () {
-        var tErr = new Error('O servidor demorou demais para enviar a lista M3U.');
-        tErr.httpStatus = 0;
-        tErr.proxyError = 'TIMEOUT';
-        retryOrFail(tErr);
-      };
-
-      xhr.send();
+      nextSlice();
     }
 
-    runAttempt();
-  }
-
-  function loadFromUrlOrLocalPath(url, sourceId, onProgress, callback) {
-    var token = createCancelToken();
-    if (onProgress) onProgress({ stage: '2/4 \u00B7 Conectando ao servidor M3U\u2026', percent: 10 });
-
-    downloadM3uTextWithRetry(url, onProgress, token, function (dlErr, text) {
-      if (dlErr) return callback(dlErr, null);
-
-      global.LuminaM3UParser.parseChunkedAsync(
-        text,
-        sourceId || 'm3u',
-        global.LuminaClassifier.classifyEntry,
-        function (p) {
+    // Verifica se há um checkpoint salvo para retomar de onde parou (Parte 4.3)
+    var st = opts.storage || global.LuminaStorage;
+    if (opts.resumeFromCheckpoint && st) {
+      st.getRecord('checkpoints', listId, function (_, cpRec) {
+        if (cpRec && cpRec.byteOffset > 0) {
+          session.restoreFromCheckpoint(cpRec);
+          var resumePct = totalBytes > 0 ? Math.round((cpRec.byteOffset / totalBytes) * 100) : 0;
           if (onProgress) {
             onProgress({
-              stage: '3/4 \u00B7 Lendo canais e filmes (' + p.itemsCount + ' itens)\u2026',
-              percent: 50 + Math.round((p.percent || 0) * 0.4)
+              stage: 'Retomando importação\u2026 ' + resumePct + '%',
+              percent: resumePct,
+              resumedFromOffset: cpRec.byteOffset
             });
           }
-        },
-        function (parseErr, items) {
-          if (parseErr) return callback(parseErr, null);
-          if (!items || !items.length) {
-            return callback(new Error('A lista foi baixada, mas não contém canais ou filmes válidos.'), null);
+          startReadingFrom(cpRec.byteOffset);
+        } else {
+          startReadingFrom(0);
+        }
+      });
+    } else {
+      startReadingFrom(0);
+    }
+  }
+
+  // Importa M3U diretamente de uma string ou Uint8Array (usado em testes de 50k..1M e no WebStreamSource em memória)
+  function importM3uBufferOrText(listId, bufferOrText, options, onProgress, callback) {
+    var u8 = bufferOrText;
+    if (typeof bufferOrText === 'string') {
+      if (typeof Buffer !== 'undefined') {
+        u8 = new Uint8Array(Buffer.from(bufferOrText, 'utf8'));
+      } else if (typeof TextEncoder !== 'undefined') {
+        u8 = new TextEncoder().encode(bufferOrText);
+      } else {
+        u8 = new Uint8Array(bufferOrText.length);
+        for (var i = 0; i < bufferOrText.length; i++) u8[i] = bufferOrText.charCodeAt(i) & 0xFF;
+      }
+    }
+
+    var totalBytes = u8.length;
+    var reader = function (offset, length, cb) {
+      if (offset >= totalBytes) return cb(null, new Uint8Array(0));
+      var end = Math.min(totalBytes, offset + length);
+      cb(null, u8.subarray(offset, end));
+    };
+
+    runChunkedM3uImportFromSource(listId, reader, totalBytes, options, onProgress, callback);
+  }
+
+  // Parte 3.1 e 4: Baixa M3U via LuminaListSource e importa em fluxo com checkpoint
+  function loadFromUrlOrLocalPath(url, sourceId, onProgress, callback, options) {
+    var opts = options || {};
+    var listId = sourceId || (global.LuminaStore ? global.LuminaStore.buildListId({ type: 'm3u', url: url }) : 'm3u_default');
+    cancelActiveLoad();
+
+    var dlSource = global.LuminaListSource.createSource({
+      listId: listId,
+      url: url,
+      ext: 'm3u',
+      userAgent: opts.userAgent || 'VLC/3.0.20 LibVLC/3.0.20',
+      onProgress: function (p) {
+        var mbDone = (p.bytesDone / 1048576).toFixed(1);
+        var mbTotal = p.bytesTotal ? (' / ' + (p.bytesTotal / 1048576).toFixed(1) + ' MB') : ' MB';
+        var pct = p.bytesTotal ? Math.min(45, Math.round((p.bytesDone / p.bytesTotal) * 45)) : 20;
+        var msg = p.message || ('Baixando a lista (' + mbDone + mbTotal + ')…');
+        updateStoreImportStatus({
+          active: true,
+          paused: false,
+          stage: msg,
+          percent: pct,
+          bytesDone: p.bytesDone,
+          bytesTotal: p.bytesTotal,
+          speedBps: p.speedBps,
+          etaSec: p.etaSec
+        });
+        if (onProgress) onProgress({ stage: msg, percent: pct, downloadProgress: p });
+      },
+      onDone: function (dlRes) {
+        activeDownloadSource = null;
+        // Confere cabeçalho #EXTM3U nos primeiros 2 KB antes de indexar (Parte 11 e 12)
+        dlSource.readSlice(0, 2048, function (hErr, headSlice) {
+          if (hErr || !headSlice || !headSlice.length) {
+            return callback(new Error('A lista baixada está vazia.'), null);
           }
-          commitIncomingCatalog(items, onProgress, callback);
-        },
-        token
-      );
+          var headStr = global.LuminaImportWorker.createUtf8ChunkDecoder().decodeChunk(headSlice, true).trim();
+          if (/^<!DOCTYPE\s+html|^<html/i.test(headStr)) {
+            return callback(new Error('O servidor pediu login ou retornou uma página web em vez da lista M3U.'), null);
+          }
+          if (headStr.indexOf('#EXTM3U') === -1 && headStr.indexOf('#EXTINF') === -1) {
+            return callback(new Error('O arquivo baixado não é uma lista M3U válida (não começa com #EXTM3U).'), null);
+          }
+
+          runChunkedM3uImportFromSource(
+            listId,
+            function (offset, length, rCb) {
+              dlSource.readSlice(offset, length, rCb);
+            },
+            dlRes.sizeBytes,
+            opts,
+            onProgress,
+            function (impErr, listMeta) {
+              if (impErr) return callback(impErr, null);
+              callback(null, listMeta, { stats: listMeta.stats });
+            }
+          );
+        });
+      },
+      onError: function (dlErr) {
+        activeDownloadSource = null;
+        updateStoreImportStatus({ active: false, error: dlErr });
+        var err = new Error(dlErr.humanMessage || 'Falha no download da lista.');
+        err.code = dlErr.code || 'DOWNLOAD_ERROR';
+        callback(err, null);
+      }
     });
+
+    activeDownloadSource = dlSource;
+    dlSource.start();
   }
 
-  function loadFromXtream(creds, onProgress, callback) {
-    var token = createCancelToken();
-    global.LuminaXtream.fetchCompleteCatalog(creds, onProgress, function (err, items) {
+  // Parte 5.1: Conectar Xtream baixa apenas autenticação e categorias!
+  function loadFromXtream(creds, onProgress, callback, options) {
+    var opts = options || {};
+    var listId = opts.listId || (global.LuminaStore ? global.LuminaStore.buildListId({ type: 'xtream', creds: creds }) : 'xt_default');
+    global.LuminaXtream.connectXtreamAndLoadCategories(creds, listId, onProgress, function (err, res) {
       if (err) return callback(err, null);
-      commitIncomingCatalog(items, onProgress, callback);
-    }, token);
+      if (global.LuminaStore) {
+        global.LuminaCatalog.getListState(listId, function (_, st) {
+          if (st && st.sections) global.LuminaStore.set('listCatalogMeta', st.sections);
+          callback(null, res, { categoryCounts: res.categoryCounts });
+        });
+      } else {
+        callback(null, res, { categoryCounts: res.categoryCounts });
+      }
+    }, opts);
   }
 
-  // Troca entre listas salvas preservando favoritos e progresso por lista (Seção B6)
+  // Parte 6.6: Troca instantânea entre listas salvas quando já importadas
   function activateSavedList(listId, onProgress, callback) {
     var store = global.LuminaStore;
     if (!store) return callback && callback(new Error('Store indisponível'));
@@ -435,162 +333,162 @@
       global.LuminaStorage.saveMeta('watchProgress_' + oldListId, store.get('watchProgress') || {});
     }
 
-    function restorePerListStateAndLoad() {
-      if (target.type === 'xtream' && target.creds) {
-        loadFromXtream(target.creds, onProgress, function (err, items, updRec) {
-          if (!err) {
-            var srcObj = { id: target.id, type: 'xtream', name: target.name, creds: target.creds };
-            store.set('xtreamCreds', target.creds);
-            store.set('source', srcObj);
-            if (global.LuminaStorage) global.LuminaStorage.saveMeta('source', srcObj);
-            store.upsertSavedList(srcObj);
-          }
-          if (callback) callback(err, items, updRec);
-        });
-      } else if (target.type === 'm3u' && target.url) {
-        loadFromUrlOrLocalPath(target.url, target.id, onProgress, function (err, items, updRec) {
-          if (!err) {
-            var srcObj2 = { id: target.id, type: 'm3u', name: target.name, url: target.url };
-            store.set('source', srcObj2);
-            if (global.LuminaStorage) global.LuminaStorage.saveMeta('source', srcObj2);
-            store.upsertSavedList(srcObj2);
-          }
-          if (callback) callback(err, items, updRec);
-        });
-      } else {
-        if (callback) callback(new Error('Dados da lista salva estão incompletos.'));
-      }
-    }
+    store.set('activeListId', target.id);
+    if (global.LuminaStorage) global.LuminaStorage.saveMeta('activeListId', target.id);
 
-    if (global.LuminaStorage) {
-      global.LuminaStorage.loadMeta('favorites_' + target.id, {}, function (favs) {
-        store.set('favorites', favs || {});
-        global.LuminaStorage.saveMeta('favorites', favs || {});
-        global.LuminaStorage.loadMeta('watchProgress_' + target.id, {}, function (prog) {
-          store.set('watchProgress', prog || {});
-          global.LuminaStorage.saveMeta('watchProgress', prog || {});
-          restorePerListStateAndLoad();
+    var srcObj = target.type === 'xtream'
+      ? { id: target.id, type: 'xtream', name: target.name, creds: target.creds }
+      : { id: target.id, type: 'm3u', name: target.name, url: target.url };
+    store.set('source', srcObj);
+    if (target.type === 'xtream' && target.creds) store.set('xtreamCreds', target.creds);
+    if (global.LuminaStorage) global.LuminaStorage.saveMeta('source', srcObj);
+
+    if (global.LuminaCatalog) global.LuminaCatalog.clearMemoryCaches();
+
+    global.LuminaStorage.loadMeta('favorites_' + target.id, {}, function (favs) {
+      store.set('favorites', favs || {});
+      global.LuminaStorage.loadMeta('watchProgress_' + target.id, {}, function (prog) {
+        store.set('watchProgress', prog || {});
+        global.LuminaCatalog.getListState(target.id, function (_, listState) {
+          var hasReadyData = listState && listState.generationId;
+          if (hasReadyData) {
+            store.set('listCatalogMeta', listState.sections);
+            return callback && callback(null, listState);
+          }
+          // Se a lista salva ainda não tinha sido importada no formato v2.2.0:
+          if (target.type === 'xtream' && target.creds) {
+            loadFromXtream(target.creds, onProgress, callback, { listId: target.id });
+          } else if (target.type === 'm3u' && target.url) {
+            loadFromUrlOrLocalPath(target.url, target.id, onProgress, callback);
+          } else {
+            callback && callback(null, listState);
+          }
         });
       });
-    } else {
-      restorePerListStateAndLoad();
-    }
+    });
   }
 
-  // Testador de stream sem abrir vídeo para "Testar minha lista" (Seção C3)
+  // Parte 6.7: Organizador de grupos opera apenas no perfil salvo (aplicado na leitura de getGroups, sem reprocessar itens!)
+  function applyMappingAndPersist(newProfile, cb) {
+    var curProfile = global.LuminaStore.get('mappingProfile');
+    if (curProfile) {
+      var undoStack = (global.LuminaStore.get('organizerUndoStack') || []).slice(-9);
+      undoStack.push(JSON.parse(JSON.stringify(curProfile)));
+      global.LuminaStore.set('organizerUndoStack', undoStack);
+    }
+    global.LuminaStore.set('mappingProfile', newProfile);
+    if (global.LuminaStorage) global.LuminaStorage.saveMeta('mappingProfile', newProfile);
+    if (global.LuminaCatalog) global.LuminaCatalog.clearMemoryCaches();
+    if (cb) cb();
+  }
+
+  function undoLastMappingChange(cb) {
+    var stack = (global.LuminaStore.get('organizerUndoStack') || []).slice();
+    if (!stack.length) return cb && cb(false);
+    var prev = stack.pop();
+    global.LuminaStore.set('organizerUndoStack', stack);
+    global.LuminaStore.set('mappingProfile', prev);
+    if (global.LuminaStorage) global.LuminaStorage.saveMeta('mappingProfile', prev);
+    if (global.LuminaCatalog) global.LuminaCatalog.clearMemoryCaches();
+    if (cb) cb(true);
+  }
+
+  // Testador de stream sem abrir vídeo ("Testar minha lista") adaptado para LuminaCatalog (Parte 1)
   function testMyListStreams(callback, onProgress) {
     var store = global.LuminaStore;
     if (!store) return callback && callback(new Error('Store indisponível'));
 
-    var channels = store.get('channels') || [];
-    var movies = store.get('movies') || [];
-    var seriesList = store.get('seriesList') || [];
-    var samples = [];
+    global.LuminaCatalog.getPage('live', 'all', 'default', 0, function (_, livePage) {
+      global.LuminaCatalog.getPage('movie', 'all', 'default', 0, function (_, moviePage) {
+        var samples = [];
+        var liveItems = (livePage && livePage.items) || [];
+        var movieItems = (moviePage && moviePage.items) || [];
 
-    if (channels.length) {
-      samples.push({ label: 'Canal ao vivo', title: channels[0].cleanTitle, url: channels[0].url, item: channels[0] });
-    }
-    if (movies.length) {
-      samples.push({ label: 'Filme', title: movies[0].cleanTitle, url: movies[0].url, item: movies[0] });
-    }
-    if (seriesList.length) {
-      var epUrl = '';
-      var s0 = seriesList[0];
-      if (s0.seasons && s0.seasons[0] && s0.seasons[0].episodes && s0.seasons[0].episodes[0]) {
-        epUrl = s0.seasons[0].episodes[0].url;
-      }
-      if (epUrl) {
-        samples.push({ label: 'Episódio de série', title: s0.cleanTitle, url: epUrl, item: s0 });
-      }
-    }
-    while (samples.length < 3 && channels.length > samples.length) {
-      var chNext = channels[samples.length];
-      samples.push({ label: 'Canal #' + (samples.length + 1), title: chNext.cleanTitle, url: chNext.url, item: chNext });
-    }
-
-    if (!samples.length) {
-      return callback(new Error('Sua lista ainda não tem itens carregados para testar.'), null);
-    }
-
-    var results = [];
-    var idx = 0;
-
-    function testNext() {
-      if (idx >= samples.length) {
-        var allOk = true;
-        var any403 = false;
-        var anyTimeout = false;
-        for (var i = 0; i < results.length; i++) {
-          if (!results[i].ok) allOk = false;
-          if (results[i].httpStatus === 401 || results[i].httpStatus === 403) any403 = true;
-          if (/timeout|tempo/i.test(String(results[i].error || ''))) anyTimeout = true;
+        if (liveItems.length) {
+          samples.push({ label: 'Canal ao vivo', title: liveItems[0].cleanTitle, url: liveItems[0].url, item: liveItems[0] });
         }
-        var recommendation = 'Tudo pronto! Os streams da sua lista estão respondendo normalmente.';
-        if (!allOk) {
-          if (any403) {
-            recommendation = 'O servidor recusou a conexão (HTTP 401/403). Experimente mudar o User-Agent em Ajustes > Player ou verifique se outra TV está usando sua conta.';
-          } else if (anyTimeout) {
-            recommendation = 'O servidor demorou para responder. Experimente trocar o Formato preferido ao vivo para MPEG-TS (.ts) ou aumentar o Buffer.';
-          } else {
-            recommendation = 'Alguns itens falharam no teste. Verifique sua conexão ou atualize a lista.';
+        if (movieItems.length) {
+          samples.push({ label: 'Filme', title: movieItems[0].cleanTitle, url: movieItems[0].url, item: movieItems[0] });
+        }
+        if (liveItems.length > 1) {
+          samples.push({ label: 'Canal #2', title: liveItems[1].cleanTitle, url: liveItems[1].url, item: liveItems[1] });
+        }
+
+        if (!samples.length) {
+          return callback(new Error('Abra uma categoria de canais ou filmes primeiro para testar os streams da lista.'), null);
+        }
+
+        var results = [];
+        var idx = 0;
+
+        function testNext() {
+          if (idx >= samples.length) {
+            var allOk = true;
+            var any403 = false;
+            var anyTimeout = false;
+            for (var i = 0; i < results.length; i++) {
+              if (!results[i].ok) allOk = false;
+              if (results[i].httpStatus === 401 || results[i].httpStatus === 403) any403 = true;
+              if (/timeout|tempo/i.test(String(results[i].error || ''))) anyTimeout = true;
+            }
+            var recommendation = 'Tudo pronto! Os streams da sua lista estão respondendo normalmente.';
+            if (!allOk) {
+              if (any403) {
+                recommendation = 'O servidor recusou a conexão (HTTP 401/403). Experimente mudar o User-Agent em Ajustes > Player ou verifique se outra TV está usando sua conta.';
+              } else if (anyTimeout) {
+                recommendation = 'O servidor demorou para responder. Experimente trocar o Formato preferido ao vivo para MPEG-TS (.ts) ou aumentar o Buffer.';
+              } else {
+                recommendation = 'Alguns itens falharam no teste. Verifique sua conexão ou atualize a categoria.';
+              }
+            }
+            var summary = { testedAt: Date.now(), results: results, allOk: allOk, recommendation: recommendation };
+            store.set('streamTestResults', summary);
+            store.set('streamTestRunning', false);
+            return callback(null, summary);
           }
-        }
-        var summary = { testedAt: Date.now(), results: results, allOk: allOk, recommendation: recommendation };
-        store.set('streamTestResults', summary);
-        store.set('streamTestRunning', false);
-        return callback(null, summary);
-      }
 
-      var sample = samples[idx++];
-      var ua = (global.LuminaPlayer && global.LuminaPlayer.resolveUserAgentForItem)
-        ? global.LuminaPlayer.resolveUserAgentForItem(sample.item, sample.url)
-        : 'VLC/3.0.20 LibVLC/3.0.20';
+          var sample = samples[idx++];
+          var ua = (global.LuminaPlayer && global.LuminaPlayer.resolveUserAgentForItem)
+            ? global.LuminaPlayer.resolveUserAgentForItem(sample.item, sample.url)
+            : 'VLC/3.0.20 LibVLC/3.0.20';
 
-      if (onProgress) onProgress({ index: idx, total: samples.length, title: sample.title });
+          if (onProgress) onProgress({ index: idx, total: samples.length, title: sample.title });
 
-      global.LuminaPlatform.probeStream(sample.url, ua, 8000, function (_, probeRes) {
-        var r = probeRes || { ok: false, httpStatus: 0, elapsedMs: 0, error: 'Sem resposta' };
-        var row = {
-          label: sample.label,
-          title: sample.title,
-          ok: !!r.ok,
-          httpStatus: Number(r.httpStatus || 0),
-          elapsedMs: Number(r.elapsedMs || 0),
-          detectedFormat: r.detectedFormat || '-',
-          error: r.error || ''
-        };
-        results.push(row);
-
-        if (global.LuminaDiagLog) {
-          global.LuminaDiagLog.record('probe', {
-            engine: 'StreamProbe',
-            url: sample.url,
-            format: row.detectedFormat,
-            userAgent: ua,
-            httpStatus: row.httpStatus,
-            code: row.ok ? 'PROBE_OK' : 'PROBE_FAIL',
-            elapsedMs: row.elapsedMs,
-            message: sample.label + ' (' + sample.title + '): ' + (row.ok ? 'OK' : (row.error || ('HTTP ' + row.httpStatus)))
+          global.LuminaPlatform.probeStream(sample.url, ua, 8000, function (_, probeRes) {
+            var r = probeRes || { ok: false, httpStatus: 0, elapsedMs: 0, error: 'Sem resposta' };
+            results.push({
+              label: sample.label,
+              title: sample.title,
+              ok: !!r.ok,
+              httpStatus: Number(r.httpStatus || 0),
+              elapsedMs: Number(r.elapsedMs || 0),
+              detectedFormat: r.detectedFormat || '-',
+              error: r.error || ''
+            });
+            setTimeout(testNext, 50);
           });
         }
-        setTimeout(testNext, 100);
-      });
-    }
 
-    store.set('streamTestRunning', true);
-    testNext();
+        store.set('streamTestRunning', true);
+        testNext();
+      });
+    });
   }
 
   var api = {
     M3U_DOWNLOAD_TIMEOUT_MS: M3U_DOWNLOAD_TIMEOUT_MS,
+    SLICE_READ_BYTES: SLICE_READ_BYTES,
+    evaluateBackgroundUpdateDiff: evaluateBackgroundUpdateDiff,
+    runChunkedM3uImportFromSource: runChunkedM3uImportFromSource,
+    importM3uBufferOrText: importM3uBufferOrText,
     loadFromUrlOrLocalPath: loadFromUrlOrLocalPath,
     loadFromXtream: loadFromXtream,
-    rebuildCatalogFromRawAsync: rebuildCatalogFromRawAsync,
+    activateSavedList: activateSavedList,
     applyMappingAndPersist: applyMappingAndPersist,
     undoLastMappingChange: undoLastMappingChange,
-    computeCatalogDiff: computeCatalogDiff,
     cancelActiveLoad: cancelActiveLoad,
-    activateSavedList: activateSavedList,
+    pauseActiveImport: pauseActiveImport,
+    resumeActiveImport: resumeActiveImport,
     testMyListStreams: testMyListStreams
   };
 
