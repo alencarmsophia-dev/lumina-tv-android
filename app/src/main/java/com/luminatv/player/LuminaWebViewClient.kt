@@ -8,6 +8,7 @@ import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebView
+import android.net.Uri
 import android.webkit.WebViewClient
 import androidx.webkit.WebViewAssetLoader
 import okhttp3.Request
@@ -63,6 +64,34 @@ class LuminaWebViewClient(
 
     private fun findHeaderOverride(url: String): StreamHeaderOverride? {
         return streamHeadersMap[url] ?: streamHeadersMap[url.substringBefore("?")]
+    }
+
+    private fun isAllowedNavigation(urlStr: String?): Boolean {
+        if (urlStr.isNullOrBlank()) return false
+        val clean = urlStr.trim()
+        if (clean == "about:blank") return true
+        val uri = try { Uri.parse(clean) } catch (_: Exception) { return false }
+        val scheme = uri.scheme?.lowercase(Locale.ROOT) ?: return false
+        val host = uri.host?.lowercase(Locale.ROOT) ?: return false
+        return (scheme == "https" && host == ASSET_HOST)
+    }
+
+    override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
+        val url = request?.url?.toString()
+        if (isAllowedNavigation(url)) {
+            return false
+        }
+        Log.w(TAG, "Navegação externa bloqueada (API 24+): ${maskUrlCredentials(url ?: "")}")
+        return true
+    }
+
+    @Suppress("DEPRECATION", "DeprecatedCallableAddReplaceWith")
+    override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean {
+        if (isAllowedNavigation(url)) {
+            return false
+        }
+        Log.w(TAG, "Navegação externa bloqueada (API legada): ${maskUrlCredentials(url ?: "")}")
+        return true
     }
 
     override fun shouldInterceptRequest(

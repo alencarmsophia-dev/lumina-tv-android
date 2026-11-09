@@ -919,6 +919,18 @@ class MainActivity : Activity() {
         fun downloadAndInstallUpdate(downloadUrl: String, expectedSize: Long, expectedSha256: String) {
             bgExecutor.execute {
                 try {
+                    val cleanUrl = downloadUrl.trim()
+                    val allowedPrefix = "https://github.com/$UPDATE_REPO/releases/download/"
+                    if (!cleanUrl.startsWith(allowedPrefix, ignoreCase = false)) {
+                        throw Exception("URL de atualização inválida ou não autorizada.")
+                    }
+
+                    val cleanSha = expectedSha256.trim().lowercase()
+                    val sha256Regex = Regex("^[a-f0-9]{64}$")
+                    if (!sha256Regex.matches(cleanSha)) {
+                        throw Exception("Verificação SHA-256 falhou! Arquivo corrompido.")
+                    }
+
                     val updatesDir = File(cacheDir, "updates")
                     if (!updatesDir.exists()) updatesDir.mkdirs()
                     val apkFile = File(updatesDir, "lumina-tv.apk")
@@ -965,12 +977,10 @@ class MainActivity : Activity() {
                             throw Exception("Tamanho do APK baixado (${apkFile.length()}) difere do esperado ($expectedSize).")
                         }
 
-                        if (expectedSha256.isNotBlank()) {
-                            val actualSha = digest.digest().joinToString("") { "%02x".format(it) }
-                            if (!actualSha.equals(expectedSha256.trim(), ignoreCase = true)) {
-                                apkFile.delete()
-                                throw Exception("Verificação SHA-256 falhou! Arquivo corrompido.")
-                            }
+                        val actualSha = digest.digest().joinToString("") { "%02x".format(it) }
+                        if (!actualSha.equals(cleanSha, ignoreCase = true)) {
+                            apkFile.delete()
+                            throw Exception("Verificação SHA-256 falhou! Arquivo corrompido.")
                         }
                     }
 

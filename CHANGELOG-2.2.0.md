@@ -27,4 +27,11 @@
 6. **Blindagem Anti-Loop e Modo Seguro (`boot-guard.js` & `MainActivity.kt`)**:
    - Se o app falhar ao estabilizar 2 vezes em menos de 3 minutos ou se o processo de renderização do WebView cair (`onRenderProcessGone`), o Modo Seguro é ativado automaticamente, desativando sincronizações automáticas na abertura e recriando o WebView sem fechar o aplicativo.
 
+## Correções e Refinamentos de Segurança e Estabilidade
+
 - Correção de compilação (Kotlin 1.9): 'continue' dentro de lambda em ListDownloader.kt
+- Correção A1 (Segurança): bloqueio estrito de navegação externa no WebView via `shouldOverrideUrlLoading` (apenas `https://appassets.androidplatform.net` e `about:blank`).
+- Correção A2 (Segurança): validação nativa de URL de atualização no GitHub Releases e verificação obrigatória de hash SHA-256 (`downloadAndInstallUpdate`).
+- Correção A3 (Segurança): restrição de certificados de usuário para `<debug-overrides>` em `network_security_config.xml`.
+- Correção A4 (Aparelhos Fracos): buffer do ExoPlayer ajustado dinamicamente para 16 MB em dispositivos com pouca memória (`isLowRamDevice()` ou `memoryClass <= 96`).
+- Implementação da bateria de testes automatizados com matriz de emuladores no GitHub Actions (`.github/workflows/android-tests.yml`), ferramentas de teste sintético (`tools/gerar-lista-teste.py`, `tools/servidor-teste.py`, `tools/smoke.sh`), `RELATORIO-TESTES.md` e `ROTEIRO-MANUAL.md`.
