@@ -346,37 +346,7 @@
     }, true);
   }
 
-
-  var SEARCH_GRID_9COL = [
-    ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I'],
-    ['J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R'],
-    ['S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z', '0'],
-    ['1', '2', '3', '4', '5', '6', '7', '8', '9']
-  ];
-
-  function renderInlineSearchKeyboard9Col(scopeName) {
-    var sc = scopeName || 'tab-search';
-    var html = '<div class="search-kb-9col">';
-    for (var r = 0; r < SEARCH_GRID_9COL.length; r++) {
-      for (var c = 0; c < SEARCH_GRID_9COL[r].length; c++) {
-        var ch = SEARCH_GRID_9COL[r][c];
-        html +=
-          '<button id="skb-key-' + ch + '" class="search-kb-key focusable" data-col="search-left" data-skb-char="' + ch + '" data-scope="' + escHtml(sc) + '">' +
-            escHtml(ch) +
-          '</button>';
-      }
-    }
-    html +=
-      '<button id="skb-act-space" class="search-kb-key is-span-3 focusable" data-col="search-left" data-skb-action="space" data-scope="' + escHtml(sc) + '">Espaço</button>' +
-      '<button id="skb-act-back" class="search-kb-key is-span-3 focusable" data-col="search-left" data-skb-action="backspace" data-scope="' + escHtml(sc) + '">Apagar</button>' +
-      '<button id="skb-act-clear" class="search-kb-key is-span-3 focusable" data-col="search-left" data-skb-action="clear" data-scope="' + escHtml(sc) + '">Limpar</button>' +
-      '</div>';
-    return html;
-  }
-
   var api = {
-    SEARCH_GRID_9COL: SEARCH_GRID_9COL,
-    renderInlineSearchKeyboard9Col: renderInlineSearchKeyboard9Col,
     LAYERS: LAYERS,
     URL_SHORTCUTS: URL_SHORTCUTS,
     open: open,

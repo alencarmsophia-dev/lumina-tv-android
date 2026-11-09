@@ -3,10 +3,9 @@
 
   function loadAppConfig(done) {
     try {
-      if (typeof XMLHttpRequest === 'undefined') return done();
       var xhr = new XMLHttpRequest();
       xhr.open('GET', 'app-config.json', true);
-      xhr.timeout = 2000;
+      xhr.timeout = 3000;
       xhr.onload = function () {
         try {
           var cfg = JSON.parse(xhr.responseText);
@@ -33,90 +32,60 @@
     }
   }
 
-  function runOptionalDeferredTasksAfter3Seconds() {
-    // Parte 9.2: Em Modo Seguro, NÃO executa nenhuma tarefa em segundo plano!
-    if (global.LuminaBootGuard && global.LuminaBootGuard.isSafeMode()) {
-      return;
+  function triggerBackgroundCatalogRefresh(src, reasonMsg) {
+    if (!src || !global.LuminaPairing) return;
+    if (reasonMsg && global.LuminaUI && global.LuminaUI.toast) {
+      global.LuminaUI.toast(reasonMsg);
     }
-
-    var activeListId = global.LuminaStore.get('activeListId') || 'default_list';
-    var src = global.LuminaStore.get('source');
-
-    // 1. Verifica se há um checkpoint de importação M3U interrompida para retomar (Parte 4.3 e 9.1)
-    if (src && src.type === 'm3u' && src.url && global.LuminaStorage) {
-      global.LuminaStorage.getRecord('checkpoints', activeListId, function (_, cpRec) {
-        if (cpRec && cpRec.byteOffset > 0) {
-          if (global.LuminaUI && global.LuminaUI.toast) {
-            global.LuminaUI.toast('Retomando importação interrompida…');
-          }
-          global.LuminaRepository.loadFromUrlOrLocalPath(
-            src.url,
-            activeListId,
-            function () {
-              if (global.LuminaUI && global.LuminaUI.renderCurrentRoute) {
-                global.LuminaUI.renderCurrentRoute();
-              }
-            },
-            function () {
-              if (global.LuminaUI && global.LuminaUI.renderCurrentRoute) {
-                global.LuminaUI.renderCurrentRoute();
-              }
-            },
-            { resumeFromCheckpoint: true }
-          );
-        }
-      });
-    }
-
-    // 2. Limpa blocos antigos g*:chunk:* da v2.1.0 em pequenos lotes quando a nova geração já estiver pronta (Parte 10.2)
-    if (global.LuminaCatalog && global.LuminaStorage) {
-      global.LuminaCatalog.getListState(activeListId, function (_, state) {
-        if (state && state.generationId) {
-          global.LuminaStorage.cleanupLegacyV21ChunksInBatches(15, function () {});
-        }
-      });
-    }
-
-    // 3. Verifica atualização do APK Android uma vez por dia
-    if (global.LuminaPlatform && global.LuminaPlatform.isAndroid && global.LuminaPlatform.hasBridge()) {
-      global.LuminaStorage.loadMeta('lastApkUpdateCheckAt', 0, function (lastCheck) {
-        var DAY_MS = 24 * 60 * 60 * 1000;
-        if (Date.now() - (lastCheck || 0) < DAY_MS) return;
-        global.LuminaStorage.saveMeta('lastApkUpdateCheckAt', Date.now());
-        global.LuminaPlatform.checkForAppUpdate(function (err, info) {
-          if (!err && info) {
-            global.LuminaStore.set('appUpdateInfo', info);
-            if (info.hasUpdate && global.LuminaUI && global.LuminaUI.toast) {
-              global.LuminaUI.toast('Nova versão ' + info.latestVersion + ' disponível em Ajustes > Atualizações.');
-            }
-          }
-        });
-      });
-    }
+    var payload = src.type === 'xtream'
+      ? { type: 'xtream', name: src.name, host: src.creds.server, port: 0, username: src.creds.username, password: src.creds.password }
+      : src;
+    global.LuminaPairing.applyMobilePayload(payload, function (err, list) {
+      if (!err && list && list.length && global.LuminaUI) {
+        global.LuminaUI.toast('Catálogo sincronizado (' + list.length + ' itens).');
+        global.LuminaUI.renderCurrentRoute();
+      }
+    });
   }
 
-  // Parte 9.1: Ordem estrita de abertura rápida (<= 1.5s, zero loadCatalog, zero classificação, zero rede na abertura)
-  function startApp(onReadyCallback) {
-    // 1. Registra início do boot no detector anti-loop (Parte 9.2)
-    if (global.LuminaBootGuard) {
-      global.LuminaBootGuard.recordBootStart();
-    }
+  function checkAutoAppUpdateIfAndroid() {
+    if (!global.LuminaPlatform || !global.LuminaPlatform.isAndroid || !global.LuminaPlatform.hasBridge()) return;
+    global.LuminaStorage.loadMeta('lastApkUpdateCheckAt', 0, function (lastCheck) {
+      var DAY_MS = 24 * 60 * 60 * 1000;
+      if (Date.now() - (lastCheck || 0) < DAY_MS) return;
+      global.LuminaStorage.saveMeta('lastApkUpdateCheckAt', Date.now());
+      global.LuminaPlatform.checkForAppUpdate(function (err, info) {
+        if (!err && info) {
+          global.LuminaStore.set('appUpdateInfo', info);
+          if (info.hasUpdate && global.LuminaUI && global.LuminaUI.toast) {
+            global.LuminaUI.toast('Nova versão ' + info.latestVersion + ' disponível em Ajustes > Atualizações.');
+            global.LuminaUI.renderCurrentRoute();
+          }
+        }
+      });
+    });
+  }
 
-    // 2. Inicializa teclas, foco, roteador, player e OSD
-    if (global.LuminaKeys) global.LuminaKeys.init();
-    if (global.LuminaFocus) global.LuminaFocus.init();
-    if (global.LuminaRouter) global.LuminaRouter.init();
-    if (global.LuminaPlayer) global.LuminaPlayer.init();
-    if (global.LuminaOSD) global.LuminaOSD.init();
+  function bootstrap() {
+    loadAppConfig(startApp);
+  }
+
+  function startApp() {
+    global.LuminaKeys.init();
+    global.LuminaFocus.init();
+    global.LuminaRouter.init();
+    global.LuminaPlayer.init();
+    global.LuminaOSD.init();
+
     if (global.LuminaDiagLog && global.LuminaDiagLog.loadFromStorage) {
       global.LuminaDiagLog.loadFromStorage();
     }
 
-    // 3. Lê apenas metadados pequenos em paralelo (configurações, listas salvas, favoritos, progresso, estado da lista)
     global.LuminaSettings.loadAndApplySettings(function () {
       if (global.LuminaPlatform && global.LuminaPlatform.setDefaultUserAgent && global.LuminaPlayer) {
         global.LuminaPlatform.setDefaultUserAgent(global.LuminaPlayer.resolveUserAgentForItem(null, ''));
       }
+      global.LuminaUI.init();
 
       global.LuminaStorage.loadMeta('savedLists', [], function (savedLists) {
         if (Array.isArray(savedLists)) global.LuminaStore.set('savedLists', savedLists);
@@ -131,44 +100,60 @@
                 global.LuminaStore.set('mappingProfile', prof || { mode: 'auto', customGroupRules: {}, renamedGroups: {}, groupOrder: [] });
                 global.LuminaStorage.loadMeta('accountInfo', null, function (acc) {
                   if (acc) global.LuminaStore.set('accountInfo', acc);
-                  global.LuminaStorage.loadMeta('source', null, function (src) {
-                    if (src) {
-                      global.LuminaStore.set('source', src);
-                      if (src.type === 'xtream' && src.creds) global.LuminaStore.set('xtreamCreds', src.creds);
-                      if (!activeListId && global.LuminaStore.buildListId) {
-                        activeListId = global.LuminaStore.buildListId(src);
-                        global.LuminaStore.set('activeListId', activeListId);
+                  global.LuminaStorage.loadMeta('lastUpdateInfo', null, function (lastUpd) {
+                    if (lastUpd) global.LuminaStore.set('lastUpdateInfo', lastUpd);
+                    global.LuminaStorage.loadMeta('source', null, function (src) {
+                      if (src) {
+                        global.LuminaStore.set('source', src);
+                        if (src.type === 'xtream' && src.creds) global.LuminaStore.set('xtreamCreds', src.creds);
                       }
-                    }
 
-                    var effListId = activeListId || 'default_list';
-                    global.LuminaStorage.loadMeta('recentChannels_' + effListId, [], function (recCh) {
-                      if (Array.isArray(recCh)) global.LuminaStore.set('recentChannels', recCh);
+                      global.LuminaStorage.loadCatalog(function (err, storedItems, metaInfo) {
+                        var info = metaInfo || {};
+                        var diag = global.LuminaStore.get('diagnostics') || {};
+                        diag.catalogGeneration = info.generation || (info.migratedFromV1 ? 'v1-migrated' : 'empty');
+                        global.LuminaStore.set('diagnostics', diag);
 
-                      global.LuminaCatalog.getListState(effListId, function (_, listState) {
-                        if (listState && listState.sections) {
-                          global.LuminaStore.set('listCatalogMeta', listState.sections);
+                        var alreadyClassified = !info.migratedFromV1 &&
+                          info.classifierVersion === global.LuminaClassifier.CLASSIFIER_VERSION;
+
+                        if (storedItems && storedItems.length) {
+                          global.LuminaRepository.rebuildCatalogFromRawAsync(
+                            storedItems,
+                            function () {},
+                            function () {
+                              if (src && (!savedLists || !savedLists.length)) {
+                                global.LuminaStore.upsertSavedList(src);
+                              }
+                              global.LuminaUI.renderCurrentRoute();
+                              if (global.LuminaUI.notifyCatalogReadyForIntro) {
+                                global.LuminaUI.notifyCatalogReadyForIntro();
+                              }
+
+                              if (!info.integrityOk && src) {
+                                triggerBackgroundCatalogRefresh(src, 'Atualizando lista em segundo plano...');
+                              } else if (info.migratedFromV1 && src) {
+                                triggerBackgroundCatalogRefresh(src, 'Sincronizando catálogo completo...');
+                              } else if (src) {
+                                var autoHours = global.LuminaStore.get('autoUpdateHours');
+                                var lastTs = (lastUpd && lastUpd.updatedAt) || info.updatedAt || 0;
+                                if (typeof autoHours === 'number' && autoHours > 0 && lastTs > 0) {
+                                  if (Date.now() - lastTs >= autoHours * 3600 * 1000) {
+                                    triggerBackgroundCatalogRefresh(src, 'Atualizando sua lista automaticamente...');
+                                  }
+                                }
+                              }
+                            },
+                            alreadyClassified
+                          );
+                        } else {
+                          global.LuminaUI.renderCurrentRoute();
+                          if (global.LuminaUI.notifyCatalogReadyForIntro) {
+                            global.LuminaUI.notifyCatalogReadyForIntro();
+                          }
                         }
 
-                        // Parte 10.1: Verifica se havia catálogo antigo da 2.1.0 sem carregá-lo!
-                        global.LuminaStorage.loadMeta('catalogGeneration', null, function (legacyGen) {
-                          var hasNewGen = !!(listState && listState.generationId);
-                          if (!hasNewGen && legacyGen && legacyGen.generation && src) {
-                            global.LuminaStore.set('needsV22Migration', true);
-                          }
-
-                          // 4. Renderiza o Início imediatamente e agenda marcação de abertura estável após 5 s
-                          if (global.LuminaUI) {
-                            global.LuminaUI.init();
-                          }
-                          if (global.LuminaBootGuard) {
-                            global.LuminaBootGuard.scheduleBootStableTimer(5000);
-                          }
-                          if (onReadyCallback) onReadyCallback();
-
-                          // 5. Tarefas opcionais em segundo plano com atraso de 3 s (Parte 9.1)
-                          setTimeout(runOptionalDeferredTasksAfter3Seconds, 3000);
-                        });
+                        checkAutoAppUpdateIfAndroid();
                       });
                     });
                   });
@@ -181,21 +166,8 @@
     });
   }
 
-  function bootstrap() {
-    loadAppConfig(function () {
-      startApp();
-    });
-  }
-
   if (typeof document !== 'undefined') {
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', bootstrap);
     else bootstrap();
   }
-
-  var api = {
-    startApp: startApp,
-    bootstrap: bootstrap
-  };
-  if (typeof module !== 'undefined' && module.exports) module.exports = api;
-  global.LuminaMain = api;
 })(typeof window !== 'undefined' ? window : global);

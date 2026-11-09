@@ -5,7 +5,6 @@ import android.graphics.Bitmap
 import android.graphics.Color
 import android.view.View
 import android.view.ViewGroup
-import android.util.Log
 import android.webkit.ConsoleMessage
 import android.webkit.WebChromeClient
 import android.webkit.WebView
@@ -67,15 +66,6 @@ class LuminaChromeClient(
     }
 
     override fun onConsoleMessage(consoleMessage: ConsoleMessage?): Boolean {
-        if (consoleMessage != null) {
-            val level = consoleMessage.messageLevel()
-            val msg = "${consoleMessage.message()} [${consoleMessage.sourceId()}:${consoleMessage.lineNumber()}]"
-            if (level == ConsoleMessage.MessageLevel.ERROR) {
-                Log.e("LuminaConsole", msg)
-            } else if (level == ConsoleMessage.MessageLevel.WARNING) {
-                Log.w("LuminaConsole", msg)
-            }
-        }
         return super.onConsoleMessage(consoleMessage)
     }
 }

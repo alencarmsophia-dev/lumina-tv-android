@@ -2,15 +2,12 @@ package com.luminatv.player
 
 import android.annotation.SuppressLint
 import android.app.Activity
-import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
-import android.content.SharedPreferences
 import android.content.pm.ApplicationInfo
 import android.content.res.Configuration
 import android.graphics.Color
-import android.graphics.Typeface
 import android.media.AudioAttributes
 import android.media.AudioFocusRequest
 import android.media.AudioManager
@@ -18,7 +15,6 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
-import android.util.Log
 import android.view.Gravity
 import android.view.KeyEvent
 import android.view.View
@@ -30,11 +26,9 @@ import android.webkit.CookieManager
 import android.webkit.JavascriptInterface
 import android.webkit.WebSettings
 import android.webkit.WebView
-import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
-import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.core.content.FileProvider
@@ -46,7 +40,6 @@ import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
 import java.security.MessageDigest
-import java.util.Locale
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
@@ -55,19 +48,15 @@ class MainActivity : Activity() {
     companion object {
         const val APP_ENTRY_URL = "https://appassets.androidplatform.net/assets/app/index.html"
         const val UPDATE_REPO = "alencarmsophia-dev/lumina-tv-android"
-        const val APP_VERSION_NAME = "2.2.1"
+        const val APP_VERSION_NAME = "2.1.0"
         private const val MIN_CHROMIUM_MAJOR = 50
-        private const val BOOT_PREFS_NAME = "lumina_boot_guard"
-        private const val BOOT_WINDOW_MS = 3 * 60 * 1000L // 3 minutos
     }
 
     private lateinit var rootContainer: FrameLayout
     private lateinit var nativePlayerView: PlayerView
     private lateinit var fullscreenVideoContainer: FrameLayout
     private lateinit var splashImageView: ImageView
-    private lateinit var bootPrefs: SharedPreferences
     private var nativePlayerController: NativePlayerController? = null
-    private var listDownloader: ListDownloader? = null
     private var webView: WebView? = null
     private var webViewClientInstance: LuminaWebViewClient? = null
     private var keyBridge: KeyBridge? = null
@@ -119,182 +108,8 @@ class MainActivity : Activity() {
         }
     }
 
-    private var diagnosticView: View? = null
-
-    private fun setupCrashHandler() {
-        val previousHandler = Thread.getDefaultUncaughtExceptionHandler()
-        Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
-            try {
-                val crashFile = File(filesDir, "last_crash.txt")
-                val nowStr = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.ROOT).format(java.util.Date())
-                val sb = StringBuilder()
-                sb.append("=== LUMINA TV CRASH REPORT ===\n")
-                sb.append("Data: ").append(nowStr).append("\n")
-                sb.append("Versão: ").append(APP_VERSION_NAME).append(" (versionCode 2201)\n")
-                sb.append("Modelo: ").append(Build.MANUFACTURER).append(" ").append(Build.MODEL).append(" (").append(Build.DEVICE).append(")\n")
-                sb.append("Android: ").append(Build.VERSION.RELEASE).append(" (SDK ").append(Build.VERSION.SDK_INT).append(")\n")
-                sb.append("Thread: ").append(thread.name).append("\n")
-                sb.append("Stacktrace:\n")
-                sb.append(Log.getStackTraceString(throwable))
-                crashFile.writeText(sb.toString(), Charsets.UTF_8)
-            } catch (_: Exception) {}
-            previousHandler?.uncaughtException(thread, throwable)
-        }
-    }
-
-    private fun showNativeDiagnosticScreen(errorText: String) {
-        runOnUiThread {
-            hideNativeSplash()
-            if (diagnosticView != null) {
-                (diagnosticView?.parent as? ViewGroup)?.removeView(diagnosticView)
-                diagnosticView = null
-            }
-
-            val scrollView = ScrollView(this).apply {
-                layoutParams = FrameLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.MATCH_PARENT
-                )
-                setBackgroundColor(Color.parseColor("#0B0F17"))
-                isFillViewport = true
-            }
-
-            val layout = LinearLayout(this).apply {
-                orientation = LinearLayout.VERTICAL
-                setPadding(48, 48, 48, 48)
-                layoutParams = ViewGroup.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT
-                )
-            }
-
-            val titleView = TextView(this).apply {
-                text = "Lumina TV — Diagnóstico de Abertura"
-                setTextColor(Color.parseColor("#38BDF8"))
-                textSize = 22f
-                typeface = Typeface.DEFAULT_BOLD
-                setPadding(0, 0, 0, 16)
-            }
-
-            val hintView = TextView(this).apply {
-                text = "O aplicativo não conseguiu exibir a tela principal. Os detalhes técnicos estão descritos abaixo para cópia e envio:"
-                setTextColor(Color.parseColor("#94A3B8"))
-                textSize = 14f
-                setPadding(0, 0, 0, 24)
-            }
-
-            val errorBox = TextView(this).apply {
-                text = errorText
-                setTextColor(Color.parseColor("#F1F5F9"))
-                setBackgroundColor(Color.parseColor("#131B2E"))
-                textSize = 13f
-                typeface = Typeface.MONOSPACE
-                setPadding(24, 24, 24, 24)
-                setTextIsSelectable(true)
-            }
-
-            val buttonsLayout = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                setPadding(0, 32, 0, 0)
-            }
-
-            val copyButton = Button(this).apply {
-                text = "Copiar"
-                setTextColor(Color.parseColor("#0B0F17"))
-                setBackgroundColor(Color.parseColor("#E8B954"))
-                setPadding(32, 16, 32, 16)
-                setOnClickListener {
-                    try {
-                        val cm = getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
-                        val clip = ClipData.newPlainText("Lumina Crash Report", errorText)
-                        cm?.setPrimaryClip(clip)
-                        Toast.makeText(this@MainActivity, "Copiado para a área de transferência!", Toast.LENGTH_SHORT).show()
-                    } catch (e: Exception) {
-                        Toast.makeText(this@MainActivity, "Falha ao copiar: ${e.message}", Toast.LENGTH_SHORT).show()
-                    }
-                }
-            }
-
-            val retryButton = Button(this).apply {
-                text = "Tentar de novo"
-                setTextColor(Color.WHITE)
-                setBackgroundColor(Color.parseColor("#232B3A"))
-                setPadding(32, 16, 32, 16)
-                setOnClickListener {
-                    try {
-                        val f = File(filesDir, "last_crash.txt")
-                        if (f.exists()) f.delete()
-                    } catch (_: Exception) {}
-                    hideNativeDiagnosticScreen()
-                    recreate()
-                }
-            }
-
-            val clearDataButton = Button(this).apply {
-                text = "Limpar dados e tentar"
-                setTextColor(Color.WHITE)
-                setBackgroundColor(Color.parseColor("#EF4444"))
-                setPadding(32, 16, 32, 16)
-                setOnClickListener {
-                    try {
-                        val f = File(filesDir, "last_crash.txt")
-                        if (f.exists()) f.delete()
-                        bootPrefs.edit().clear().apply()
-                        cacheDir.deleteRecursively()
-                        webView?.clearCache(true)
-                    } catch (_: Exception) {}
-                    hideNativeDiagnosticScreen()
-                    recreate()
-                }
-            }
-
-            val btnParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply {
-                setMargins(0, 0, 24, 0)
-            }
-
-            buttonsLayout.addView(copyButton, btnParams)
-            buttonsLayout.addView(retryButton, btnParams)
-            buttonsLayout.addView(clearDataButton, btnParams)
-
-            layout.addView(titleView)
-            layout.addView(hintView)
-            layout.addView(errorBox)
-            layout.addView(buttonsLayout)
-            scrollView.addView(layout)
-
-            diagnosticView = scrollView
-            rootContainer.addView(scrollView)
-        }
-    }
-
-    private fun hideNativeDiagnosticScreen() {
-        runOnUiThread {
-            diagnosticView?.let { v ->
-                (v.parent as? ViewGroup)?.removeView(v)
-                diagnosticView = null
-            }
-        }
-    }
-
     override fun onCreate(savedInstanceState: Bundle?) {
-        setupCrashHandler()
         super.onCreate(savedInstanceState)
-
-        bootPrefs = getSharedPreferences(BOOT_PREFS_NAME, Context.MODE_PRIVATE)
-        recordBootStart()
-
-        val crashFile = File(filesDir, "last_crash.txt")
-        if (crashFile.exists()) {
-            val report = try { crashFile.readText(Charsets.UTF_8) } catch (_: Exception) { "" }
-            if (report.isNotBlank()) {
-                showNativeDiagnosticScreen("Falha na execução anterior do aplicativo:\n\n$report")
-            }
-        }
-
 
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         window.decorView.setBackgroundColor(Color.parseColor("#0B0F17"))
@@ -317,6 +132,7 @@ class MainActivity : Activity() {
             setBackgroundColor(Color.parseColor("#0B0F17"))
         }
 
+        // 1. PlayerView nativo (Media3 ExoPlayer) no fundo do rootContainer
         nativePlayerView = PlayerView(this).apply {
             layoutParams = FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
@@ -334,16 +150,6 @@ class MainActivity : Activity() {
                 val safePayload = JSONObject.quote(payloadObj.toString())
                 sendJsCallback(
                     "if(window.__luminaNative&&window.__luminaNative.emit){window.__luminaNative.emit($safeName,$safePayload);}"
-                )
-            }
-        )
-
-        listDownloader = ListDownloader(
-            activity = this,
-            emitToJs = { payloadObj ->
-                val safePayload = JSONObject.quote(payloadObj.toString())
-                sendJsCallback(
-                    "if(window.__luminaListDownload&&window.__luminaListDownload.emit){window.__luminaListDownload.emit($safePayload);}"
                 )
             }
         )
@@ -391,6 +197,8 @@ class MainActivity : Activity() {
 
         setupWebView(createdWebView)
 
+        // Ordem de empilhamento (de trás para a frente):
+        // (1) PlayerView nativo -> (2) WebView transparente -> (3) fullscreenVideoContainer -> (4) splashImageView
         rootContainer.addView(nativePlayerView)
         rootContainer.addView(
             createdWebView,
@@ -410,7 +218,7 @@ class MainActivity : Activity() {
             val oldW = oldRight - oldLeft
             val oldH = oldBottom - oldTop
             if (w > 0 && h > 0 && (w != oldW || h != oldH)) {
-                webView?.evaluateJavascript(
+                createdWebView.evaluateJavascript(
                     "if(window.__luminaFitViewport){window.__luminaFitViewport();}",
                     null
                 )
@@ -420,67 +228,12 @@ class MainActivity : Activity() {
         createdWebView.loadUrl(APP_ENTRY_URL)
     }
 
-    // Parte 9.2: Detector de ciclo de falha persistido em SharedPreferences
-    private fun recordBootStart() {
-        val now = System.currentTimeMillis()
-        val wasInProgress = bootPrefs.getBoolean("bootInProgress", false)
-        val lastBootTs = bootPrefs.getLong("lastBootAt", 0L)
-        var failCount = bootPrefs.getInt("failCount", 0)
-        var safeMode = bootPrefs.getBoolean("safeMode", false)
-
-        if (wasInProgress && (now - lastBootTs) <= BOOT_WINDOW_MS) {
-            failCount += 1
-            if (failCount >= 2) {
-                safeMode = true
-            }
-        } else if (!wasInProgress && (now - lastBootTs) > BOOT_WINDOW_MS) {
-            failCount = 0
-        }
-
-        bootPrefs.edit()
-            .putBoolean("bootInProgress", true)
-            .putLong("lastBootAt", now)
-            .putInt("failCount", failCount)
-            .putBoolean("safeMode", safeMode)
-            .apply()
-    }
-
-    private fun handleWebViewRenderCrash() {
-        runOnUiThread {
-            val now = System.currentTimeMillis()
-            val fails = bootPrefs.getInt("failCount", 0) + 1
-            bootPrefs.edit()
-                .putBoolean("bootInProgress", true)
-                .putLong("lastBootAt", now)
-                .putInt("failCount", fails)
-                .putBoolean("safeMode", true)
-                .apply()
-
-            nativePlayerController?.stop()
-            webView?.let { oldWv ->
-                (oldWv.parent as? ViewGroup)?.removeView(oldWv)
-                try { oldWv.destroy() } catch (_: Exception) {}
-            }
-            val newWv = try { WebView(this) } catch (_: Throwable) { null } ?: return@runOnUiThread
-            webView = newWv
-            setupWebView(newWv)
-            rootContainer.addView(
-                newWv,
-                1,
-                FrameLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.MATCH_PARENT
-                )
-            )
-            newWv.loadUrl(APP_ENTRY_URL)
-        }
-    }
-
     @SuppressLint("SetJavaScriptEnabled")
     private fun setupWebView(wv: WebView) {
         val isDebugBuild = (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
         WebView.setWebContentsDebuggingEnabled(isDebugBuild)
 
+        // Fundo transparente para permitir ver o SurfaceView do ExoPlayer abaixo quando html.native-video-active estiver ativo
         wv.setBackgroundColor(Color.TRANSPARENT)
         wv.setLayerType(View.LAYER_TYPE_HARDWARE, null)
         wv.isFocusable = true
@@ -525,24 +278,11 @@ class MainActivity : Activity() {
 
         val defaultUa = settings.userAgentString
         val client = LuminaWebViewClient(
-            context = this,
             assetLoader = assetLoader,
             defaultUserAgent = defaultUa,
             onAppReady = {
-                Log.i("LuminaBoot", "LUMINA_APP_STABLE_READY: Tela principal carregada com sucesso.")
-                hideNativeDiagnosticScreen()
-                val f = File(filesDir, "last_crash.txt")
-                if (f.exists()) {
-                    try { f.delete() } catch (_: Exception) {}
-                }
                 wv.evaluateJavascript("if(window.__luminaFitViewport){window.__luminaFitViewport();}", null)
                 hideNativeSplash()
-            },
-            onWebViewCrash = {
-                handleWebViewRenderCrash()
-            },
-            onMainFrameLoadError = { errorDetail ->
-                showNativeDiagnosticScreen("Erro ao carregar tela inicial:\n\n$errorDetail")
             }
         )
         webViewClientInstance = client
@@ -798,15 +538,6 @@ class MainActivity : Activity() {
 
     inner class LuminaAndroidBridge {
         @JavascriptInterface
-        fun recordJsError(errorDetails: String) {
-            Log.e("LuminaJsError", errorDetails)
-            try {
-                val crashFile = File(filesDir, "last_crash.txt")
-                crashFile.writeText("=== LUMINA TV JS ERROR ===\n$errorDetails", Charsets.UTF_8)
-            } catch (_: Exception) {}
-        }
-
-        @JavascriptInterface
         fun getAppVersion(): String = APP_VERSION_NAME
 
         @JavascriptInterface
@@ -850,70 +581,7 @@ class MainActivity : Activity() {
             return clipText
         }
 
-        // ── Métodos do Detector Anti-Loop e Modo Seguro (Parte 9.2) ──
-        @JavascriptInterface
-        fun getBootGuardState(): String {
-            return JSONObject().apply {
-                put("bootInProgress", bootPrefs.getBoolean("bootInProgress", false))
-                put("failCount", bootPrefs.getInt("failCount", 0))
-                put("safeMode", bootPrefs.getBoolean("safeMode", false))
-                put("lastBootAt", bootPrefs.getLong("lastBootAt", 0L))
-            }.toString()
-        }
-
-        @JavascriptInterface
-        fun markBootStable() {
-            bootPrefs.edit()
-                .putBoolean("bootInProgress", false)
-                .putInt("failCount", 0)
-                .apply()
-        }
-
-        @JavascriptInterface
-        fun setSafeMode(enabled: Boolean) {
-            bootPrefs.edit()
-                .putBoolean("safeMode", enabled)
-                .putBoolean("bootInProgress", false)
-                .putInt("failCount", 0)
-                .apply()
-        }
-
-        // ── Métodos do ListDownloader Nativo (Parte 3.2 e 3.3) ──
-        @JavascriptInterface
-        fun listDownloadStart(configJson: String) {
-            listDownloader?.start(configJson)
-        }
-
-        @JavascriptInterface
-        fun listDownloadPause(listId: String) {
-            listDownloader?.pause(listId)
-        }
-
-        @JavascriptInterface
-        fun listDownloadResume(listId: String) {
-            listDownloader?.resume(listId)
-        }
-
-        @JavascriptInterface
-        fun listDownloadCancel(listId: String) {
-            listDownloader?.cancel(listId)
-        }
-
-        @JavascriptInterface
-        fun listFileSize(listId: String): Long = listDownloader?.getFileSize(listId) ?: 0L
-
-        @JavascriptInterface
-        fun listDelete(listId: String): Boolean = listDownloader?.deleteListFiles(listId) ?: false
-
-        @JavascriptInterface
-        fun getFreeSpaceBytes(): Long = listDownloader?.getFreeSpaceBytes() ?: (500L * 1024L * 1024L)
-
-        @JavascriptInterface
-        fun listReadSlice(listId: String, offset: Long, length: Int): String {
-            return listDownloader?.readSliceBase64(listId, offset, length) ?: ""
-        }
-
-        // ── Métodos da Ponte do Player Nativo (v2.1.0) ──
+        // ── Métodos da Ponte do Player Nativo (Seção A4) ──
         @JavascriptInterface
         fun nativeIsAvailable(): Boolean = nativePlayerController != null
 
@@ -1114,18 +782,6 @@ class MainActivity : Activity() {
         fun downloadAndInstallUpdate(downloadUrl: String, expectedSize: Long, expectedSha256: String) {
             bgExecutor.execute {
                 try {
-                    val cleanUrl = downloadUrl.trim()
-                    val allowedPrefix = "https://github.com/$UPDATE_REPO/releases/download/"
-                    if (!cleanUrl.startsWith(allowedPrefix, ignoreCase = false)) {
-                        throw Exception("URL de atualização inválida ou não autorizada.")
-                    }
-
-                    val cleanSha = expectedSha256.trim().lowercase()
-                    val sha256Regex = Regex("^[a-f0-9]{64}$")
-                    if (!sha256Regex.matches(cleanSha)) {
-                        throw Exception("Verificação SHA-256 falhou! Arquivo corrompido.")
-                    }
-
                     val updatesDir = File(cacheDir, "updates")
                     if (!updatesDir.exists()) updatesDir.mkdirs()
                     val apkFile = File(updatesDir, "lumina-tv.apk")
@@ -1172,10 +828,12 @@ class MainActivity : Activity() {
                             throw Exception("Tamanho do APK baixado (${apkFile.length()}) difere do esperado ($expectedSize).")
                         }
 
-                        val actualSha = digest.digest().joinToString("") { "%02x".format(it) }
-                        if (!actualSha.equals(cleanSha, ignoreCase = true)) {
-                            apkFile.delete()
-                            throw Exception("Verificação SHA-256 falhou! Arquivo corrompido.")
+                        if (expectedSha256.isNotBlank()) {
+                            val actualSha = digest.digest().joinToString("") { "%02x".format(it) }
+                            if (!actualSha.equals(expectedSha256.trim(), ignoreCase = true)) {
+                                apkFile.delete()
+                                throw Exception("Verificação SHA-256 falhou! Arquivo corrompido.")
+                            }
                         }
                     }
 

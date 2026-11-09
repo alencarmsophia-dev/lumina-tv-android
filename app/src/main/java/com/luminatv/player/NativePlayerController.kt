@@ -1,8 +1,6 @@
 package com.luminatv.player
 
 import android.app.Activity
-import android.app.ActivityManager
-import android.content.Context
 import android.graphics.Color
 import android.media.MediaCodecList
 import android.os.Build
@@ -249,18 +247,12 @@ class NativePlayerController(
         }
     }
 
-    private fun isLowMemoryDevice(): Boolean {
-        val am = activity.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager ?: return false
-        return am.isLowRamDevice || am.memoryClass <= 96
-    }
-
     private fun buildLoadControl(isLive: Boolean, bufferProfile: String): DefaultLoadControl {
         val (minBufferMs, maxBufferMs) = when (bufferProfile) {
             "small" -> if (isLive) (8_000 to 20_000) else (20_000 to 45_000)
             "large" -> if (isLive) (30_000 to 45_000) else (60_000 to 90_000)
             else -> if (isLive) (15_000 to 30_000) else (30_000 to 60_000)
         }
-        val targetBufferBytes = if (isLowMemoryDevice()) (16 * 1024 * 1024) else (40 * 1024 * 1024)
         return DefaultLoadControl.Builder()
             .setBufferDurationsMs(
                 minBufferMs,
@@ -268,7 +260,7 @@ class NativePlayerController(
                 1_500,
                 3_000
             )
-            .setTargetBufferBytes(targetBufferBytes)
+            .setTargetBufferBytes(40 * 1024 * 1024)
             .setPrioritizeTimeOverSizeThresholds(true)
             .build()
     }

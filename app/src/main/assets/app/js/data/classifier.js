@@ -1,81 +1,69 @@
 (function (global) {
   'use strict';
 
-  var CLASSIFIER_VERSION = '2.2.0';
+  var CLASSIFIER_VERSION = '2.0.0';
 
   var COMBINED_NOISE_REGEX = /(?:\[(?:4K|UHD|FHD|HD|SD|HEVC|H265|H\.265|HDR|10BIT|LEG|DUB|DUBLADO|LEGENDADO|DUAL)\]|\((?:Dublado|Legendado|Dual|4K|FHD|HD)\)|^(?:\|?[A-Z]{2}\|?\s*[-:|]\s*)|\b(?:FHD|UHD|4K|HEVC|H\.265|1080p|720p)\b)/gi;
+
+  // Padrões fortes de episódio: S01E01, 1x01, T01E01, Temporada 1 Episódio 1
   var STRONG_EPISODE_REGEX = /(?:^|[\s\-_|(\[])(?:S(\d{1,2})\s*E(\d{1,4})|(\d{1,2})x(\d{2,4})|T(\d{1,2})\s*E(\d{1,4})|Temporada\s*(\d{1,2})\s*Epis[oó]dio\s*(\d{1,4}))(?=$|[\s\-_|)\].])/i;
+
+  // Padrão de capítulo/episódio simples: Cap. 120, Capítulo 05, Ep. 12
   var CAP_EP_REGEX = /(?:^|[\s\-–:|])(?:(Cap(?:[ií]tulo|\.)?)|(Ep(?:is[oó]dio|\.)?))\s*(\d{1,4})(?=$|[\s\-–:|)\]])/i;
+
+  // Dica rápida restrita (só dispara regex pesada quando realmente há padrão numérico plausível)
   var PLAUSIBLE_EP_HINT = /(?:[sStT]\d{1,2}\s*[eE]\d|\d{1,2}x\d{2}|temporada\s*\d|cap(?:[ií]tulo|\.)?\s*\d|ep(?:is[oó]dio|\.)?\s*\d)/i;
+
   var YEAR_REGEX = /\((19\d{2}|20\d{2})\)/;
   var LIVE_24H_REGEX = /(?:\b24\s*h(?:oras|rs)?\b|\bmaratona\s*24h\b|\bao\s*vivo\b|\blive\s*tv\b)/i;
-  var ADULT_GROUP_REGEX = /(?:adulto|\+18|18\+|xxx|er[oó]tico|priv[eé]|sexo|hot\b)/;
-  var ADULT_TITLE_REGEX = /(?:adulto|\+18|18\+|\bxxx\b)/i;
-  var LIVE_GROUP_WORDS_REGEX = /\b(?:canais|canal|abertos?|fechados?|esportes?|premiere|combate|dazn|paramount|not[ií]cias?|jornalismo|telejornal|pay-per-view|ppv|uhd\s*tv|fhd\s*tv|tv\s*ao\s*vivo|variedades|religiosos?)\b/;
-  var NOVELA_GROUP_WORDS_REGEX = /\b(?:novelas?|vale a pena|folhetins?|teledramaturgia)\b/;
-  var SERIES_GROUP_WORDS_REGEX = /\b(?:s[eé]ries?|temporadas?|animes?|doramas?|sitcoms?|miniss[eé]ries?|sezon|seasons?|tv\s*shows?)\b/;
-  var MOVIE_GROUP_WORDS_REGEX = /\b(?:filmes?|cinema|vod|lan[cç]amentos?|colet[aâ]neas?|marvel|dc\s*comics|oscar|movies?|cine\b|terror|com[eé]dia|a[cç][aã]o|suspense|drama|fic[cç][aã]o|anima[cç][aã]o)\b/;
-  var VOD_EXT_REGEX = /\.(mp4|mkv|avi)(\?|$)/i;
-  var LEG_REGEX = /legendado|\bleg\b/i;
-  var MULTISPACE_REGEX = /\s{2,}/g;
-  var TRIM_PUNCT_REGEX = /^[-:|\s]+|[-:|\s]+$/g;
-  var TRAIL_EP_PUNCT_REGEX = /[-–:|\s]+$/g;
-  var TYPED_XTREAM_PATH_REGEX = /^\/(live|movie|series)\/[^\/]+\/[^\/]+\/(.+)$/i;
-  var SHORT_XTREAM_PATH_REGEX = /^\/[^\/]+\/[^\/]+\/(\d+(?:\.[a-z0-9]+)?)$/i;
 
   var groupDecisionCache = {};
 
+  // Hash legado de 32 bits (mantido para migração de favoritos/progresso da v1.5.1)
   function stableHash(str) {
     var h = 2166136261;
     var s = String(str || '');
-    var len = s.length;
-    for (var i = 0; i < len; i++) {
+    for (var i = 0; i < s.length; i++) {
       h ^= s.charCodeAt(i);
       h += (h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24);
     }
     return 'itm_' + (h >>> 0).toString(16);
   }
 
+  // Hash de 64/53 bits combinando dois acumuladores independentes (FNV-1a + Murmur/DJB2) em ES5:
+  // Zero colisões em 300.000+ itens!
   function stableHash53(str) {
     var s = String(str || '');
-    var len = s.length;
     var h1 = 0x811c9dc5;
     var h2 = 0x15051505;
-    for (var i = 0; i < len; i++) {
+    for (var i = 0; i < s.length; i++) {
       var c = s.charCodeAt(i);
       h1 ^= c;
       h1 = (h1 + ((h1 << 1) + (h1 << 4) + (h1 << 7) + (h1 << 8) + (h1 << 24))) >>> 0;
       h2 = (((h2 << 5) + h2) ^ (c * 0x9e3779b1)) >>> 0;
     }
     var hex1 = (h1 >>> 0).toString(16);
+    while (hex1.length < 8) hex1 = '0' + hex1;
     var hex2 = (h2 >>> 0).toString(16);
-    if (hex1.length < 8) hex1 = ('00000000' + hex1).slice(-8);
-    if (hex2.length < 8) hex2 = ('00000000' + hex2).slice(-8);
+    while (hex2.length < 8) hex2 = '0' + hex2;
     return hex1 + hex2;
   }
 
+  // Remove esquema, host, porta, usuário e senha da URL para que o ID não mude ao trocar servidor/credenciais
   function normalizeUrlPathForId(rawUrl) {
     var u = String(rawUrl || '').trim();
     if (!u) return '';
-    var protoIdx = u.indexOf('://');
-    if (protoIdx !== -1) {
-      var slashIdx = u.indexOf('/', protoIdx + 3);
-      u = slashIdx !== -1 ? u.slice(slashIdx) : '';
+    u = u.replace(/^https?:\/\/[^\/]+/i, '');
+    u = u.split('?')[0].split('#')[0];
+    // Padrão Xtream com tipo: /live/user/pass/12345.m3u8 -> /live/12345.m3u8
+    var mTyped = u.match(/^\/(live|movie|series)\/[^\/]+\/[^\/]+\/(.+)$/i);
+    if (mTyped) {
+      return '/' + mTyped[1].toLowerCase() + '/' + mTyped[2];
     }
-    var qIdx = u.indexOf('?');
-    if (qIdx !== -1) u = u.slice(0, qIdx);
-    var hIdx = u.indexOf('#');
-    if (hIdx !== -1) u = u.slice(0, hIdx);
-
-    if (u.charCodeAt(0) === 47) { // '/'
-      var mTyped = u.match(TYPED_XTREAM_PATH_REGEX);
-      if (mTyped) {
-        return '/' + mTyped[1].toLowerCase() + '/' + mTyped[2];
-      }
-      var mShort = u.match(SHORT_XTREAM_PATH_REGEX);
-      if (mShort) {
-        return '/' + mShort[1];
-      }
+    // Padrão Xtream sem tipo: /user/pass/12345 -> /12345
+    var mShort = u.match(/^\/[^\/]+\/[^\/]+\/(\d+(?:\.[a-z0-9]+)?)$/i);
+    if (mShort) {
+      return '/' + mShort[1];
     }
     return u;
   }
@@ -90,15 +78,16 @@
       return 'i:xt:live:' + rawEntry.xtreamId;
     }
     var normPath = normalizeUrlPathForId(rawEntry.url || '');
-    var sig =
-      String(rawEntry.tvgId || '').toLowerCase() + '|' +
-      String(cleanTitle || '').toLowerCase() + '|' +
-      String(group || '').toLowerCase() + '|' +
-      kind + '|' +
-      (isNovela ? 'nov' : 'std') + '|' +
-      (season || 0) + '|' +
-      (episode || 0) + '|' +
-      normPath;
+    var sig = [
+      String(rawEntry.tvgId || '').toLowerCase(),
+      String(cleanTitle || '').toLowerCase(),
+      String(group || '').toLowerCase(),
+      kind,
+      isNovela ? 'nov' : 'std',
+      season || 0,
+      episode || 0,
+      normPath
+    ].join('|');
     return 'i:m3u:' + stableHash53(sig);
   }
 
@@ -112,11 +101,10 @@
         title = title.replace(yearMatch[0], '');
       }
     }
-    COMBINED_NOISE_REGEX.lastIndex = 0;
     title = title
       .replace(COMBINED_NOISE_REGEX, '')
-      .replace(MULTISPACE_REGEX, ' ')
-      .replace(TRIM_PUNCT_REGEX, '')
+      .replace(/\s{2,}/g, ' ')
+      .replace(/^[-:|\s]+|[-:|\s]+$/g, '')
       .trim();
     return {
       cleanTitle: title || String(rawTitle || 'Sem Título').trim(),
@@ -133,14 +121,27 @@
   }
 
   function analyzeGroupOnce(groupName) {
-    var cached = groupDecisionCache[groupName];
-    if (cached) return cached;
+    if (groupDecisionCache[groupName]) return groupDecisionCache[groupName];
     var g = String(groupName || '').toLowerCase().trim();
-    var isAdultGroup = ADULT_GROUP_REGEX.test(g);
-    var isExplicitLiveGroup = LIVE_24H_REGEX.test(g) || LIVE_GROUP_WORDS_REGEX.test(g);
-    var isNovelaGroup = !isExplicitLiveGroup && NOVELA_GROUP_WORDS_REGEX.test(g);
-    var isSeriesGroup = !isExplicitLiveGroup && !isNovelaGroup && SERIES_GROUP_WORDS_REGEX.test(g);
-    var isMovieGroup = !isExplicitLiveGroup && !isNovelaGroup && !isSeriesGroup && MOVIE_GROUP_WORDS_REGEX.test(g);
+    var isAdultGroup = /(?:adulto|\+18|18\+|xxx|er[oó]tico|priv[eé]|sexo|hot\b)/.test(g);
+
+    // 1. Live / 24h explícito no grupo SEMPRE vence palavra "série/sitcom/desenho" (ex.: "24H Séries", "Canais | Comédia")
+    var isExplicitLiveGroup =
+      LIVE_24H_REGEX.test(g) ||
+      /\b(?:canais|canal|abertos?|fechados?|esportes?|premiere|combate|dazn|paramount|not[ií]cias?|jornalismo|telejornal|pay-per-view|ppv|uhd\s*tv|fhd\s*tv|tv\s*ao\s*vivo|variedades|religiosos?)\b/.test(g);
+
+    var isNovelaGroup = !isExplicitLiveGroup && /\b(?:novelas?|vale a pena|folhetins?|teledramaturgia)\b/.test(g);
+
+    var isSeriesGroup =
+      !isExplicitLiveGroup &&
+      !isNovelaGroup &&
+      /\b(?:s[eé]ries?|temporadas?|animes?|doramas?|sitcoms?|miniss[eé]ries?|sezon|seasons?|tv\s*shows?)\b/.test(g);
+
+    var isMovieGroup =
+      !isExplicitLiveGroup &&
+      !isNovelaGroup &&
+      !isSeriesGroup &&
+      /\b(?:filmes?|cinema|vod|lan[cç]amentos?|colet[aâ]neas?|marvel|dc\s*comics|oscar|movies?|cine\b|terror|com[eé]dia|a[cç][aã]o|suspense|drama|fic[cç][aã]o|anima[cç][aã]o)\b/.test(g);
 
     var suggested = 'unclassified';
     if (isExplicitLiveGroup) suggested = 'live';
@@ -192,16 +193,6 @@
     return null;
   }
 
-  function normalizeSortAndSearchText(str) {
-    return String(str || '')
-      .toLowerCase()
-      .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '')
-      .replace(/[^a-z0-9\s]/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim();
-  }
-
   function classifyEntry(rawEntry, mappingProfile) {
     var profile = mappingProfile || {};
     var customRules = profile.customGroupRules || {};
@@ -218,8 +209,8 @@
 
     var grpInfo = analyzeGroupOnce(group);
     var cleaned = cleanTitleAndYear(title);
-    var lang = (LEG_REGEX.test(title) || LEG_REGEX.test(group)) ? 'LEG' : 'DUB';
-    var has24hInTitleOrGroup = grpInfo.isExplicitLiveGroup ? (LIVE_24H_REGEX.test(group) || LIVE_24H_REGEX.test(title)) : LIVE_24H_REGEX.test(title);
+    var lang = /legendado|\bleg\b/i.test(title + ' ' + group) ? 'LEG' : 'DUB';
+    var has24hInTitleOrGroup = LIVE_24H_REGEX.test(title) || LIVE_24H_REGEX.test(group);
 
     var epInfo = parseEpisodeNumbers(title);
     var season = epInfo ? epInfo.season : (rawEntry.season || null);
@@ -234,12 +225,15 @@
     var hasMovieUrlPath = lowerUrl.indexOf('/movie/') !== -1 || lowerUrl.indexOf('/vod/') !== -1;
     var hasSeriesUrlPath = lowerUrl.indexOf('/series/') !== -1;
 
+    // 1. Perfil rápido "Tudo como Canais"
     if (mode === 'all_live') {
       kind = 'live';
       isNovela = false;
       kindSource = 'profile-all-live';
       kindConfidence = 'high';
-    } else if (customRules[group]) {
+    }
+    // 2. Regra manual explícita do usuário ("Organizar Minha Lista")
+    else if (customRules[group]) {
       var rule = customRules[group];
       if (rule === 'hidden') {
         kind = 'hidden';
@@ -255,7 +249,9 @@
       }
       kindSource = 'custom-rule';
       kindConfidence = 'high';
-    } else if (sourceId === 'xtream' && (rawEntry.xtreamKind || tvgType)) {
+    }
+    // 3. Origem Xtream Codes (API já sabe o tipo exato; nunca reclassifica por heurística)
+    else if (sourceId === 'xtream' && (rawEntry.xtreamKind || tvgType)) {
       var xk = rawEntry.xtreamKind || tvgType;
       if (xk === 'live') {
         kind = 'live';
@@ -270,22 +266,16 @@
       }
       kindSource = 'xtream-api';
       kindConfidence = 'high';
-    } else if (rawEntry.forcedKind) {
-      var fk = rawEntry.forcedKind;
-      if (fk === 'live') kind = 'live';
-      else if (fk === 'movie') kind = 'movie';
-      else if (fk === 'series') {
-        isNovela = grpInfo.isNovelaGroup;
-        kind = rawEntry.needsSeriesInfo ? (isNovela ? 'novela-show' : 'series-show') : 'episode';
-      }
-      kindSource = 'forced-kind';
-      kindConfidence = 'high';
-    } else if (has24hInTitleOrGroup && !hasMovieUrlPath && !hasSeriesUrlPath) {
+    }
+    // 4. Canais 24h explícitos ("24H Os Simpsons", "24H Séries"): sempre live
+    else if (has24hInTitleOrGroup && !hasMovieUrlPath && !hasSeriesUrlPath) {
       kind = 'live';
       isNovela = false;
       kindSource = 'live-24h';
       kindConfidence = 'high';
-    } else if (hasLiveUrlPath) {
+    }
+    // 5. URL com marcador explícito de caminho (/live/, /movie/, /series/)
+    else if (hasLiveUrlPath) {
       kind = 'live';
       isNovela = false;
       kindSource = 'url-path-live';
@@ -297,15 +287,20 @@
       kindConfidence = 'high';
     } else if (hasSeriesUrlPath) {
       kind = 'episode';
-      isNovela = grpInfo.isNovelaGroup || (tvgType === 'novela') || !!(epInfo && epInfo.isCap);
+      isNovela = grpInfo.isNovelaGroup || (tvgType === 'novela') || (epInfo && epInfo.isCap);
       kindSource = 'url-path-series';
       kindConfidence = 'high';
-    } else if (tvgType === 'live' || tvgType === 'movie' || tvgType === 'series' || tvgType === 'novela') {
+    }
+    // 6. Atributo explícito tvg-type do #EXTINF
+    else if (tvgType === 'live' || tvgType === 'movie' || tvgType === 'series' || tvgType === 'novela') {
       isNovela = (tvgType === 'novela') || grpInfo.isNovelaGroup;
       kind = (tvgType === 'novela' || tvgType === 'series') ? 'episode' : tvgType;
       kindSource = 'tvg-type';
       kindConfidence = 'high';
-    } else if (epInfo && epInfo.isStrong) {
+    }
+    // 7. Padrão forte de episódio no título (S01E01, 1x01, T01E01, Temporada X Episódio Y)
+    else if (epInfo && epInfo.isStrong) {
+      // Se o grupo diz "Canais | ..." e a URL não tem /live/ nem /series/, há conflito -> unclassified!
       if (grpInfo.isExplicitLiveGroup) {
         kind = 'unclassified';
         kindSource = 'conflict-ep-in-live-group';
@@ -316,12 +311,16 @@
         kindSource = 'title-episode-pattern';
         kindConfidence = 'high';
       }
-    } else if (epInfo && !grpInfo.isExplicitLiveGroup && (grpInfo.isNovelaGroup || grpInfo.isSeriesGroup)) {
+    }
+    // 8. Capítulo/Episódio (Cap. 120) quando o grupo é de novela ou série
+    else if (epInfo && !grpInfo.isExplicitLiveGroup && (grpInfo.isNovelaGroup || grpInfo.isSeriesGroup)) {
       kind = 'episode';
       isNovela = grpInfo.isNovelaGroup || epInfo.isCap;
       kindSource = 'title-cap-in-show-group';
       kindConfidence = 'medium';
-    } else if (grpInfo.suggested === 'live') {
+    }
+    // 9. Nome do grupo (ordem: live explícito -> novela -> série -> filme)
+    else if (grpInfo.suggested === 'live') {
       kind = 'live';
       kindSource = 'group-name-live';
       kindConfidence = 'medium';
@@ -339,17 +338,21 @@
       kind = 'movie';
       kindSource = 'group-name-movie';
       kindConfidence = 'medium';
-    } else if (VOD_EXT_REGEX.test(lowerUrl)) {
+    }
+    // 10. Desempate de baixa confiança por extensão de arquivo
+    else if (/\.(mp4|mkv|avi)(\?|$)/i.test(lowerUrl)) {
       kind = 'movie';
       kindSource = 'ext-vod';
       kindConfidence = 'low';
-    } else {
+    }
+    // Sem sinal suficiente -> unclassified (NUNCA vira live por falta de regra)
+    else {
       kind = 'unclassified';
       kindSource = 'unclassified-fallback';
       kindConfidence = 'low';
     }
 
-    var adult = grpInfo.isAdultGroup || ADULT_TITLE_REGEX.test(title);
+    var adult = grpInfo.isAdultGroup || /(?:adulto|\+18|18\+|\bxxx\b)/i.test(title);
     var seriesKey = null;
     var seriesTitle = cleaned.cleanTitle;
 
@@ -358,15 +361,16 @@
         seriesTitle = cleaned.cleanTitle
           .replace(STRONG_EPISODE_REGEX, '')
           .replace(CAP_EP_REGEX, '')
-          .replace(TRAIL_EP_PUNCT_REGEX, '')
+          .replace(/[-–:|\s]+$/g, '')
           .trim() || cleaned.cleanTitle;
       }
       var prefix = isNovela ? 'n:' : 's:';
-      var normShowKey =
-        seriesTitle.toLowerCase() + '|' +
-        grpInfo.lowerGroup + '|' +
-        lang.toLowerCase() + '|' +
-        (cleaned.year || '');
+      var normShowKey = [
+        seriesTitle.toLowerCase(),
+        group.toLowerCase(),
+        lang.toLowerCase(),
+        cleaned.year || ''
+      ].join('|');
       seriesKey = prefix + 'show_' + stableHash53(normShowKey);
       if (!season) season = 1;
       if (!episode) episode = 1;
@@ -426,56 +430,14 @@
     return entryObj;
   }
 
-  function applyProfileMapping(item, mappingProfile) {
-    if (!item || !mappingProfile) return item;
-    var mode = mappingProfile.mode || 'auto';
-    var customRules = mappingProfile.customGroupRules || {};
-    var renamedGroups = mappingProfile.renamedGroups || {};
-    var grp = item.groupOriginal || 'Sem Grupo';
-    item.groupDisplay = renamedGroups[grp] || grp;
-
-    if (mode === 'all_live') {
-      item.kind = 'live';
-      item.isNovela = false;
-      item.groupMapped = 'Canais';
-    } else if (customRules[grp]) {
-      var r = customRules[grp];
-      if (r === 'hidden') {
-        item.kind = 'hidden';
-        item.groupMapped = 'Oculto';
-      } else if (r === 'novela') {
-        item.kind = item.xtreamSeriesId ? 'novela-show' : 'episode';
-        item.isNovela = true;
-        item.groupMapped = 'Novelas';
-      } else if (r === 'series') {
-        item.kind = item.xtreamSeriesId ? 'series-show' : 'episode';
-        item.isNovela = false;
-        item.groupMapped = 'Séries';
-      } else if (r === 'movie') {
-        item.kind = 'movie';
-        item.isNovela = false;
-        item.groupMapped = 'Filmes';
-      } else if (r === 'live') {
-        item.kind = 'live';
-        item.isNovela = false;
-        item.groupMapped = 'Canais';
-      }
-    }
-    return item;
-  }
-
   var api = {
     CLASSIFIER_VERSION: CLASSIFIER_VERSION,
     stableHash: stableHash,
     stableHash53: stableHash53,
     normalizeUrlPathForId: normalizeUrlPathForId,
-    buildStableItemId: buildStableItemId,
     cleanTitleAndYear: cleanTitleAndYear,
-    analyzeGroupOnce: analyzeGroupOnce,
     suggestGroupTarget: suggestGroupTarget,
-    normalizeSortAndSearchText: normalizeSortAndSearchText,
-    classifyEntry: classifyEntry,
-    applyProfileMapping: applyProfileMapping
+    classifyEntry: classifyEntry
   };
 
   if (typeof module !== 'undefined' && module.exports) {

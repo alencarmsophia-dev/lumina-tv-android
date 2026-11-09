@@ -110,8 +110,6 @@
       aspectRatioByContent: {},
       screenSafeMargin: 0,
       autoUpdateHours: 12,
-      catalogUpdatePolicy: '12h',
-      searchHistoryBySection: { live: [], movie: [], series: [] },
       preferOutputFormat: 'auto',
       playerEngine: 'auto',
       playerUserAgent: 'vlc',
@@ -155,8 +153,6 @@
       def.screenSafeMargin = sanitizeSafeMargin(raw.screenSafeMargin);
     }
     if (typeof raw.autoUpdateHours === 'number') def.autoUpdateHours = raw.autoUpdateHours;
-    if (raw.catalogUpdatePolicy === 'on_open_tab' || raw.catalogUpdatePolicy === '6h' || raw.catalogUpdatePolicy === '12h' || raw.catalogUpdatePolicy === '24h' || raw.catalogUpdatePolicy === 'manual') def.catalogUpdatePolicy = raw.catalogUpdatePolicy;
-    if (raw.searchHistoryBySection && typeof raw.searchHistoryBySection === 'object') def.searchHistoryBySection = raw.searchHistoryBySection;
     if (raw.preferOutputFormat === 'auto' || raw.preferOutputFormat === 'm3u8' || raw.preferOutputFormat === 'ts') {
       def.preferOutputFormat = raw.preferOutputFormat;
     }
@@ -218,8 +214,6 @@
     global.LuminaStore.set('aspectRatioByContent', s.aspectRatioByContent);
     global.LuminaStore.set('screenSafeMargin', s.screenSafeMargin);
     global.LuminaStore.set('autoUpdateHours', s.autoUpdateHours);
-    global.LuminaStore.set('catalogUpdatePolicy', s.catalogUpdatePolicy || '12h');
-    global.LuminaStore.set('searchHistoryBySection', s.searchHistoryBySection || { live: [], movie: [], series: [] });
     global.LuminaStore.set('preferOutputFormat', s.preferOutputFormat);
     global.LuminaStore.set('playerEngine', s.playerEngine);
     global.LuminaStore.set('playerUserAgent', s.playerUserAgent);
@@ -265,8 +259,6 @@
       aspectRatioByContent: global.LuminaStore.get('aspectRatioByContent'),
       screenSafeMargin: global.LuminaStore.get('screenSafeMargin'),
       autoUpdateHours: global.LuminaStore.get('autoUpdateHours'),
-      catalogUpdatePolicy: global.LuminaStore.get('catalogUpdatePolicy'),
-      searchHistoryBySection: global.LuminaStore.get('searchHistoryBySection'),
       preferOutputFormat: global.LuminaStore.get('preferOutputFormat'),
       playerEngine: global.LuminaStore.get('playerEngine'),
       playerUserAgent: global.LuminaStore.get('playerUserAgent'),
@@ -449,57 +441,6 @@
     }
   }
 
-  function isAdultLocked() {
-    if (!global.LuminaStore) return false;
-    var par = global.LuminaStore.get("parental") || {};
-    return !!(par.enabled && !par.unlockedSession);
-  }
-
-  function getActivePlaylist() {
-    if (!global.LuminaStore) return null;
-    return global.LuminaStore.get("source") || null;
-  }
-
-  function getFavoritePortraits(limit) {
-    var max = limit || 12;
-    var favs = (global.LuminaStore && global.LuminaStore.get("favorites")) || {};
-    var list = [];
-    for (var k in favs) {
-      if (favs[k] && typeof favs[k] === "object" && favs[k].portrait) {
-        list.push(favs[k].portrait);
-      }
-    }
-    return list.slice(0, max);
-  }
-
-  function getContinueWatchingList(limit) {
-    var max = limit || 12;
-    var wp = (global.LuminaStore && global.LuminaStore.get("watchProgress")) || {};
-    var list = [];
-    for (var k in wp) {
-      if (wp[k] && wp[k].portrait) {
-        list.push(wp[k].portrait);
-      }
-    }
-    return list.slice(0, max);
-  }
-
-  function getPortraitById(itemId) {
-    var favs = (global.LuminaStore && global.LuminaStore.get("favorites")) || {};
-    if (favs[itemId] && favs[itemId].portrait) return favs[itemId].portrait;
-    var wp = (global.LuminaStore && global.LuminaStore.get("watchProgress")) || {};
-    if (wp[itemId] && wp[itemId].portrait) return wp[itemId].portrait;
-    return null;
-  }
-
-  function isFavorite(id) {
-    return global.LuminaStore ? global.LuminaStore.isFavorite(id) : false;
-  }
-
-  function toggleFavorite(id, item) {
-    return global.LuminaStore ? global.LuminaStore.toggleFavorite(id, item) : false;
-  }
-
   function lockParentalSession() {
     if (!global.LuminaStore) return;
     var par = global.LuminaStore.get('parental');
@@ -529,14 +470,7 @@
     changePin: changePin,
     checkAndExpireParentalSession: checkAndExpireParentalSession,
     touchParentalActivity: touchParentalActivity,
-    lockParentalSession: lockParentalSession,
-    isAdultLocked: isAdultLocked,
-    getActivePlaylist: getActivePlaylist,
-    getFavoritePortraits: getFavoritePortraits,
-    getContinueWatchingList: getContinueWatchingList,
-    getPortraitById: getPortraitById,
-    isFavorite: isFavorite,
-    toggleFavorite: toggleFavorite
+    lockParentalSession: lockParentalSession
   };
 
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

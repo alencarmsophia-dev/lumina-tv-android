@@ -1,17 +1,6 @@
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
-  <script>
-    window.onerror = function(msg, url, line, col, err) {
-      var details = "JS Error: " + msg + "\nURL: " + url + ":" + line + ":" + col + "\nStack: " + (err && err.stack ? err.stack : "");
-      console.error(details);
-      try {
-        if (window.LuminaAndroidBridge && window.LuminaAndroidBridge.recordJsError) {
-          window.LuminaAndroidBridge.recordJsError(details);
-        }
-      } catch (e) {}
-    };
-  </script>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>Lumina TV</title>
@@ -132,10 +121,6 @@
         </svg>
       </div>
       <div id="boot-subtitle-line" class="boot-subtitle-line">Sua TV e cinema em casa</div>
-      <div id="boot-opening-box" class="boot-opening-box">
-        <div class="boot-opening-track"><div id="boot-opening-fill" class="boot-opening-fill"></div></div>
-        <div class="boot-opening-label">Abrindo o Lumina TV…</div>
-      </div>
       <div id="boot-wait-track" class="boot-wait-track">
         <div class="boot-wait-bar"></div>
       </div>
@@ -189,7 +174,6 @@
   <script src="js/platform/platform.js"></script>
   <script src="js/core/log.js"></script>
   <script src="js/core/diag-log.js"></script>
-  <script src="js/core/boot-guard.js"></script>
   <script src="js/core/eventbus.js"></script>
   <script src="js/core/storage.js"></script>
   <script src="js/core/settings.js"></script>
@@ -201,11 +185,6 @@
   <script src="js/data/grouper.js"></script>
   <script src="js/data/m3u-parser.js"></script>
   <script src="js/data/list-input.js"></script>
-  <script src="js/data/net-queue.js"></script>
-  <script src="js/data/stream-json.js"></script>
-  <script src="js/data/list-source.js"></script>
-  <script src="js/workers/import-worker.js"></script>
-  <script src="js/data/catalog.js"></script>
   <script src="js/data/xtream-client.js"></script>
   <script src="js/data/mobile-pairing.js"></script>
   <script src="js/data/tmdb-enricher.js"></script>
@@ -221,15 +200,5 @@
   <script src="js/ui/onscreen-keyboard.js"></script>
   <script src="js/ui/app-ui.js"></script>
   <script src="js/main.js"></script>
-  <script>
-    // Garantia de segurança de abertura: oculta a splash screen após 2,5s caso ocorra qualquer atraso
-    setTimeout(function() {
-      var splash = document.getElementById("boot-splash");
-      if (splash && !splash.classList.contains("is-dismissed")) {
-        splash.classList.add("is-dismissed");
-        setTimeout(function() { if (splash && splash.parentNode) splash.style.display = "none"; }, 250);
-      }
-    }, 2500);
-  </script>
 </body>
 </html>

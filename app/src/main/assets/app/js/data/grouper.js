@@ -108,32 +108,13 @@
       return list;
     }
 
-    var resObj = { seriesList: finalizeList(seriesMap) };
-    resObj['novelas' + 'List'] = finalizeList(novelasMap);
-    return resObj;
-  }
-
-  
-  function groupCatalog(items) {
-    var standalone = [];
-    var seriesAndNovelas = groupSeriesAndNovelas(items);
-    for (var i = 0; i < (items || []).length; i++) {
-      var it = items[i];
-      if (!it) continue;
-      if (it.kind === 'episode' || it.kind === 'series' || it.kind === 'series-show' || it.kind === 'novela-show') {
-        continue;
-      }
-      standalone.push(it);
-    }
-    var out = {
-      standaloneItems: standalone,
-      seriesList: seriesAndNovelas.seriesList
+    return {
+      seriesList: finalizeList(seriesMap),
+      novelasList: finalizeList(novelasMap)
     };
-    out['novelas' + 'List'] = seriesAndNovelas['novelas' + 'List'];
-    return out;
   }
 
-  var api = { groupSeriesAndNovelas: groupSeriesAndNovelas, groupCatalog: groupCatalog };
+  var api = { groupSeriesAndNovelas: groupSeriesAndNovelas };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   global.LuminaGrouper = api;
 })(typeof window !== 'undefined' ? window : global);

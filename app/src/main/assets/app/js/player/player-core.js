@@ -434,49 +434,47 @@
     var pct = dur > 0 ? Math.min(100, Math.round((pos / dur) * 100)) : 15;
     var completed = pct >= 92;
 
-    var portrait = (global.LuminaCatalog && global.LuminaCatalog.createItemPortrait)
-      ? global.LuminaCatalog.createItemPortrait(currentItem)
-      : null;
     prog[currentItem.id] = {
       position: completed ? 0 : pos,
       duration: dur,
       percent: completed ? 100 : pct,
       completed: completed,
-      portrait: portrait,
       updatedAt: Date.now()
     };
     if (global.LuminaStore) global.LuminaStore.set('watchProgress', prog);
     if (global.LuminaStorage) global.LuminaStorage.saveMeta('watchProgress', prog);
   }
 
-  function findNextEpisodeForAsync(epItem, cb) {
-    if (!epItem || (epItem.kind !== 'episode' && epItem.kind !== 'series') || !epItem.seriesKey || !global.LuminaCatalog) {
-      return cb(null);
+  function findNextEpisodeFor(epItem) {
+    if (!epItem || (epItem.kind !== 'episode' && epItem.kind !== 'series') || !epItem.seriesKey) return null;
+    var shows = [].concat(
+      (global.LuminaStore && global.LuminaStore.get('seriesList')) || [],
+      (global.LuminaStore && global.LuminaStore.get('novelasList')) || []
+    );
+    var targetShow = null;
+    for (var i = 0; i < shows.length; i++) {
+      if (shows[i].seriesKey === epItem.seriesKey) {
+        targetShow = shows[i];
+        break;
+      }
     }
-    global.LuminaCatalog.getSeriesDetail(epItem.seriesKey, function (err, detail) {
-      if (err || !detail || !detail.seasons) return cb(null);
-      var flat = [];
-      for (var s = 0; s < detail.seasons.length; s++) {
-        var eps = detail.seasons[s].episodes || [];
-        for (var e = 0; e < eps.length; e++) flat.push(eps[e]);
+    if (!targetShow || !targetShow.seasons) return null;
+    var flat = [];
+    for (var s = 0; s < targetShow.seasons.length; s++) {
+      var eps = targetShow.seasons[s].episodes || [];
+      for (var e = 0; e < eps.length; e++) flat.push(eps[e]);
+    }
+    for (var k = 0; k < flat.length; k++) {
+      if (flat[k].id === epItem.id && k + 1 < flat.length) {
+        return flat[k + 1];
       }
-      for (var k = 0; k < flat.length; k++) {
-        if (flat[k].id === epItem.id && k + 1 < flat.length) {
-          return cb(flat[k + 1]);
-        }
-      }
-      cb(null);
-    });
+    }
+    return null;
   }
 
   function triggerNextEpisodeFlow(finishedItem) {
-    findNextEpisodeForAsync(finishedItem, function (nextEp) {
-      if (!nextEp) return;
-      startNextEpisodeCountdown(nextEp);
-    });
-  }
-
-  function startNextEpisodeCountdown(nextEp) {
+    var nextEp = findNextEpisodeFor(finishedItem);
+    if (!nextEp) return;
     cancelNextEpisodePrompt();
     var secLeft = 5;
     global.LuminaStore.set('nextEpisodePrompt', { nextEpisode: nextEp, secondsLeft: secLeft });
@@ -892,19 +890,11 @@
   }
 
   function open(item, options) {
-    if (!item) return;
-    if (!item.url && item.ref && global.LuminaCatalog && global.LuminaCatalog.resolvePlaybackUrl) {
-      item.url = global.LuminaCatalog.resolvePlaybackUrl(item);
-    }
-    if (!item.url) return;
+    if (!item || !item.url) return;
     var opts = options || {};
     cancelNextEpisodePrompt();
     saveCurrentWatchProgress();
     destroyEngine();
-
-    if (global.LuminaNetQueue && global.LuminaNetQueue.setLowPriorityPaused) {
-      global.LuminaNetQueue.setLowPriorityPaused(true);
-    }
 
     if (!opts.keepOverrides) {
       forcedFormatOverride = null;
@@ -917,10 +907,6 @@
         global.LuminaStore.set('lastChannelId', prevCh);
       }
       global.LuminaStore.set('currentChannelId', item.id);
-      if (item.groupId) global.LuminaStore.set('activeLiveGroupId', item.groupId);
-      if (global.LuminaStore.recordRecentChannelPortrait) {
-        global.LuminaStore.recordRecentChannelPortrait(item);
-      }
     }
 
     currentItem = item;
@@ -945,9 +931,6 @@
     cancelNextEpisodePrompt();
     saveCurrentWatchProgress();
     destroyEngine();
-    if (global.LuminaNetQueue && global.LuminaNetQueue.setLowPriorityPaused) {
-      global.LuminaNetQueue.setLowPriorityPaused(false);
-    }
     var stage = (typeof document !== 'undefined') ? document.getElementById('video-stage') : null;
     if (stage) stage.classList.remove('is-active');
     setState(STATES.IDLE);
@@ -990,26 +973,35 @@
   }
 
   function zapChannel(delta) {
-    if (!currentItem || !global.LuminaCatalog) return;
-    var grpId = (global.LuminaStore && global.LuminaStore.get('activeLiveGroupId')) || currentItem.groupId || 'all';
-    global.LuminaCatalog.getAdjacentChannel(currentItem.id, delta, grpId, function (_, targetCh) {
-      if (!targetCh) return;
-      currentItem = targetCh;
-      if (global.LuminaEventBus) global.LuminaEventBus.emit('player:item-changed', targetCh);
-      clearTimeout(zapDebounceTimer);
-      zapDebounceTimer = setTimeout(function () {
-        open(targetCh);
-      }, 180);
-    });
+    var channels = (global.LuminaStore && global.LuminaStore.get('channels')) || [];
+    if (!channels.length || !currentItem) return;
+    var idx = -1;
+    for (var i = 0; i < channels.length; i++) {
+      if (channels[i].id === currentItem.id) { idx = i; break; }
+    }
+    var nextIdx = (idx + delta + channels.length) % channels.length;
+    var targetCh = channels[nextIdx];
+    if (!targetCh) return;
+
+    currentItem = targetCh;
+    if (global.LuminaEventBus) global.LuminaEventBus.emit('player:item-changed', targetCh);
+    clearTimeout(zapDebounceTimer);
+    zapDebounceTimer = setTimeout(function () {
+      open(targetCh);
+    }, 180);
   }
 
   function zapLastChannel() {
     var lastId = global.LuminaStore && global.LuminaStore.get('lastChannelId');
-    if (!lastId || !global.LuminaCatalog) return false;
-    global.LuminaCatalog.getItem(lastId, function (_, ch) {
-      if (ch) open(ch);
-    });
-    return true;
+    if (!lastId) return false;
+    var channels = (global.LuminaStore && global.LuminaStore.get('channels')) || [];
+    for (var i = 0; i < channels.length; i++) {
+      if (channels[i].id === lastId) {
+        open(channels[i]);
+        return true;
+      }
+    }
+    return false;
   }
 
 
