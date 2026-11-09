@@ -26,3 +26,5 @@
 
 6. **Blindagem Anti-Loop e Modo Seguro (`boot-guard.js` & `MainActivity.kt`)**:
    - Se o app falhar ao estabilizar 2 vezes em menos de 3 minutos ou se o processo de renderização do WebView cair (`onRenderProcessGone`), o Modo Seguro é ativado automaticamente, desativando sincronizações automáticas na abertura e recriando o WebView sem fechar o aplicativo.
+
+- Correção de compilação (Kotlin 1.9): 'continue' dentro de lambda em ListDownloader.kt

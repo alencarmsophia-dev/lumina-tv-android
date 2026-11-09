@@ -255,6 +255,7 @@ class ListDownloader(
                 val call = client.newCall(reqBuilder.build())
                 task.currentCall = call
 
+                var retryRequest = false
                 call.execute().use { resp ->
                     val code = resp.code
 
@@ -262,7 +263,8 @@ class ListDownloader(
                     if (code == 401 || code == 403) {
                         if (code == 403 && uaFallbackIdx < ALT_USER_AGENTS.size) {
                             task.userAgent = ALT_USER_AGENTS[uaFallbackIdx++]
-                            continue
+                            retryRequest = true
+                            return@use
                         }
                         emitError(
                             listId,
@@ -287,7 +289,8 @@ class ListDownloader(
                             val waitSec = retryAfterHeader ?: BACKOFF_SECONDS[attempt]
                             attempt++
                             Thread.sleep(waitSec.coerceIn(2L, 60L) * 1000L)
-                            continue
+                            retryRequest = true
+                            return@use
                         }
                         emitError(
                             listId,
@@ -404,6 +407,7 @@ class ListDownloader(
                     )
                     return
                 }
+                if (retryRequest) continue
             } catch (e: Exception) {
                 if (task.cancelled.get() || task.paused.get()) return
                 if (attempt < BACKOFF_SECONDS.size) {
