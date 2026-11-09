@@ -103,7 +103,7 @@
   function defaultSettings() {
     var salt = 'lumina_v16_default_salt';
     return {
-      schemaVersion: 2,
+      schemaVersion: 3,
       performanceMode: 'auto',
       motionLevel: 'Completas',
       defaultAspectRatio: 'auto',
@@ -111,6 +111,10 @@
       screenSafeMargin: 0,
       autoUpdateHours: 12,
       preferOutputFormat: 'auto',
+      playerEngine: 'auto',
+      playerUserAgent: 'vlc',
+      playerUserAgentCustom: '',
+      bufferProfile: 'normal',
       includeCredentialsInBackup: false,
       searchHistory: [],
       parental: {
@@ -149,7 +153,21 @@
       def.screenSafeMargin = sanitizeSafeMargin(raw.screenSafeMargin);
     }
     if (typeof raw.autoUpdateHours === 'number') def.autoUpdateHours = raw.autoUpdateHours;
-    if (raw.preferOutputFormat) def.preferOutputFormat = raw.preferOutputFormat;
+    if (raw.preferOutputFormat === 'auto' || raw.preferOutputFormat === 'm3u8' || raw.preferOutputFormat === 'ts') {
+      def.preferOutputFormat = raw.preferOutputFormat;
+    }
+    if (raw.playerEngine === 'auto' || raw.playerEngine === 'exo' || raw.playerEngine === 'web') {
+      def.playerEngine = raw.playerEngine;
+    }
+    if (raw.playerUserAgent === 'vlc' || raw.playerUserAgent === 'lumina' || raw.playerUserAgent === 'iptv' || raw.playerUserAgent === 'chrome' || raw.playerUserAgent === 'custom') {
+      def.playerUserAgent = raw.playerUserAgent;
+    }
+    if (typeof raw.playerUserAgentCustom === 'string') {
+      def.playerUserAgentCustom = raw.playerUserAgentCustom.trim();
+    }
+    if (raw.bufferProfile === 'small' || raw.bufferProfile === 'normal' || raw.bufferProfile === 'large') {
+      def.bufferProfile = raw.bufferProfile;
+    }
     if (typeof raw.includeCredentialsInBackup === 'boolean') {
       def.includeCredentialsInBackup = raw.includeCredentialsInBackup;
     }
@@ -197,6 +215,10 @@
     global.LuminaStore.set('screenSafeMargin', s.screenSafeMargin);
     global.LuminaStore.set('autoUpdateHours', s.autoUpdateHours);
     global.LuminaStore.set('preferOutputFormat', s.preferOutputFormat);
+    global.LuminaStore.set('playerEngine', s.playerEngine);
+    global.LuminaStore.set('playerUserAgent', s.playerUserAgent);
+    global.LuminaStore.set('playerUserAgentCustom', s.playerUserAgentCustom);
+    global.LuminaStore.set('bufferProfile', s.bufferProfile);
     global.LuminaStore.set('includeCredentialsInBackup', s.includeCredentialsInBackup);
     global.LuminaStore.set('searchHistory', s.searchHistory);
 
@@ -238,6 +260,10 @@
       screenSafeMargin: global.LuminaStore.get('screenSafeMargin'),
       autoUpdateHours: global.LuminaStore.get('autoUpdateHours'),
       preferOutputFormat: global.LuminaStore.get('preferOutputFormat'),
+      playerEngine: global.LuminaStore.get('playerEngine'),
+      playerUserAgent: global.LuminaStore.get('playerUserAgent'),
+      playerUserAgentCustom: global.LuminaStore.get('playerUserAgentCustom'),
+      bufferProfile: global.LuminaStore.get('bufferProfile'),
       includeCredentialsInBackup: global.LuminaStore.get('includeCredentialsInBackup'),
       searchHistory: global.LuminaStore.get('searchHistory'),
       parental: {

@@ -1556,3 +1556,300 @@
     transform: translateY(-60px);
   }
 }
+
+
+/* ── Lumina TV v2.1.0: Pílula discreta de reconexão no OSD (Seção A10) ── */
+.osd-retry-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 22px;
+  background: rgba(19, 27, 46, 0.92);
+  border: 1.5px solid var(--amber);
+  border-radius: 999px;
+  color: var(--text);
+  font-size: 22px;
+  font-weight: 700;
+  margin-left: auto;
+}
+
+.osd-retry-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--amber);
+}
+
+/* ── Lumina TV v2.1.0: Teclado Virtual Próprio na Tela (Seção B3) ── */
+.osk-backdrop {
+  position: fixed;
+  left: 0;
+  top: 0;
+  width: 1920px;
+  height: 1080px;
+  background: rgba(6, 10, 18, 0.86);
+  z-index: 80;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+
+.osk-upper-stage {
+  height: 540px;
+  padding: 64px 120px 32px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.osk-field-card {
+  background: #131B2E;
+  border: 2px solid var(--accent);
+  border-radius: 18px;
+  padding: 28px 36px;
+}
+
+.osk-field-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 14px;
+}
+
+.osk-field-label {
+  font-size: 26px;
+  font-weight: 700;
+  color: var(--accent);
+}
+
+.osk-field-hint {
+  font-size: 22px;
+  color: var(--text-2);
+}
+
+.osk-preview-box {
+  min-height: 76px;
+  padding: 16px 22px;
+  background: #0B0F17;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  font-size: 32px;
+  font-weight: 700;
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  word-break: break-all;
+}
+
+.osk-preview-box.is-placeholder {
+  color: var(--text-2);
+  font-weight: 600;
+}
+
+.osk-cursor {
+  display: inline-block;
+  color: var(--accent);
+  font-weight: 800;
+  margin-left: 2px;
+}
+
+.osk-panel {
+  height: 520px;
+  background: #131B2E;
+  border-top: 1px solid rgba(255, 255, 255, 0.10);
+  padding: 28px 68px 32px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+
+.osk-main-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 32px;
+}
+
+.osk-char-grid {
+  display: grid;
+  grid-template-columns: repeat(10, 96px);
+  grid-auto-rows: 72px;
+  gap: 8px;
+}
+
+.osk-key {
+  width: 96px;
+  height: 72px;
+  background: #1E293B;
+  color: var(--text);
+  border-radius: 10px;
+  font-family: var(--font-sans);
+  font-size: 28px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.osk-shortcut-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 168px);
+  grid-auto-rows: 72px;
+  gap: 8px;
+}
+
+.osk-shortcut-key {
+  width: 168px;
+  height: 72px;
+  background: #172554;
+  color: #67E8F9;
+  border-radius: 10px;
+  font-family: var(--font-mono);
+  font-size: 22px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.osk-action-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.osk-action-btn {
+  height: 72px;
+  background: #1E293B;
+  color: var(--text);
+  border-radius: 10px;
+  font-family: var(--font-sans);
+  font-size: 23px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 16px;
+  cursor: pointer;
+}
+
+.osk-action-btn.is-primary {
+  background: var(--accent);
+  color: #06121E;
+}
+
+/* ── Lumina TV v2.1.0: Tela "Adicionar lista" e Formulários (Seções B1 e B2) ── */
+.add-list-cards-grid {
+  display: flex;
+  gap: 32px;
+  align-items: stretch;
+  margin-top: 18px;
+}
+
+.add-list-card {
+  width: 480px;
+  height: 440px;
+  background: #131B2E;
+  border: 2px solid var(--line);
+  border-radius: 18px;
+  padding: 36px 34px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+
+.add-list-card-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 18px;
+}
+
+.add-list-icon-box {
+  width: 68px;
+  height: 68px;
+  border-radius: 16px;
+  background: rgba(56, 189, 248, 0.14);
+  color: var(--accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.add-list-card-title {
+  font-size: 30px;
+  font-weight: 800;
+  color: var(--text);
+  margin-bottom: 12px;
+}
+
+.add-list-card-desc {
+  font-size: 23px;
+  color: var(--text-2);
+  line-height: 1.38;
+}
+
+.form-field-row {
+  height: 80px;
+  background: #131B2E;
+  border: 2px solid var(--line);
+  border-radius: 12px;
+  padding: 0 28px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+  cursor: pointer;
+}
+
+.form-field-label {
+  font-size: 22px;
+  color: var(--text-2);
+  width: 300px;
+  flex-shrink: 0;
+}
+
+.form-field-value {
+  font-size: 26px;
+  font-weight: 700;
+  color: var(--text);
+  flex: 1;
+  text-align: right;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.form-field-value.is-placeholder {
+  color: #64748B;
+  font-weight: 600;
+}
+
+.form-field-error {
+  font-size: 22px;
+  color: #F87171;
+  font-weight: 600;
+  margin: 6px 0 14px;
+}
+
+.diag-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 22px;
+}
+
+.diag-table th,
+.diag-table td {
+  padding: 10px 14px;
+  text-align: left;
+  border-bottom: 1px solid var(--line);
+}
+
+.diag-table th {
+  color: var(--accent);
+  font-weight: 700;
+}

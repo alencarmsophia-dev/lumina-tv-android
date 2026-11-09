@@ -7,6 +7,9 @@
     if (current === 'onboarding' && route !== 'onboarding' && global.LuminaPairing) {
       global.LuminaPairing.stopPolling();
     }
+    if (global.LuminaKeyboard && typeof global.LuminaKeyboard.isOpen === 'function' && global.LuminaKeyboard.isOpen()) {
+      global.LuminaKeyboard.close(false);
+    }
     if (global.LuminaUI && typeof global.LuminaUI.closeSideMenu === 'function') {
       global.LuminaUI.closeSideMenu(false);
     }
@@ -19,6 +22,12 @@
   function back() {
     if (global.LuminaUI && typeof global.LuminaUI.isBootSplashVisible === 'function' && global.LuminaUI.isBootSplashVisible()) {
       global.LuminaUI.dismissBootSplash(true);
+      return;
+    }
+
+    // Se o teclado na tela (LuminaKeyboard) estiver aberto, Voltar fecha apenas o teclado mantendo o valor digitado (Seção B3)
+    if (global.LuminaKeyboard && typeof global.LuminaKeyboard.isOpen === 'function' && global.LuminaKeyboard.isOpen()) {
+      global.LuminaKeyboard.close(false);
       return;
     }
 

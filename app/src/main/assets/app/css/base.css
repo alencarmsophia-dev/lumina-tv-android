@@ -129,3 +129,19 @@ img.lazy-fade.is-loaded {
   opacity: 0.5;
   pointer-events: none;
 }
+
+
+/* Seção A2 (v2.1.0): Transparência da camada WebView quando o ExoPlayer nativo está ativo abaixo */
+html.native-video-active,
+html.native-video-active body,
+html.native-video-active #app-root,
+html.native-video-active #video-stage,
+html.native-video-active #ui-layer,
+html.native-video-active #screen-viewport {
+  background: transparent !important;
+  background-color: transparent !important;
+}
+
+html.native-video-active #main-video {
+  display: none !important;
+}

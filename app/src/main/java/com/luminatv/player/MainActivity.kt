@@ -2,6 +2,7 @@ package com.luminatv.player
 
 import android.annotation.SuppressLint
 import android.app.Activity
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ApplicationInfo
@@ -31,6 +32,7 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import androidx.core.content.FileProvider
+import androidx.media3.ui.PlayerView
 import androidx.webkit.WebViewAssetLoader
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -46,13 +48,15 @@ class MainActivity : Activity() {
     companion object {
         const val APP_ENTRY_URL = "https://appassets.androidplatform.net/assets/app/index.html"
         const val UPDATE_REPO = "alencarmsophia-dev/lumina-tv-android"
-        const val APP_VERSION_NAME = "2.0.0"
+        const val APP_VERSION_NAME = "2.1.0"
         private const val MIN_CHROMIUM_MAJOR = 50
     }
 
     private lateinit var rootContainer: FrameLayout
+    private lateinit var nativePlayerView: PlayerView
     private lateinit var fullscreenVideoContainer: FrameLayout
     private lateinit var splashImageView: ImageView
+    private var nativePlayerController: NativePlayerController? = null
     private var webView: WebView? = null
     private var webViewClientInstance: LuminaWebViewClient? = null
     private var keyBridge: KeyBridge? = null
@@ -61,6 +65,7 @@ class MainActivity : Activity() {
     private var audioFocusRequest: Any? = null
     private var wasPlayingBeforePause: Boolean = false
     private var isOutdatedWebViewScreenShown: Boolean = false
+    private var detectedWebViewUa: String = ""
     private val bgExecutor = Executors.newSingleThreadExecutor()
 
     private val updateHttpClient: OkHttpClient = OkHttpClient.Builder()
@@ -83,6 +88,7 @@ class MainActivity : Activity() {
                 }
             }
             AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> {
+                nativePlayerController?.setVolume(0.25f)
                 wv.post {
                     wv.evaluateJavascript(
                         "(function(){try{var v=document.getElementById('main-video');if(v)v.volume=0.25;}catch(e){}})();",
@@ -91,6 +97,7 @@ class MainActivity : Activity() {
                 }
             }
             AudioManager.AUDIOFOCUS_GAIN -> {
+                nativePlayerController?.setVolume(1.0f)
                 wv.post {
                     wv.evaluateJavascript(
                         "(function(){try{var v=document.getElementById('main-video');if(v)v.volume=1.0;}catch(e){}})();",
@@ -125,6 +132,28 @@ class MainActivity : Activity() {
             setBackgroundColor(Color.parseColor("#0B0F17"))
         }
 
+        // 1. PlayerView nativo (Media3 ExoPlayer) no fundo do rootContainer
+        nativePlayerView = PlayerView(this).apply {
+            layoutParams = FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                Gravity.CENTER
+            )
+            visibility = View.INVISIBLE
+        }
+
+        nativePlayerController = NativePlayerController(
+            activity = this,
+            playerView = nativePlayerView,
+            emitToJs = { eventName, payloadObj ->
+                val safeName = JSONObject.quote(eventName)
+                val safePayload = JSONObject.quote(payloadObj.toString())
+                sendJsCallback(
+                    "if(window.__luminaNative&&window.__luminaNative.emit){window.__luminaNative.emit($safeName,$safePayload);}"
+                )
+            }
+        )
+
         fullscreenVideoContainer = FrameLayout(this).apply {
             layoutParams = FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
@@ -158,6 +187,7 @@ class MainActivity : Activity() {
 
         webView = createdWebView
         val ua = createdWebView.settings.userAgentString ?: ""
+        detectedWebViewUa = ua
         val majorVersion = extractChromiumMajor(ua)
         if (majorVersion in 1 until MIN_CHROMIUM_MAJOR) {
             showOutdatedWebViewScreen("Versão detectada: Chromium $majorVersion (mínimo recomendado: $MIN_CHROMIUM_MAJOR). Pressione Voltar para sair.")
@@ -167,6 +197,9 @@ class MainActivity : Activity() {
 
         setupWebView(createdWebView)
 
+        // Ordem de empilhamento (de trás para a frente):
+        // (1) PlayerView nativo -> (2) WebView transparente -> (3) fullscreenVideoContainer -> (4) splashImageView
+        rootContainer.addView(nativePlayerView)
         rootContainer.addView(
             createdWebView,
             FrameLayout.LayoutParams(
@@ -200,7 +233,9 @@ class MainActivity : Activity() {
         val isDebugBuild = (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
         WebView.setWebContentsDebuggingEnabled(isDebugBuild)
 
-        wv.setBackgroundColor(Color.parseColor("#0B0F17"))
+        // Fundo transparente para permitir ver o SurfaceView do ExoPlayer abaixo quando html.native-video-active estiver ativo
+        wv.setBackgroundColor(Color.TRANSPARENT)
+        wv.setLayerType(View.LAYER_TYPE_HARDWARE, null)
         wv.isFocusable = true
         wv.isFocusableInTouchMode = true
         wv.isHorizontalScrollBarEnabled = false
@@ -221,7 +256,6 @@ class MainActivity : Activity() {
         @Suppress("DEPRECATION")
         settings.allowUniversalAccessFromFileURLs = false
         settings.cacheMode = WebSettings.LOAD_DEFAULT
-        // T6: Escala 1920x1080 passa a ser feita exclusivamente pelo JS (js/core/viewport-fit.js)
         settings.useWideViewPort = false
         settings.loadWithOverviewMode = false
         settings.setSupportZoom(false)
@@ -364,6 +398,7 @@ class MainActivity : Activity() {
         super.onResume()
         applyImmersiveFullscreen()
         requestAudioFocus()
+        nativePlayerController?.onActivityResume()
         webView?.let { wv ->
             wv.onResume()
             wv.resumeTimers()
@@ -383,23 +418,10 @@ class MainActivity : Activity() {
     }
 
     override fun onPause() {
+        nativePlayerController?.onActivityPause()
         webView?.let { wv ->
             wv.evaluateJavascript(
-                """
-                (function(){
-                  try {
-                    var v = document.getElementById('main-video');
-                    if (v && !v.paused) {
-                      window.LuminaAndroidBridge.notifyWasPlaying(true);
-                      v.pause();
-                    }
-                    if (window.LuminaPlayer && window.LuminaPlayer.getState() === 'PLAYING') {
-                      window.LuminaAndroidBridge.notifyWasPlaying(true);
-                      window.LuminaPlayer.togglePlayPause();
-                    }
-                  } catch (e) {}
-                })();
-                """.trimIndent(),
+                "(function(){try{var v=document.getElementById('main-video');if(v&&!v.paused){window.LuminaAndroidBridge.notifyWasPlaying(true);v.pause();}if(window.LuminaPlayer&&window.LuminaPlayer.getState()==='PLAYING'){window.LuminaAndroidBridge.notifyWasPlaying(true);window.LuminaPlayer.togglePlayPause();}}catch(e){}})();",
                 null
             )
             CookieManager.getInstance().flush()
@@ -411,6 +433,8 @@ class MainActivity : Activity() {
 
     override fun onDestroy() {
         keyBridge?.cleanup()
+        nativePlayerController?.release()
+        nativePlayerController = null
         abandonAudioFocus()
         webView?.let { wv ->
             (wv.parent as? ViewGroup)?.removeView(wv)
@@ -529,6 +553,103 @@ class MainActivity : Activity() {
         @JavascriptInterface
         fun registerStreamHeaders(url: String, userAgent: String, referer: String) {
             webViewClientInstance?.registerStreamHeaders(url, userAgent, referer)
+        }
+
+        @JavascriptInterface
+        fun setDefaultUserAgent(ua: String) {
+            val clean = ua.trim()
+            if (clean.isNotEmpty()) {
+                LuminaWebViewClient.customIptvUserAgent = clean
+            }
+        }
+
+        @JavascriptInterface
+        fun trustInsecureHost(host: String) {
+            NativePlayerController.addTrustedHost(host)
+        }
+
+        @JavascriptInterface
+        fun getClipboardText(): String {
+            var clipText = ""
+            try {
+                val cm = getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                val item = cm?.primaryClip?.getItemAt(0)
+                clipText = item?.coerceToText(this@MainActivity)?.toString() ?: ""
+            } catch (e: Exception) {
+                clipText = ""
+            }
+            return clipText
+        }
+
+        // ── Métodos da Ponte do Player Nativo (Seção A4) ──
+        @JavascriptInterface
+        fun nativeIsAvailable(): Boolean = nativePlayerController != null
+
+        @JavascriptInterface
+        fun nativeOpen(configJson: String) {
+            nativePlayerController?.open(configJson)
+        }
+
+        @JavascriptInterface
+        fun nativePlay() {
+            nativePlayerController?.play()
+        }
+
+        @JavascriptInterface
+        fun nativePause() {
+            nativePlayerController?.pause()
+        }
+
+        @JavascriptInterface
+        fun nativeSeekTo(positionMs: Long) {
+            nativePlayerController?.seekTo(positionMs)
+        }
+
+        @JavascriptInterface
+        fun nativeSeekBy(deltaMs: Long) {
+            nativePlayerController?.seekBy(deltaMs)
+        }
+
+        @JavascriptInterface
+        fun nativeSetAudioTrack(trackId: String) {
+            nativePlayerController?.setAudioTrack(trackId)
+        }
+
+        @JavascriptInterface
+        fun nativeSetTextTrack(trackId: String) {
+            nativePlayerController?.setTextTrack(trackId)
+        }
+
+        @JavascriptInterface
+        fun nativeSetResizeMode(mode: String) {
+            nativePlayerController?.setResizeMode(mode)
+        }
+
+        @JavascriptInterface
+        fun nativeStop() {
+            nativePlayerController?.stop()
+        }
+
+        @JavascriptInterface
+        fun nativeRelease() {
+            nativePlayerController?.release()
+        }
+
+        @JavascriptInterface
+        fun getDeviceInfo(): String {
+            val major = extractChromiumMajor(detectedWebViewUa)
+            val wvVer = if (major > 0) "Chromium $major" else "Android WebView"
+            return nativePlayerController?.getDeviceInfoJson(wvVer) ?: "{}"
+        }
+
+        @JavascriptInterface
+        fun probeStream(url: String, userAgent: String, timeoutMs: Int, callbackId: String) {
+            val ctrl = nativePlayerController ?: return
+            ctrl.probeStream(url, userAgent, timeoutMs) { resultObj ->
+                val safeId = JSONObject.quote(callbackId)
+                val safeJson = JSONObject.quote(resultObj.toString())
+                sendJsCallback("if(window.__luminaOnProbeResult){window.__luminaOnProbeResult($safeId,$safeJson);}")
+            }
         }
 
         @JavascriptInterface

@@ -129,7 +129,6 @@
     var savedProg = progMap[item.id] || { position: 0, duration: 0, percent: 0 };
     var nextPrompt = global.LuminaStore.get('nextEpisodePrompt');
     var diag = global.LuminaStore.get('diagnostics') || {};
-    var engineName = diag.engine || 'NativeEngine';
     var sleepMin = Number(global.LuminaStore.get('sleepTimerMinutes') || 0);
 
     var nextEpBanner = '';
@@ -145,26 +144,36 @@
         '</div>';
     }
 
-    var statusBanner = '';
+    // Seção A10: Pílula discreta no canto superior direito durante reconexão ("Tentando de novo… (2 de 3) · HLS")
+    var topRetryPill = '';
     if (st === 'RETRYING') {
-      var retryMsg = (extra && extra.message) ? extra.message : 'Reconectando ao fluxo de mídia...';
-      statusBanner =
-        '<div style="margin-bottom:16px;padding:18px 24px;background:var(--bg-panel);border:2px solid var(--amber);border-radius:var(--radius);display:flex;justify-content:space-between;align-items:center;">' +
-          '<div style="font-size:24px;"><strong>' + escHtml(retryMsg) + '</strong> \u00B7 Motor: ' + escHtml(engineName) + '</div>' +
-          '<div><button id="osd-btn-switch-eng" class="btn btn-secondary btn-modal focusable" data-osd-action="switch-engine" data-scope="osd">Trocar Motor</button></div>' +
+      var pillText = (extra && extra.message)
+        ? extra.message
+        : ('Tentando de novo\u2026 (2 de 3) \u00B7 ' + ((extra && extra.formatLabel) || 'HLS'));
+      topRetryPill =
+        '<div class="osd-retry-pill">' +
+          '<span class="osd-retry-dot"></span>' +
+          '<span>' + escHtml(pillText) + '</span>' +
         '</div>';
-    } else if (st === 'FAILED') {
-      var errTitle = (extra && extra.title) ? extra.title : 'Falha ao abrir este conteúdo';
-      var errMsg = (extra && extra.message) ? extra.message : (diag.lastError || 'Verifique sua conexão ou tente outro motor.');
+    }
+
+    // Seção A10: Tela clara de erro humano com 5 ações ("Tentar de novo", "Trocar formato", "Trocar motor", "Ver diagnóstico", "Voltar")
+    var statusBanner = '';
+    if (st === 'FAILED') {
+      var errTitle = (extra && extra.title) ? extra.title : 'Não foi possível reproduzir';
+      var errMsg = (extra && extra.message) ? extra.message : (diag.lastError || 'Verifique sua conexão ou tente trocar o formato.');
       statusBanner =
-        '<div style="margin-bottom:16px;padding:18px 24px;background:var(--bg-panel);border:2px solid var(--danger);border-radius:var(--radius);display:flex;justify-content:space-between;align-items:center;">' +
-          '<div style="max-width:980px;">' +
-            '<div style="font-size:26px;font-weight:700;color:var(--text);margin-bottom:4px;">' + escHtml(errTitle) + '</div>' +
-            '<div style="font-size:22px;color:var(--text-2);">' + escHtml(errMsg) + '</div>' +
+        '<div style="margin-bottom:18px;padding:24px 28px;background:var(--bg-panel);border:2px solid var(--danger);border-radius:var(--radius-lg);display:flex;flex-direction:column;gap:18px;">' +
+          '<div>' +
+            '<div style="font-size:28px;font-weight:800;color:var(--text);margin-bottom:6px;">' + escHtml(errTitle) + '</div>' +
+            '<div style="font-size:24px;color:var(--text-2);">' + escHtml(errMsg) + '</div>' +
           '</div>' +
-          '<div style="display:flex;gap:12px;">' +
-            '<button id="osd-btn-err-retry" class="btn btn-primary btn-modal focusable" data-osd-action="retry" data-scope="osd">Tentar de Novo</button>' +
-            '<button id="osd-btn-err-engine" class="btn btn-secondary btn-modal focusable" data-osd-action="switch-engine" data-scope="osd">Outro Motor</button>' +
+          '<div style="display:flex;flex-wrap:wrap;gap:14px;">' +
+            '<button id="osd-btn-err-retry" class="btn btn-primary btn-modal focusable" data-osd-action="retry" data-scope="osd">Tentar de novo</button>' +
+            '<button id="osd-btn-err-format" class="btn btn-secondary btn-modal focusable" data-osd-action="toggle-format" data-scope="osd">Trocar formato</button>' +
+            '<button id="osd-btn-err-engine" class="btn btn-secondary btn-modal focusable" data-osd-action="switch-engine" data-scope="osd">Trocar motor</button>' +
+            '<button id="osd-btn-err-diag" class="btn btn-secondary btn-modal focusable" data-osd-action="open-player-diag" data-scope="osd">Ver diagnóstico</button>' +
+            '<button id="osd-btn-err-back" class="btn btn-secondary btn-modal focusable" data-osd-action="back" data-scope="osd">Voltar</button>' +
           '</div>' +
         '</div>';
     }
@@ -209,9 +218,9 @@
           '<span class="badge-quality">' + escHtml(item.quality || 'HD') + '</span>' +
         '</div>';
     } else {
-      var videoEl = global.LuminaPlayer.getVideoElement();
-      var liveDur = (videoEl && isFinite(videoEl.duration) && videoEl.duration > 0) ? Math.floor(videoEl.duration) : (savedProg.duration || item.durationSecs || 6485);
-      var livePos = (videoEl && videoEl.currentTime > 0) ? Math.floor(videoEl.currentTime) : (savedProg.position || 0);
+      var pb = global.LuminaPlayback ? global.LuminaPlayback.getState() : { currentTime: 0, duration: 0 };
+      var liveDur = pb.duration > 0 ? pb.duration : (savedProg.duration || item.durationSecs || 6485);
+      var livePos = pb.currentTime > 0 ? pb.currentTime : (savedProg.position || 0);
       var pct = liveDur > 0 ? Math.min(100, Math.round((livePos / liveDur) * 100)) : (savedProg.percent || 0);
       timelineBlock =
         '<div id="osd-timeline-seek" class="osd-timeline-row focusable" data-osd-action="ff" data-scope="osd">' +
@@ -246,7 +255,7 @@
     osdEl.innerHTML =
       '<div class="osd-scrim-top"></div>' +
       '<div class="osd-scrim-bottom"></div>' +
-      '<div class="osd-top-layer"></div>' +
+      '<div class="osd-top-layer">' + topRetryPill + '</div>' +
       '<div class="osd-bottom-layer">' +
         statusBanner +
         nextEpBanner +
@@ -298,11 +307,18 @@
 
     if (action === 'play') global.LuminaPlayer.togglePlayPause();
     else if (action === 'retry') global.LuminaPlayer.retry();
-    else if (action === 'switch-engine') {
+    else if (action === 'toggle-format') {
+      var nextFmt = global.LuminaPlayer.toggleFormat ? global.LuminaPlayer.toggleFormat() : null;
+      if (nextFmt && global.LuminaUI) {
+        global.LuminaUI.toast('Alternando formato para: ' + (nextFmt === 'ts' ? 'MPEG-TS (.ts)' : 'HLS (.m3u8)'));
+      }
+    } else if (action === 'switch-engine') {
       var nextStep = global.LuminaPlayer.switchEngine();
       if (nextStep && global.LuminaUI) {
         global.LuminaUI.toast('Alternando para motor: ' + nextStep.engine);
       }
+    } else if (action === 'open-player-diag') {
+      global.LuminaRouter.navigate('player-diag');
     } else if (action === 'rew') {
       if (item.kind === 'live') global.LuminaPlayer.zapPrev();
       else global.LuminaPlayer.seekRelative(-10);

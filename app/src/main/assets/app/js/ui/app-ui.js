@@ -14,8 +14,8 @@
   ];
 
   var SETTINGS_TABS = [
-    { id: 'source', label: 'Fonte e Pareamento' },
-    { id: 'playback', label: 'Reprodução' },
+    { id: 'source', label: 'Minha lista' },
+    { id: 'playback', label: 'Player' },
     { id: 'screen', label: 'Tela e Desempenho' },
     { id: 'organizer', label: 'Organizar Lista' },
     { id: 'parental', label: 'Controle Parental' },
@@ -23,6 +23,24 @@
     { id: 'backup', label: 'Backup e Dados' },
     { id: 'about', label: 'Sobre' }
   ];
+
+  // Estado do fluxo "Adicionar lista" (Seções B1, B2, B4, B5, B6)
+  var addListMode = 'cards'; // 'cards' | 'xtream' | 'm3u'
+  var addListDraft = {
+    editingListId: '',
+    xtreamName: '',
+    xtreamServer: '',
+    xtreamUser: '',
+    xtreamPass: '',
+    xtreamPassVisible: false,
+    m3uName: '',
+    m3uUrl: '',
+    errorMsg: '',
+    errorIsSsl: false,
+    sslHost: '',
+    detectedXtreamPrompt: null
+  };
+  var pendingDeleteListId = '';
 
   // Seção 3: 12 paletas de degradê determinísticas (topo -> base) + 6 motivos geométricos planos
   var POSTER_PALETTES = [
@@ -479,17 +497,20 @@
 
   // ── Painel de Diagnóstico ──
   function buildDiagnosticsReportText() {
+    if (global.LuminaDiagLog && typeof global.LuminaDiagLog.formatReportText === 'function') {
+      return global.LuminaDiagLog.formatReportText();
+    }
     var diag = global.LuminaStore.get('diagnostics') || {};
     var domCount = (typeof document !== 'undefined' && document.getElementsByTagName) ? document.getElementsByTagName('*').length : 0;
     var plat = global.LuminaPlatform ? global.LuminaPlatform.getPlatformLabel() : 'Web';
-    var ver = global.LuminaPlatform ? global.LuminaPlatform.getAppVersion() : '2.0.0';
+    var ver = global.LuminaPlatform ? global.LuminaPlatform.getAppVersion() : '2.1.0';
     var items = global.LuminaStore.get('items') || [];
     var unclass = global.LuminaStore.get('unclassifiedList') || [];
     var estMemMb = Math.round(((items.length * 320) / (1024 * 1024)) * 10) / 10;
 
     return [
       'LUMINA TV v' + ver + ' · ' + plat,
-      'Motor Ativo: ' + (diag.engine || 'NativeEngine') + ' (' + (diag.attemptedChain || '-') + ')',
+      'Motor Ativo: ' + (diag.engine || 'ExoPlayer') + ' (' + (diag.attemptedChain || '-') + ')',
       'TTFF: ' + (diag.ttffMs || 0) + ' ms · Reconexões: ' + (diag.reconnections || 0),
       'Nós no DOM: ' + domCount + ' · Memória Catálogo: ~' + estMemMb + ' MB',
       'Itens: ' + items.length + ' · Não classificados: ' + unclass.length
@@ -803,10 +824,10 @@
             renderEmptyListIllustrationSvg() +
             '<div>' +
               '<div class="home-empty-title">Vamos colocar sua lista aqui</div>' +
-              '<div class="home-empty-sub">Use o pareamento rápido por código ou QR Code para trazer seus canais, filmes e séries.</div>' +
+              '<div class="home-empty-sub">Envie pelo celular com QR Code ou digite seu login Xtream Codes ou link M3U direto na TV.</div>' +
               '<div style="display:flex;gap:20px;">' +
-                '<button id="home-btn-phone" class="btn btn-primary focusable" data-action="go-phone-pairing" data-scope="home">' +
-                  '<svg class="i" viewBox="0 0 24 24"><use href="#icon-play"/></svg>Parear agora' +
+                '<button id="home-btn-phone" class="btn btn-primary focusable" data-action="open-add-list" data-scope="home">' +
+                  '<svg class="i" viewBox="0 0 24 24"><use href="#icon-plus"/></svg>Adicionar lista' +
                 '</button>' +
                 '<button id="home-btn-settings" class="btn btn-secondary focusable" data-nav="settings" data-scope="home">' +
                   '<svg class="i" viewBox="0 0 24 24"><use href="#icon-settings"/></svg>Ajustes' +
@@ -1806,21 +1827,308 @@
     global.LuminaFocus.restoreOrDefault('onboarding', '#btn-pair-renew');
   }
 
-  // ── 8. Tela Ajustes (Seção 9 — Referência 05: 8 Abas sem numeração, 420px esquerda + Painel direito) ──
+  // ── 7B. Tela "Adicionar lista" (Seções B1, B2, B4, B5) ──
+  function resetAddListDraft(mode) {
+    addListMode = mode || 'cards';
+    addListDraft = {
+      editingListId: '',
+      xtreamName: '',
+      xtreamServer: '',
+      xtreamUser: '',
+      xtreamPass: '',
+      xtreamPassVisible: false,
+      m3uName: '',
+      m3uUrl: '',
+      errorMsg: '',
+      errorIsSsl: false,
+      sslHost: '',
+      detectedXtreamPrompt: null
+    };
+  }
+
+  function renderAddList(viewport) {
+    var enterCls = getScreenEnterClass();
+
+    if (addListMode === 'xtream') {
+      var srvVal = addListDraft.xtreamServer || '';
+      var usrVal = addListDraft.xtreamUser || '';
+      var pwdVal = addListDraft.xtreamPass || '';
+      var pwdDisplay = pwdVal
+        ? (addListDraft.xtreamPassVisible ? pwdVal : new Array(pwdVal.length + 1).join('\u2022'))
+        : '';
+
+      var errHtml = addListDraft.errorMsg
+        ? ('<div class="form-field-error">' + escHtml(addListDraft.errorMsg) + '</div>')
+        : '';
+      var sslBtnHtml = addListDraft.errorIsSsl
+        ? ('<div style="margin-bottom:16px;"><button id="btn-trust-ssl" class="btn btn-secondary focusable" data-action="trust-ssl-and-retry" data-scope="add-list">Confiar neste servidor (HTTPS)</button></div>')
+        : '';
+
+      viewport.innerHTML =
+        '<div class="' + enterCls + '">' +
+          '<div class="screen-head"><div class="screen-head-left"><h1>Adicionar lista \u00B7 Xtream Codes</h1></div></div>' +
+          '<div class="settings-panel" style="height:auto;max-width:1360px;padding:36px 44px;">' +
+            '<div style="font-size:22px;color:var(--text-2);margin-bottom:18px;">Pressione OK em cada campo para abrir o teclado na tela.</div>' +
+            '<div id="field-xtream-name" class="form-field-row focusable" data-edit-field="xtream-name" data-scope="add-list">' +
+              '<span class="form-field-label">Nome da lista (opcional)</span>' +
+              '<span class="form-field-value' + (addListDraft.xtreamName ? '' : ' is-placeholder') + '">' + escHtml(addListDraft.xtreamName || 'Ex.: Minha TV, Casa, Esportes') + '</span>' +
+            '</div>' +
+            '<div id="field-xtream-server" class="form-field-row focusable" data-edit-field="xtream-server" data-scope="add-list">' +
+              '<span class="form-field-label">Servidor</span>' +
+              '<span class="form-field-value' + (srvVal ? '' : ' is-placeholder') + '">' + escHtml(srvVal || 'http://servidor.com:8080') + '</span>' +
+            '</div>' +
+            '<div id="field-xtream-user" class="form-field-row focusable" data-edit-field="xtream-user" data-scope="add-list">' +
+              '<span class="form-field-label">Usuário</span>' +
+              '<span class="form-field-value' + (usrVal ? '' : ' is-placeholder') + '">' + escHtml(usrVal || 'Seu usuário') + '</span>' +
+            '</div>' +
+            '<div style="display:flex;gap:14px;align-items:stretch;">' +
+              '<div id="field-xtream-pass" class="form-field-row focusable" style="flex:1;" data-edit-field="xtream-pass" data-scope="add-list">' +
+                '<span class="form-field-label">Senha</span>' +
+                '<span class="form-field-value' + (pwdVal ? '' : ' is-placeholder') + '">' + escHtml(pwdDisplay || 'Sua senha') + '</span>' +
+              '</div>' +
+              '<button id="btn-xtream-pass-eye" class="btn btn-secondary focusable" style="height:80px;padding:0 24px;" data-action="toggle-xtream-pass-eye" data-scope="add-list">' +
+                (addListDraft.xtreamPassVisible ? 'Ocultar' : 'Mostrar') +
+              '</button>' +
+            '</div>' +
+            errHtml +
+            sslBtnHtml +
+            '<div style="display:flex;gap:20px;margin-top:18px;">' +
+              '<button id="btn-xtream-submit" class="btn btn-primary focusable" data-action="submit-xtream-form" data-scope="add-list">Testar e conectar</button>' +
+              '<button id="btn-xtream-back" class="btn btn-secondary focusable" data-action="back-add-list" data-scope="add-list">Voltar</button>' +
+            '</div>' +
+          '</div>' +
+        '</div>';
+
+      global.LuminaFocus.restoreOrDefault('add-list', '#field-xtream-server');
+      return;
+    }
+
+    if (addListMode === 'm3u') {
+      var m3uUrlVal = addListDraft.m3uUrl || '';
+      var errHtml2 = addListDraft.errorMsg
+        ? ('<div class="form-field-error">' + escHtml(addListDraft.errorMsg) + '</div>')
+        : '';
+      var sslBtnHtml2 = addListDraft.errorIsSsl
+        ? ('<div style="margin-bottom:16px;"><button id="btn-trust-ssl-m3u" class="btn btn-secondary focusable" data-action="trust-ssl-and-retry" data-scope="add-list">Confiar neste servidor (HTTPS)</button></div>')
+        : '';
+
+      var xtPromptHtml = '';
+      if (addListDraft.detectedXtreamPrompt) {
+        xtPromptHtml =
+          '<div style="margin:12px 0 18px;padding:22px 26px;background:#172554;border:2px solid var(--accent);border-radius:14px;display:flex;justify-content:space-between;align-items:center;gap:20px;">' +
+            '<div style="font-size:23px;color:var(--text);">Este link é de uma lista Xtream. Usar modo Xtream (mais rápido e com séries organizadas)?</div>' +
+            '<div style="display:flex;gap:14px;flex-shrink:0;">' +
+              '<button id="btn-m3u-use-xtream" class="btn btn-primary btn-modal focusable" data-action="convert-m3u-to-xtream" data-scope="add-list">Sim, usar Xtream</button>' +
+              '<button id="btn-m3u-keep-m3u" class="btn btn-secondary btn-modal focusable" data-action="submit-m3u-direct" data-scope="add-list">Não, baixar como M3U</button>' +
+            '</div>' +
+          '</div>';
+      }
+
+      viewport.innerHTML =
+        '<div class="' + enterCls + '">' +
+          '<div class="screen-head"><div class="screen-head-left"><h1>Adicionar lista \u00B7 Link M3U / M3U8</h1></div></div>' +
+          '<div class="settings-panel" style="height:auto;max-width:1360px;padding:36px 44px;">' +
+            '<div style="font-size:22px;color:var(--text-2);margin-bottom:18px;">Digite ou cole o link M3U completo fornecido pelo seu serviço.</div>' +
+            '<div id="field-m3u-name" class="form-field-row focusable" data-edit-field="m3u-name" data-scope="add-list">' +
+              '<span class="form-field-label">Nome da lista (opcional)</span>' +
+              '<span class="form-field-value' + (addListDraft.m3uName ? '' : ' is-placeholder') + '">' + escHtml(addListDraft.m3uName || 'Ex.: Lista Principal') + '</span>' +
+            '</div>' +
+            '<div id="field-m3u-url" class="form-field-row focusable" data-edit-field="m3u-url" data-scope="add-list">' +
+              '<span class="form-field-label">URL da lista M3U</span>' +
+              '<span class="form-field-value' + (m3uUrlVal ? '' : ' is-placeholder') + '">' + escHtml(m3uUrlVal || 'http://servidor.com/get.php?username=...&password=...&type=m3u_plus') + '</span>' +
+            '</div>' +
+            xtPromptHtml +
+            errHtml2 +
+            sslBtnHtml2 +
+            '<div style="display:flex;gap:20px;margin-top:18px;">' +
+              '<button id="btn-m3u-submit" class="btn btn-primary focusable" data-action="submit-m3u-form" data-scope="add-list">Testar e conectar</button>' +
+              '<button id="btn-m3u-back" class="btn btn-secondary focusable" data-action="back-add-list" data-scope="add-list">Voltar</button>' +
+            '</div>' +
+          '</div>' +
+        '</div>';
+
+      var defaultM3uFocus = addListDraft.detectedXtreamPrompt ? '#btn-m3u-use-xtream' : '#field-m3u-url';
+      global.LuminaFocus.restoreOrDefault('add-list', defaultM3uFocus);
+      return;
+    }
+
+    // Modo 'cards': 3 cartões grandes lado a lado (480 x 440 px, gap 32px) — Seção B1
+    viewport.innerHTML =
+      '<div class="' + enterCls + '">' +
+        '<div class="screen-head">' +
+          '<div class="screen-head-left"><h1>Adicionar lista</h1><span class="screen-count">Escolha como conectar</span></div>' +
+          '<button id="add-list-top-back" class="btn btn-secondary btn-modal focusable" data-action="back" data-scope="add-list">Voltar</button>' +
+        '</div>' +
+        '<div class="add-list-cards-grid">' +
+          '<div class="add-list-card">' +
+            '<div>' +
+              '<div class="add-list-card-top">' +
+                '<div class="add-list-icon-box"><svg class="i" viewBox="0 0 24 24"><rect x="6" y="2" width="12" height="20" rx="2"/><circle cx="12" cy="18" r="1"/></svg></div>' +
+                '<span class="badge-new is-inline" style="margin:0;">RECOMENDADO</span>' +
+              '</div>' +
+              '<div class="add-list-card-title">Pelo celular (QR Code)</div>' +
+              '<div class="add-list-card-desc">Escaneie o QR Code ou digite o código de 6 letras no celular para enviar sem usar o controle remoto.</div>' +
+            '</div>' +
+            '<button id="card-btn-phone" class="btn btn-primary focusable" style="width:100%;" data-action="go-phone-pairing" data-scope="add-list">Parear agora</button>' +
+          '</div>' +
+          '<div class="add-list-card">' +
+            '<div>' +
+              '<div class="add-list-card-top">' +
+                '<div class="add-list-icon-box"><svg class="i" viewBox="0 0 24 24"><rect x="2" y="4" width="20" height="16" rx="2"/><line x1="6" y1="9" x2="18" y2="9"/><line x1="6" y1="14" x2="14" y2="14"/></svg></div>' +
+              '</div>' +
+              '<div class="add-list-card-title">Xtream Codes</div>' +
+              '<div class="add-list-card-desc">Digite o endereço do servidor, usuário e senha diretamente na TV com nosso teclado rápido.</div>' +
+            '</div>' +
+            '<button id="card-btn-xtream" class="btn btn-secondary focusable" style="width:100%;" data-action="open-add-xtream" data-scope="add-list">Digitar Xtream</button>' +
+          '</div>' +
+          '<div class="add-list-card">' +
+            '<div>' +
+              '<div class="add-list-card-top">' +
+                '<div class="add-list-icon-box"><svg class="i" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg></div>' +
+              '</div>' +
+              '<div class="add-list-card-title">Link M3U / M3U8</div>' +
+              '<div class="add-list-card-desc">Cole ou digite um link direto de lista M3U ou M3U Plus com atalhos prontos para domínios e portas.</div>' +
+            '</div>' +
+            '<button id="card-btn-m3u" class="btn btn-secondary focusable" style="width:100%;" data-action="open-add-m3u" data-scope="add-list">Digitar link M3U</button>' +
+          '</div>' +
+        '</div>' +
+      '</div>';
+
+    global.LuminaFocus.restoreOrDefault('add-list', '#card-btn-phone');
+  }
+
+  // ── 7C. Tela "Diagnóstico do player" (Seções C2 e C3) ──
+  function renderPlayerDiagnosticsScreen(viewport) {
+    var enterCls = getScreenEnterClass();
+    var dev = (global.LuminaPlatform && global.LuminaPlatform.getDeviceInfo)
+      ? global.LuminaPlatform.getDeviceInfo()
+      : { model: 'Smart TV', manufacturer: 'Android', sdkInt: 30, webviewVersion: 'WebView', supportedCodecs: ['H.264', 'AAC'] };
+    var diag = global.LuminaStore.get('diagnostics') || {};
+    var src = global.LuminaStore.get('source');
+    var acc = global.LuminaStore.get('accountInfo');
+    var engineSetting = global.LuminaStore.get('playerEngine') || 'auto';
+    var bufferProfile = global.LuminaStore.get('bufferProfile') || 'normal';
+    var preferFmt = global.LuminaStore.get('preferOutputFormat') || 'auto';
+    var activeUa = (global.LuminaPlayer && global.LuminaPlayer.resolveUserAgentForItem)
+      ? global.LuminaPlayer.resolveUserAgentForItem(null, '')
+      : (diag.userAgent || 'VLC/3.0.20 LibVLC/3.0.20');
+
+    var maskedHost = 'Nenhuma lista conectada';
+    if (src) {
+      var rawTarget = (src.type === 'xtream' && src.creds) ? src.creds.server : (src.url || '');
+      maskedHost = (global.LuminaDiagLog ? global.LuminaDiagLog.maskUrlCredentials(rawTarget) : rawTarget);
+    }
+
+    var accLine = 'Não aplicável (M3U ou sem lista)';
+    if (acc) {
+      accLine = 'Status: ' + (acc.status || 'Active') +
+        (acc.expDateFormatted ? (' \u00B7 Expira: ' + acc.expDateFormatted) : '') +
+        ' \u00B7 Conexões: ' + Number(acc.activeCons || 0) + '/' + Number(acc.maxConnections || 1) +
+        ' \u00B7 Formatos: ' + (Array.isArray(acc.allowedOutputFormats) ? acc.allowedOutputFormats.join(', ') : 'm3u8, ts');
+    }
+
+    var probeSummary = global.LuminaStore.get('streamTestResults');
+    var probeRunning = !!global.LuminaStore.get('streamTestRunning');
+    var probeHtml = '';
+    if (probeRunning) {
+      probeHtml = '<div style="margin:12px 0;padding:16px 22px;background:#172554;border-radius:12px;font-size:22px;color:var(--accent);">Testando streams da sua lista (aguarde alguns segundos)\u2026</div>';
+    } else if (probeSummary && Array.isArray(probeSummary.results)) {
+      var pRows = '';
+      for (var p = 0; p < probeSummary.results.length; p++) {
+        var r = probeSummary.results[p];
+        var stBadge = r.ok
+          ? ('<span style="color:var(--green);font-weight:700;">\u2713 OK (' + r.elapsedMs + ' ms \u00B7 ' + escHtml(r.detectedFormat) + ')</span>')
+          : ('<span style="color:var(--danger);font-weight:700;">\u2717 Falhou (HTTP ' + (r.httpStatus || 0) + (r.error ? (' \u00B7 ' + escHtml(r.error)) : '') + ')</span>');
+        pRows += '<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--line);font-size:20px;"><span><strong>' + escHtml(r.label) + ':</strong> ' + escHtml(r.title) + '</span>' + stBadge + '</div>';
+      }
+      probeHtml =
+        '<div style="margin:12px 0;padding:16px 22px;background:#0B0F17;border:1px solid var(--line);border-radius:12px;">' +
+          pRows +
+          '<div style="margin-top:10px;font-size:20px;color:var(--accent);font-weight:700;">' + escHtml(probeSummary.recommendation || '') + '</div>' +
+        '</div>';
+    }
+
+    var events = (global.LuminaDiagLog && global.LuminaDiagLog.getRecentEvents) ? global.LuminaDiagLog.getRecentEvents(15) : [];
+    var evRowsHtml = '';
+    for (var i = 0; i < events.length; i++) {
+      var ev = events[i];
+      var tStr = ev.isoTime ? ev.isoTime.slice(11, 19) : '--:--:--';
+      var httpOrCode = (ev.httpStatus ? ('HTTP ' + ev.httpStatus + ' ') : '') + (ev.code || '-');
+      evRowsHtml +=
+        '<tr>' +
+          '<td>' + escHtml(tStr) + '</td>' +
+          '<td><strong>' + escHtml(ev.type.toUpperCase()) + '</strong></td>' +
+          '<td>' + escHtml(ev.engine) + '</td>' +
+          '<td>' + escHtml(ev.format) + '</td>' +
+          '<td>' + escHtml(httpOrCode) + '</td>' +
+          '<td>' + Number(ev.elapsedMs || 0) + ' ms</td>' +
+          '<td style="max-width:520px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + escHtml(ev.message || ev.urlMasked || '-') + '</td>' +
+        '</tr>';
+    }
+
+    viewport.innerHTML =
+      '<div class="' + enterCls + '">' +
+        '<div class="screen-head">' +
+          '<div class="screen-head-left"><h1>Diagnóstico do player</h1></div>' +
+          '<div style="display:flex;gap:14px;">' +
+            '<button id="diag-btn-probe" class="btn btn-primary btn-modal focusable" data-action="run-test-my-list" data-scope="player-diag">Testar minha lista</button>' +
+            '<button id="diag-btn-export" class="btn btn-secondary btn-modal focusable" data-action="copy-diag-report" data-scope="player-diag">Exportar log</button>' +
+            '<button id="diag-btn-clear" class="btn btn-secondary btn-modal focusable" data-action="clear-diag-log" data-scope="player-diag">Limpar log</button>' +
+            '<button id="diag-btn-back" class="btn btn-secondary btn-modal focusable" data-action="back" data-scope="player-diag">Voltar</button>' +
+          '</div>' +
+        '</div>' +
+        '<div class="settings-panel" style="height:820px;overflow:hidden;padding:26px 34px;display:flex;flex-direction:column;justify-content:space-between;">' +
+          '<div>' +
+            '<div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:12px;font-size:21px;">' +
+              '<div style="background:#0B0F17;padding:14px 18px;border-radius:12px;border:1px solid var(--line);">' +
+                '<div style="color:var(--text-2);font-size:18px;">Aparelho e Codecs de Hardware</div>' +
+                '<div style="font-weight:700;margin-top:4px;">' + escHtml((dev.manufacturer || '') + ' ' + (dev.model || '') + ' · API ' + (dev.sdkInt || '-') + ' · ' + (dev.webviewVersion || '')) + '</div>' +
+                '<div style="color:var(--accent);font-size:19px;margin-top:4px;">Codecs: ' + escHtml(Array.isArray(dev.supportedCodecs) ? dev.supportedCodecs.join(', ') : 'H.264, AAC') + '</div>' +
+              '</div>' +
+              '<div style="background:#0B0F17;padding:14px 18px;border-radius:12px;border:1px solid var(--line);">' +
+                '<div style="color:var(--text-2);font-size:18px;">Motor, Formato, Buffer e User-Agent</div>' +
+                '<div style="font-weight:700;margin-top:4px;">Motor: ' + escHtml(diag.engine || 'ExoPlayer') + ' (modo ' + escHtml(engineSetting) + ') · Buffer: ' + escHtml(bufferProfile) + ' · Formato: ' + escHtml(preferFmt) + '</div>' +
+                '<div style="color:var(--accent);font-size:19px;margin-top:4px;">UA: ' + escHtml(activeUa) + '</div>' +
+              '</div>' +
+            '</div>' +
+            '<div style="background:#0B0F17;padding:12px 18px;border-radius:12px;border:1px solid var(--line);margin-bottom:10px;font-size:20px;display:flex;justify-content:space-between;">' +
+              '<span><strong>Servidor da lista:</strong> ' + escHtml(maskedHost) + '</span>' +
+              '<span style="color:var(--text-2);">' + escHtml(accLine) + '</span>' +
+            '</div>' +
+            probeHtml +
+            '<div style="margin-top:8px;">' +
+              '<table class="diag-table">' +
+                '<thead><tr><th>Hora</th><th>Evento</th><th>Motor</th><th>Formato</th><th>Código</th><th>Tempo</th><th>Detalhe (sem senha)</th></tr></thead>' +
+                '<tbody>' + (evRowsHtml || '<tr><td colspan="7" style="color:var(--text-2);">Nenhum evento registrado ainda nesta sessão.</td></tr>') + '</tbody>' +
+              '</table>' +
+            '</div>' +
+          '</div>' +
+        '</div>' +
+      '</div>';
+
+    global.LuminaFocus.restoreOrDefault('player-diag', '#diag-btn-probe');
+  }
+
+  // ── 8. Tela Ajustes (Seções A11, B6, C2, C3 — 8 Abas sem numeração, 420px esquerda + Painel direito) ──
   function renderSettings(viewport) {
     var perfMode = global.LuminaStore.get('performanceMode') || 'auto';
     var ratio = global.LuminaStore.get('defaultAspectRatio') || 'auto';
     var preferFmt = global.LuminaStore.get('preferOutputFormat') || 'auto';
+    var playerEngine = global.LuminaStore.get('playerEngine') || 'auto';
+    var playerUa = global.LuminaStore.get('playerUserAgent') || 'vlc';
+    var bufferProfile = global.LuminaStore.get('bufferProfile') || 'normal';
     var autoUpdHours = global.LuminaStore.get('autoUpdateHours');
     if (typeof autoUpdHours !== 'number') autoUpdHours = 12;
     var includeCreds = !!global.LuminaStore.get('includeCredentialsInBackup');
     var par = global.LuminaStore.get('parental') || { enabled: true, unlockedSession: false, hideAdultInSearchAndHome: true };
     var tmdb = global.LuminaStore.get('tmdb') || { enabled: false, apiKey: '', enrichedCount: 0 };
     var src = global.LuminaStore.get('source');
+    var savedLists = global.LuminaStore.get('savedLists') || [];
+    var activeListId = global.LuminaStore.get('activeListId') || (src && src.id) || '';
     var lastUpd = global.LuminaStore.get('lastUpdateInfo');
     var appUpd = global.LuminaStore.get('appUpdateInfo');
     var isAndroid = !!(global.LuminaPlatform && global.LuminaPlatform.isAndroid);
-    var appVer = global.LuminaPlatform ? global.LuminaPlatform.getAppVersion() : '2.0.0';
+    var appVer = global.LuminaPlatform ? global.LuminaPlatform.getAppVersion() : '2.1.0';
     var platLabel = global.LuminaPlatform ? global.LuminaPlatform.getPlatformLabel() : 'Smart TV';
 
     var chCount = (global.LuminaStore.get('channels') || []).length;
@@ -1840,69 +2148,137 @@
     var safeMarginVal = Number(global.LuminaStore.get('screenSafeMargin') || 0);
     var safeMarginPct = Math.round(safeMarginVal * 100) + '%';
     var autoUpdLabel = autoUpdHours === 0 ? 'Manual' : (autoUpdHours === 12 ? 'Ao abrir' : ('A cada ' + autoUpdHours + 'h'));
-    var listName = (src && src.name) ? src.name : 'Minha Lista';
-    var statusPillText = fmtDateBr(lastUpd && lastUpd.updatedAt);
+    var listName = (src && src.name) ? src.name : (src ? 'Minha Lista' : 'Nenhuma lista ativa');
+    var statusPillText = src ? fmtDateBr(lastUpd && lastUpd.updatedAt) : 'Desconectado';
 
     var panelBody = '';
 
     if (activeSettingsTab === 'source') {
-      // Exatamente como na Referência 05 (05-ajustes.html)
+      var savedRowsHtml = '';
+      for (var sl = 0; sl < savedLists.length; sl++) {
+        var sItem = savedLists[sl];
+        var isCurrent = (sItem.id === activeListId) || (src && src.name === sItem.name && src.type === sItem.type);
+        var sCounts = sItem.counts || { channels: 0, movies: 0, series: 0 };
+        var isConfirmingDelete = (pendingDeleteListId === sItem.id);
+        savedRowsHtml +=
+          '<div class="setting-row" style="height:82px;">' +
+            '<div>' +
+              '<div class="setting-row-label">' + escHtml(sItem.name || 'Lista') + ' <span style="font-size:18px;color:var(--accent);">(' + escHtml(sItem.type === 'xtream' ? 'Xtream' : 'M3U') + (isCurrent ? ' \u00B7 Ativa' : '') + ')</span></div>' +
+              '<div class="setting-row-desc">' + fmtCountPt(sCounts.channels || 0) + ' canais \u00B7 ' + fmtCountPt(sCounts.movies || 0) + ' filmes \u00B7 ' + fmtCountPt(sCounts.series || 0) + ' séries</div>' +
+            '</div>' +
+            '<div style="display:flex;gap:10px;">' +
+              (!isCurrent ? '<button id="btn-sl-act-' + sl + '" class="btn btn-primary btn-modal focusable" style="height:52px;font-size:20px;padding:0 18px;" data-col="settings-panel" data-saved-list-id="' + escAttr(sItem.id) + '" data-action="activate-saved-list" data-scope="settings">Ativar</button>' : '') +
+              '<button id="btn-sl-edit-' + sl + '" class="btn btn-secondary btn-modal focusable" style="height:52px;font-size:20px;padding:0 18px;" data-col="settings-panel" data-saved-list-id="' + escAttr(sItem.id) + '" data-action="edit-saved-list" data-scope="settings">Editar</button>' +
+              '<button id="btn-sl-del-' + sl + '" class="btn btn-secondary btn-modal focusable" style="height:52px;font-size:20px;padding:0 18px;' + (isConfirmingDelete ? 'border-color:var(--danger);color:var(--danger);' : '') + '" data-col="settings-panel" data-saved-list-id="' + escAttr(sItem.id) + '" data-action="delete-saved-list" data-scope="settings">' + (isConfirmingDelete ? 'Confirmar' : 'Remover') + '</button>' +
+            '</div>' +
+          '</div>';
+      }
+
       panelBody =
-        '<div class="settings-panel-title">Fonte e Pareamento</div>' +
+        '<div class="settings-panel-title">Minha lista</div>' +
         '<div class="settings-current-list-card">' +
           '<div>' +
-            '<div style="font-size:22px;color:var(--text-2);">Lista atual</div>' +
+            '<div style="font-size:22px;color:var(--text-2);">Lista ativa</div>' +
             '<div style="font-size:32px;font-weight:700;margin:4px 0;">' + escHtml(listName) + '</div>' +
             '<div style="font-size:24px;color:var(--text-2);">' + fmtCountPt(chCount) + ' canais \u00B7 ' + fmtCountPt(mvCount) + ' filmes \u00B7 ' + fmtCountPt(srCount) + ' séries</div>' +
           '</div>' +
-          '<span class="settings-status-pill">' + escHtml(statusPillText) + '</span>' +
+          '<div style="display:flex;gap:12px;align-items:center;">' +
+            '<button id="set-btn-add-list" class="btn btn-primary btn-modal focusable" data-col="settings-panel" data-action="open-add-list" data-scope="settings">Adicionar lista</button>' +
+            '<button id="set-btn-reload" class="btn btn-secondary btn-modal focusable" data-col="settings-panel" data-action="reload-source" data-scope="settings">Atualizar</button>' +
+            '<button id="set-btn-test-list" class="btn btn-secondary btn-modal focusable" data-col="settings-panel" data-action="run-test-my-list" data-scope="settings">Testar lista</button>' +
+          '</div>' +
         '</div>' +
         '<div class="setting-row">' +
           '<div>' +
-            '<div class="setting-row-label">Pareamento pelo celular</div>' +
-            '<div class="setting-row-desc">Envie sua lista pelo celular com código ou QR Code.</div>' +
+            '<div class="setting-row-label">Cadastro rápido de lista</div>' +
+            '<div class="setting-row-desc">Pareie pelo celular ou digite Xtream Codes / link M3U pelo controle.</div>' +
           '</div>' +
-          '<div><button id="set-btn-pair" class="btn btn-primary focusable" data-col="settings-panel" data-action="go-phone-pairing" data-scope="settings">Parear</button></div>' +
+          '<div style="display:flex;gap:12px;">' +
+            '<button id="set-btn-pair" class="btn btn-secondary btn-modal focusable" data-col="settings-panel" data-action="go-phone-pairing" data-scope="settings">QR Code</button>' +
+            '<button id="set-btn-xtream" class="btn btn-secondary btn-modal focusable" data-col="settings-panel" data-action="open-add-xtream" data-scope="settings">Xtream</button>' +
+            '<button id="set-btn-m3u" class="btn btn-secondary btn-modal focusable" data-col="settings-panel" data-action="open-add-m3u" data-scope="settings">M3U</button>' +
+          '</div>' +
         '</div>' +
-        '<div class="setting-row">' +
-          '<div>' +
-            '<div class="setting-row-label">Atualizar lista agora</div>' +
-            '<div class="setting-row-desc">Baixa de novo os canais, filmes e séries.</div>' +
-          '</div>' +
-          '<div><button id="set-btn-reload" class="btn btn-secondary focusable" data-col="settings-panel" data-action="reload-source" data-scope="settings">Atualizar</button></div>' +
-        '</div>' +
-        '<div id="set-row-autoupd" class="setting-row focusable" data-col="settings-panel" data-lr-control="auto-update" data-action="cycle-auto-update-hours" data-scope="settings">' +
-          '<div>' +
-            '<div class="setting-row-label">Atualizar automaticamente</div>' +
-            '<div class="setting-row-desc">Define quando a lista é baixada de novo.</div>' +
-          '</div>' +
-          '<div class="setting-row-value">' + svgChevLeft() + escHtml(autoUpdLabel) + svgChevRight() + '</div>' +
-        '</div>' +
-        '<div id="set-safe-margin" class="setting-row focusable" data-col="settings-panel" data-lr-control="safe-margin" data-action="cycle-safe-margin" data-scope="settings">' +
-          '<div>' +
-            '<div class="setting-row-label">Margem de segurança da tela</div>' +
-            '<div class="setting-row-desc">Reduz a imagem para não cortar as bordas em projetores.</div>' +
-          '</div>' +
-          '<div class="setting-row-value">' + svgChevLeft() + escHtml(safeMarginPct) + svgChevRight() + '</div>' +
-        '</div>';
+        (savedRowsHtml
+          ? ('<div style="font-size:20px;font-weight:700;color:var(--accent);margin:8px 0 4px;">Listas salvas (' + savedLists.length + '/5)</div>' + savedRowsHtml)
+          : '<div id="set-row-autoupd" class="setting-row focusable" data-col="settings-panel" data-lr-control="auto-update" data-action="cycle-auto-update-hours" data-scope="settings">' +
+              '<div>' +
+                '<div class="setting-row-label">Atualizar automaticamente</div>' +
+                '<div class="setting-row-desc">Define quando a lista é baixada de novo (' + escHtml(statusPillText) + ').</div>' +
+              '</div>' +
+              '<div class="setting-row-value">' + svgChevLeft() + escHtml(autoUpdLabel) + svgChevRight() + '</div>' +
+            '</div>');
     } else if (activeSettingsTab === 'playback') {
       var ratioLabel = ratio === 'auto' ? 'Auto' : ratio.toUpperCase();
-      var fmtLabel = preferFmt === 'auto' ? 'Auto' : preferFmt.toUpperCase();
+      var fmtLabels = {
+        auto: 'Automático (HLS primeiro)',
+        m3u8: 'HLS (.m3u8)',
+        ts: 'MPEG-TS (.ts)'
+      };
+      var engineLabels = {
+        auto: 'Automático (ExoPlayer nativo)',
+        exo: 'ExoPlayer nativo',
+        web: 'WebView (HLS.js / MPEG-TS)'
+      };
+      var uaLabels = {
+        vlc: 'VLC (padrão)',
+        lumina: 'Lumina TV',
+        iptv: 'IPTV Player',
+        chrome: 'Navegador Chrome',
+        custom: 'Personalizado...'
+      };
+      var bufLabels = {
+        small: 'Pequeno (rápido)',
+        normal: 'Normal (padrão)',
+        large: 'Grande (internet instável)'
+      };
+
       panelBody =
-        '<div class="settings-panel-title">Reprodução</div>' +
-        '<div id="set-ratio-cycle" class="setting-row focusable" data-col="settings-panel" data-lr-control="default-ratio" data-action="cycle-default-ratio" data-scope="settings">' +
+        '<div class="settings-panel-title">Player e Reprodução</div>' +
+        '<div id="set-eng-cycle" class="setting-row focusable" data-col="settings-panel" data-lr-control="player-engine" data-action="cycle-player-engine" data-scope="settings">' +
           '<div>' +
-            '<div class="setting-row-label">Proporção de vídeo</div>' +
-            '<div class="setting-row-desc">Ajusta o formato da imagem nos canais e filmes.</div>' +
+            '<div class="setting-row-label">Motor de vídeo</div>' +
+            '<div class="setting-row-desc">Decodificação nativa por hardware na Fire TV (Media3 ExoPlayer) ou WebView.</div>' +
           '</div>' +
-          '<div class="setting-row-value">' + svgChevLeft() + escHtml(ratioLabel) + svgChevRight() + '</div>' +
+          '<div class="setting-row-value">' + svgChevLeft() + escHtml(engineLabels[playerEngine] || engineLabels.auto) + svgChevRight() + '</div>' +
         '</div>' +
         '<div id="set-fmt-cycle" class="setting-row focusable" data-col="settings-panel" data-lr-control="prefer-format" data-action="cycle-prefer-format" data-scope="settings">' +
           '<div>' +
             '<div class="setting-row-label">Formato preferido ao vivo</div>' +
             '<div class="setting-row-desc">Alterna entre HLS (.m3u8) e MPEG-TS (.ts) automaticamente se falhar.</div>' +
           '</div>' +
-          '<div class="setting-row-value">' + svgChevLeft() + escHtml(fmtLabel) + svgChevRight() + '</div>' +
+          '<div class="setting-row-value">' + svgChevLeft() + escHtml(fmtLabels[preferFmt] || fmtLabels.auto) + svgChevRight() + '</div>' +
+        '</div>' +
+        '<div id="set-ua-cycle" class="setting-row focusable" data-col="settings-panel" data-lr-control="player-ua" data-action="cycle-player-ua" data-scope="settings">' +
+          '<div>' +
+            '<div class="setting-row-label">User-Agent</div>' +
+            '<div class="setting-row-desc">Identificação enviada ao servidor IPTV (VLC evita bloqueios HTTP 403).</div>' +
+          '</div>' +
+          '<div class="setting-row-value">' + svgChevLeft() + escHtml(uaLabels[playerUa] || uaLabels.vlc) + svgChevRight() + '</div>' +
+        '</div>' +
+        '<div id="set-buf-cycle" class="setting-row focusable" data-col="settings-panel" data-lr-control="buffer-profile" data-action="cycle-buffer-profile" data-scope="settings">' +
+          '<div>' +
+            '<div class="setting-row-label">Tamanho do buffer</div>' +
+            '<div class="setting-row-desc">Aumente para Grande se sua internet oscilar em canais ao vivo ou filmes.</div>' +
+          '</div>' +
+          '<div class="setting-row-value">' + svgChevLeft() + escHtml(bufLabels[bufferProfile] || bufLabels.normal) + svgChevRight() + '</div>' +
+        '</div>' +
+        '<div id="set-ratio-cycle" class="setting-row focusable" data-col="settings-panel" data-lr-control="default-ratio" data-action="cycle-default-ratio" data-scope="settings">' +
+          '<div>' +
+            '<div class="setting-row-label">Proporção de vídeo</div>' +
+            '<div class="setting-row-desc">Ajusta o formato da imagem nos canais e filmes (' + escHtml(ratioLabel) + ').</div>' +
+          '</div>' +
+          '<div class="setting-row-value">' + svgChevLeft() + escHtml(ratioLabel) + svgChevRight() + '</div>' +
+        '</div>' +
+        '<div class="setting-row">' +
+          '<div>' +
+            '<div class="setting-row-label">Diagnóstico e teste de stream</div>' +
+            '<div class="setting-row-desc">Inspecione codecs, logs de rede e teste a resposta da sua lista.</div>' +
+          '</div>' +
+          '<div style="display:flex;gap:12px;">' +
+            '<button id="set-btn-player-diag" class="btn btn-primary btn-modal focusable" data-col="settings-panel" data-action="open-player-diag" data-scope="settings">Diagnóstico do player</button>' +
+            '<button id="set-btn-test-streams" class="btn btn-secondary btn-modal focusable" data-col="settings-panel" data-action="run-test-my-list" data-scope="settings">Testar minha lista</button>' +
+          '</div>' +
         '</div>';
     } else if (activeSettingsTab === 'screen') {
       var perfLabels = { 'auto': 'Automático', 'normal': 'Padrão 60fps', 'lite': 'Modo Leve' };
@@ -2056,7 +2432,6 @@
           renderSwitchControl(!!includeCreds) +
         '</div>';
     } else {
-      // Aba Sobre (Seção 8: logo grande 160px centralizado no topo, "Lumina TV" 40px/800, "Versão 1.9.0" 26px #94A3B8 e frase de apoio 24px #94A3B8)
       panelBody =
         '<div style="display:flex;flex-direction:column;align-items:center;text-align:center;padding:12px 0 24px;border-bottom:1px solid var(--line);margin-bottom:12px;">' +
           '<div style="width:160px;height:160px;margin-bottom:16px;">' + getBrandLogoSvg(BRAND_LOGO, 'about') + '</div>' +
@@ -2072,11 +2447,11 @@
         '</div>' +
         '<div class="setting-row">' +
           '<div>' +
-            '<div class="setting-row-label">Painel de diagnóstico</div>' +
-            '<div class="setting-row-desc">Exibe informações de motor, quadros e memória na tela.</div>' +
+            '<div class="setting-row-label">Diagnóstico do player e sistema</div>' +
+            '<div class="setting-row-desc">Exibe codecs, eventos de rede/reprodução e exporta relatório sem senhas.</div>' +
           '</div>' +
           '<div style="display:flex;gap:14px;">' +
-            '<button id="set-diag-toggle" class="btn btn-primary focusable" data-col="settings-panel" data-action="toggle-diag" data-scope="settings">Diagnóstico</button>' +
+            '<button id="set-diag-screen" class="btn btn-primary focusable" data-col="settings-panel" data-action="open-player-diag" data-scope="settings">Diagnóstico do player</button>' +
             '<button id="set-diag-copy" class="btn btn-secondary focusable" data-col="settings-panel" data-action="copy-diag-report" data-scope="settings">Salvar Log</button>' +
           '</div>' +
         '</div>';
@@ -2200,6 +2575,56 @@
       var fmts = ['auto', 'm3u8', 'ts'];
       var curF = global.LuminaStore.get('preferOutputFormat') || 'auto';
       global.LuminaStore.set('preferOutputFormat', cycleArrayValue(fmts, curF, dir));
+      renderCurrentRoute();
+      if (focusId) global.LuminaFocus.setFocus(document.getElementById(focusId), 'settings');
+      return true;
+    }
+
+    if (ctrl === 'player-engine') {
+      var engs = ['auto', 'exo', 'web'];
+      var curE = global.LuminaStore.get('playerEngine') || 'auto';
+      global.LuminaStore.set('playerEngine', cycleArrayValue(engs, curE, dir));
+      renderCurrentRoute();
+      if (focusId) global.LuminaFocus.setFocus(document.getElementById(focusId), 'settings');
+      return true;
+    }
+
+    if (ctrl === 'player-ua') {
+      var uas = ['vlc', 'lumina', 'iptv', 'chrome', 'custom'];
+      var curU = global.LuminaStore.get('playerUserAgent') || 'vlc';
+      var nextU = cycleArrayValue(uas, curU, dir);
+      global.LuminaStore.set('playerUserAgent', nextU);
+      if (global.LuminaPlatform && global.LuminaPlatform.setDefaultUserAgent && global.LuminaPlayer) {
+        global.LuminaPlatform.setDefaultUserAgent(global.LuminaPlayer.resolveUserAgentForItem(null, ''));
+      }
+      renderCurrentRoute();
+      if (focusId) global.LuminaFocus.setFocus(document.getElementById(focusId), 'settings');
+      if (nextU === 'custom' && global.LuminaKeyboard) {
+        global.LuminaKeyboard.open({
+          fieldId: 'custom-ua',
+          label: 'User-Agent personalizado',
+          placeholder: 'Ex.: VLC/3.0.20 LibVLC/3.0.20',
+          value: global.LuminaStore.get('playerUserAgentCustom') || 'VLC/3.0.20 LibVLC/3.0.20',
+          returnFocusSelector: '#set-ua-cycle',
+          returnScope: 'settings',
+          onDone: function (val) {
+            var clean = String(val || '').trim() || 'VLC/3.0.20 LibVLC/3.0.20';
+            global.LuminaStore.set('playerUserAgentCustom', clean);
+            if (global.LuminaPlatform && global.LuminaPlatform.setDefaultUserAgent) {
+              global.LuminaPlatform.setDefaultUserAgent(clean);
+            }
+            renderCurrentRoute();
+            global.LuminaFocus.setFocus(document.getElementById('set-ua-cycle'), 'settings');
+          }
+        });
+      }
+      return true;
+    }
+
+    if (ctrl === 'buffer-profile') {
+      var bufs = ['small', 'normal', 'large'];
+      var curB = global.LuminaStore.get('bufferProfile') || 'normal';
+      global.LuminaStore.set('bufferProfile', cycleArrayValue(bufs, curB, dir));
       renderCurrentRoute();
       if (focusId) global.LuminaFocus.setFocus(document.getElementById(focusId), 'settings');
       return true;
@@ -2506,6 +2931,8 @@
     else if (route === 'detail') renderDetail(viewport);
     else if (route === 'favorites') renderFavorites(viewport);
     else if (route === 'onboarding') renderOnboarding(viewport);
+    else if (route === 'add-list') renderAddList(viewport);
+    else if (route === 'player-diag') renderPlayerDiagnosticsScreen(viewport);
     else if (route === 'settings') renderSettings(viewport);
     else renderHome(viewport);
 
@@ -2932,7 +3359,122 @@
         return;
       }
 
+      // 0. Teclado Virtual na Tela (LuminaKeyboard — Seção B3)
+      if (global.LuminaKeyboard && global.LuminaKeyboard.isOpen && global.LuminaKeyboard.isOpen()) {
+        if (global.LuminaKeyboard.handleElementSelect(el)) return;
+      }
+
       if (global.LuminaStore.get('loading')) return;
+
+      // Edição de campos dos formulários Xtream e M3U com LuminaKeyboard (Seções B2 e B3)
+      var editField = el.getAttribute('data-edit-field');
+      if (editField && global.LuminaKeyboard) {
+        if (editField === 'xtream-name') {
+          global.LuminaKeyboard.open({
+            fieldId: 'xtream-name',
+            label: 'Nome da lista (opcional)',
+            placeholder: 'Ex.: Minha TV, Casa, Esportes',
+            value: addListDraft.xtreamName,
+            returnFocusSelector: '#field-xtream-name',
+            returnScope: 'add-list',
+            onDone: function (v) {
+              addListDraft.xtreamName = v;
+              renderCurrentRoute();
+              global.LuminaFocus.setFocus(document.getElementById('field-xtream-server'), 'add-list');
+            }
+          });
+        } else if (editField === 'xtream-server') {
+          global.LuminaKeyboard.open({
+            fieldId: 'xtream-server',
+            label: 'Servidor Xtream',
+            placeholder: 'http://servidor.com:8080',
+            value: addListDraft.xtreamServer,
+            returnFocusSelector: '#field-xtream-server',
+            returnScope: 'add-list',
+            onDone: function (v) {
+              var extracted = global.LuminaListInput ? global.LuminaListInput.detectXtreamCredentialsFromUrl(v) : null;
+              if (extracted && extracted.isXtreamLink) {
+                addListDraft.xtreamServer = extracted.server;
+                if (!addListDraft.xtreamUser) addListDraft.xtreamUser = extracted.username;
+                if (!addListDraft.xtreamPass) addListDraft.xtreamPass = extracted.password;
+                toast('Servidor, usuário e senha preenchidos automaticamente do link!');
+                renderCurrentRoute();
+                global.LuminaFocus.setFocus(document.getElementById('btn-xtream-submit'), 'add-list');
+                return;
+              }
+              addListDraft.xtreamServer = v;
+              addListDraft.errorMsg = '';
+              renderCurrentRoute();
+              global.LuminaFocus.setFocus(document.getElementById('field-xtream-user'), 'add-list');
+            }
+          });
+        } else if (editField === 'xtream-user') {
+          global.LuminaKeyboard.open({
+            fieldId: 'xtream-user',
+            label: 'Usuário Xtream',
+            placeholder: 'Seu usuário',
+            value: addListDraft.xtreamUser,
+            returnFocusSelector: '#field-xtream-user',
+            returnScope: 'add-list',
+            onDone: function (v) {
+              addListDraft.xtreamUser = v;
+              addListDraft.errorMsg = '';
+              renderCurrentRoute();
+              global.LuminaFocus.setFocus(document.getElementById('field-xtream-pass'), 'add-list');
+            }
+          });
+        } else if (editField === 'xtream-pass') {
+          global.LuminaKeyboard.open({
+            fieldId: 'xtream-pass',
+            label: 'Senha Xtream',
+            placeholder: 'Sua senha',
+            value: addListDraft.xtreamPass,
+            isPassword: true,
+            revealPassword: addListDraft.xtreamPassVisible,
+            returnFocusSelector: '#field-xtream-pass',
+            returnScope: 'add-list',
+            onDone: function (v) {
+              addListDraft.xtreamPass = v;
+              addListDraft.errorMsg = '';
+              renderCurrentRoute();
+              global.LuminaFocus.setFocus(document.getElementById('btn-xtream-submit'), 'add-list');
+            }
+          });
+        } else if (editField === 'm3u-name') {
+          global.LuminaKeyboard.open({
+            fieldId: 'm3u-name',
+            label: 'Nome da lista (opcional)',
+            placeholder: 'Ex.: Lista Principal',
+            value: addListDraft.m3uName,
+            returnFocusSelector: '#field-m3u-name',
+            returnScope: 'add-list',
+            onDone: function (v) {
+              addListDraft.m3uName = v;
+              renderCurrentRoute();
+              global.LuminaFocus.setFocus(document.getElementById('field-m3u-url'), 'add-list');
+            }
+          });
+        } else if (editField === 'm3u-url') {
+          global.LuminaKeyboard.open({
+            fieldId: 'm3u-url',
+            label: 'URL da lista M3U',
+            placeholder: 'http://servidor.com/get.php?username=...&password=...&type=m3u_plus',
+            value: addListDraft.m3uUrl,
+            returnFocusSelector: '#field-m3u-url',
+            returnScope: 'add-list',
+            onDone: function (v) {
+              addListDraft.m3uUrl = v;
+              addListDraft.errorMsg = '';
+              var det = global.LuminaListInput ? global.LuminaListInput.detectXtreamCredentialsFromUrl(v) : null;
+              addListDraft.detectedXtreamPrompt = (det && det.isXtreamLink) ? det : null;
+              renderCurrentRoute();
+              var nextTarget = addListDraft.detectedXtreamPrompt ? 'btn-m3u-use-xtream' : 'btn-m3u-submit';
+              global.LuminaFocus.setFocus(document.getElementById(nextTarget), 'add-list');
+            }
+          });
+        }
+        return;
+      }
 
       if (global.LuminaRouter.getCurrent() === 'player-fullscreen') {
         var osdBox = document.getElementById('player-osd');
@@ -3316,12 +3858,229 @@
             toast('Erro ao restaurar backup.');
           }
         });
+      } else if (action === 'open-add-list') {
+        resetAddListDraft('cards');
+        global.LuminaRouter.navigate('add-list');
+      } else if (action === 'open-add-xtream') {
+        resetAddListDraft('xtream');
+        global.LuminaRouter.navigate('add-list');
+        renderCurrentRoute();
+      } else if (action === 'open-add-m3u') {
+        resetAddListDraft('m3u');
+        global.LuminaRouter.navigate('add-list');
+        renderCurrentRoute();
+      } else if (action === 'back-add-list') {
+        if (addListMode !== 'cards') {
+          addListMode = 'cards';
+          addListDraft.errorMsg = '';
+          renderCurrentRoute();
+        } else {
+          global.LuminaRouter.back();
+        }
+      } else if (action === 'toggle-xtream-pass-eye') {
+        addListDraft.xtreamPassVisible = !addListDraft.xtreamPassVisible;
+        renderCurrentRoute();
+        global.LuminaFocus.setFocus(document.getElementById('btn-xtream-pass-eye'), 'add-list');
+      } else if (action === 'convert-m3u-to-xtream') {
+        var detXt = addListDraft.detectedXtreamPrompt;
+        if (detXt) {
+          addListMode = 'xtream';
+          addListDraft.xtreamName = addListDraft.m3uName || '';
+          addListDraft.xtreamServer = detXt.server;
+          addListDraft.xtreamUser = detXt.username;
+          addListDraft.xtreamPass = detXt.password;
+          addListDraft.detectedXtreamPrompt = null;
+          addListDraft.errorMsg = '';
+          renderCurrentRoute();
+          global.LuminaFocus.setFocus(document.getElementById('btn-xtream-submit'), 'add-list');
+        }
+      } else if (action === 'submit-xtream-form') {
+        var valRes = global.LuminaListInput.validateXtreamInput({
+          name: addListDraft.xtreamName,
+          server: addListDraft.xtreamServer,
+          username: addListDraft.xtreamUser,
+          password: addListDraft.xtreamPass
+        });
+        if (!valRes.ok) {
+          addListDraft.errorMsg = valRes.error;
+          addListDraft.errorIsSsl = false;
+          renderCurrentRoute();
+          var errFieldMap = { server: 'field-xtream-server', username: 'field-xtream-user', password: 'field-xtream-pass' };
+          var fId = errFieldMap[valRes.field] || 'field-xtream-server';
+          global.LuminaFocus.setFocus(document.getElementById(fId), 'add-list');
+          return;
+        }
+        addListDraft.xtreamServer = valRes.server;
+        addListDraft.xtreamUser = valRes.username;
+        addListDraft.xtreamPass = valRes.password;
+        addListDraft.xtreamName = valRes.name;
+        addListDraft.errorMsg = '';
+        addListDraft.errorIsSsl = false;
+
+        showLoading('1/4 · Verificando endereço…');
+        var credsObj = { server: valRes.server, username: valRes.username, password: valRes.password };
+        global.LuminaRepository.loadFromXtream(credsObj, onLoadProgress, function (err, items) {
+          hideLoading();
+          if (err) {
+            addListDraft.errorMsg = err.message || 'Falha ao conectar ao servidor Xtream.';
+            addListDraft.errorIsSsl = !!err.isSslError;
+            addListDraft.sslHost = valRes.host;
+            renderCurrentRoute();
+            global.LuminaFocus.setFocus(document.getElementById(err.isSslError ? 'btn-trust-ssl' : 'btn-xtream-submit'), 'add-list');
+            return;
+          }
+          var srcRecord = {
+            id: addListDraft.editingListId || undefined,
+            type: 'xtream',
+            name: valRes.name,
+            creds: credsObj
+          };
+          global.LuminaStore.set('xtreamCreds', credsObj);
+          global.LuminaStore.set('source', srcRecord);
+          if (global.LuminaStorage) global.LuminaStorage.saveMeta('source', srcRecord);
+          global.LuminaStore.upsertSavedList(srcRecord);
+
+          var chC = (global.LuminaStore.get('channels') || []).length;
+          var mvC = (global.LuminaStore.get('movies') || []).length;
+          var srC = (global.LuminaStore.get('seriesList') || []).length + (global.LuminaStore.get('novelasList') || []).length;
+          toast('Lista conectada: ' + fmtCountPt(chC) + ' canais · ' + fmtCountPt(mvC) + ' filmes · ' + fmtCountPt(srC) + ' séries');
+          global.LuminaRouter.navigate('home');
+        });
+      } else if (action === 'submit-m3u-form' || action === 'submit-m3u-direct') {
+        var m3uValRes = global.LuminaListInput.validateM3uInput({
+          name: addListDraft.m3uName,
+          url: addListDraft.m3uUrl
+        });
+        if (!m3uValRes.ok) {
+          addListDraft.errorMsg = m3uValRes.error;
+          addListDraft.errorIsSsl = false;
+          renderCurrentRoute();
+          global.LuminaFocus.setFocus(document.getElementById('field-m3u-url'), 'add-list');
+          return;
+        }
+        if (action === 'submit-m3u-form' && m3uValRes.detectedXtream && !addListDraft.detectedXtreamPrompt) {
+          addListDraft.detectedXtreamPrompt = m3uValRes.detectedXtream;
+          renderCurrentRoute();
+          global.LuminaFocus.setFocus(document.getElementById('btn-m3u-use-xtream'), 'add-list');
+          return;
+        }
+        addListDraft.detectedXtreamPrompt = null;
+        addListDraft.m3uUrl = m3uValRes.url;
+        addListDraft.m3uName = m3uValRes.name;
+        addListDraft.errorMsg = '';
+        addListDraft.errorIsSsl = false;
+
+        showLoading('1/4 · Verificando endereço…');
+        global.LuminaRepository.loadFromUrlOrLocalPath(m3uValRes.url, 'manual-m3u', onLoadProgress, function (err) {
+          hideLoading();
+          if (err) {
+            addListDraft.errorMsg = err.message || 'Falha ao baixar lista M3U.';
+            addListDraft.errorIsSsl = !!err.isSslError;
+            addListDraft.sslHost = m3uValRes.host;
+            renderCurrentRoute();
+            global.LuminaFocus.setFocus(document.getElementById(err.isSslError ? 'btn-trust-ssl-m3u' : 'btn-m3u-submit'), 'add-list');
+            return;
+          }
+          var srcRecord2 = {
+            id: addListDraft.editingListId || undefined,
+            type: 'm3u',
+            name: m3uValRes.name,
+            url: m3uValRes.url
+          };
+          global.LuminaStore.set('source', srcRecord2);
+          if (global.LuminaStorage) global.LuminaStorage.saveMeta('source', srcRecord2);
+          global.LuminaStore.upsertSavedList(srcRecord2);
+
+          var chC2 = (global.LuminaStore.get('channels') || []).length;
+          var mvC2 = (global.LuminaStore.get('movies') || []).length;
+          var srC2 = (global.LuminaStore.get('seriesList') || []).length + (global.LuminaStore.get('novelasList') || []).length;
+          toast('Lista conectada: ' + fmtCountPt(chC2) + ' canais · ' + fmtCountPt(mvC2) + ' filmes · ' + fmtCountPt(srC2) + ' séries');
+          global.LuminaRouter.navigate('home');
+        });
+      } else if (action === 'trust-ssl-and-retry') {
+        if (addListDraft.sslHost && global.LuminaPlatform && global.LuminaPlatform.trustInsecureHost) {
+          global.LuminaPlatform.trustInsecureHost(addListDraft.sslHost);
+          toast('Servidor adicionado à lista de confiança HTTPS.');
+          addListDraft.errorIsSsl = false;
+          addListDraft.errorMsg = '';
+          renderCurrentRoute();
+        }
+      } else if (action === 'activate-saved-list') {
+        var targetId = el.getAttribute('data-saved-list-id');
+        if (!targetId) return;
+        showLoading('Trocando de lista…');
+        global.LuminaRepository.activateSavedList(targetId, onLoadProgress, function (err, list) {
+          hideLoading();
+          if (err) { toast(err.message); return; }
+          toast('Lista ativada (' + fmtCountPt(list ? list.length : 0) + ' itens).');
+          renderCurrentRoute();
+        });
+      } else if (action === 'edit-saved-list') {
+        var editId = el.getAttribute('data-saved-list-id');
+        var allSaved = global.LuminaStore.get('savedLists') || [];
+        for (var sIdx = 0; sIdx < allSaved.length; sIdx++) {
+          if (allSaved[sIdx].id === editId) {
+            var entry = allSaved[sIdx];
+            resetAddListDraft(entry.type === 'xtream' ? 'xtream' : 'm3u');
+            addListDraft.editingListId = entry.id;
+            if (entry.type === 'xtream' && entry.creds) {
+              addListDraft.xtreamName = entry.name || '';
+              addListDraft.xtreamServer = entry.creds.server || '';
+              addListDraft.xtreamUser = entry.creds.username || '';
+              addListDraft.xtreamPass = entry.creds.password || '';
+            } else {
+              addListDraft.m3uName = entry.name || '';
+              addListDraft.m3uUrl = entry.url || '';
+            }
+            global.LuminaRouter.navigate('add-list');
+            return;
+          }
+        }
+      } else if (action === 'delete-saved-list') {
+        var delId = el.getAttribute('data-saved-list-id');
+        if (!delId) return;
+        if (pendingDeleteListId !== delId) {
+          pendingDeleteListId = delId;
+          toast('Pressione OK novamente em Confirmar para remover esta lista.');
+          renderCurrentRoute();
+          global.LuminaFocus.setFocus(el, 'settings');
+          return;
+        }
+        pendingDeleteListId = '';
+        global.LuminaStore.removeSavedList(delId);
+        toast('Lista removida.');
+        renderCurrentRoute();
+      } else if (action === 'open-player-diag') {
+        global.LuminaRouter.navigate('player-diag');
+      } else if (action === 'run-test-my-list') {
+        toast('Testando streams da sua lista...');
+        global.LuminaRepository.testMyListStreams(function (err, summary) {
+          if (err) {
+            toast(err.message);
+            renderCurrentRoute();
+            return;
+          }
+          toast(summary.allOk ? 'Teste concluído: streams OK!' : 'Teste concluído com alertas.');
+          if (global.LuminaRouter.getCurrent() !== 'player-diag') {
+            global.LuminaRouter.navigate('player-diag');
+          } else {
+            renderCurrentRoute();
+          }
+        });
+        renderCurrentRoute();
+      } else if (action === 'clear-diag-log') {
+        if (global.LuminaDiagLog && global.LuminaDiagLog.clear) {
+          global.LuminaDiagLog.clear();
+        }
+        global.LuminaStore.set('streamTestResults', null);
+        toast('Log de diagnóstico limpo.');
+        renderCurrentRoute();
       } else if (action === 'copy-diag-report') {
         var rep = buildDiagnosticsReportText();
         if (global.LuminaPlatform && global.LuminaPlatform.saveBackupToDisk) {
           global.LuminaPlatform.saveBackupToDisk('lumina-diagnostico.txt', rep);
         }
-        toast('Relatório salvo.');
+        toast('Relatório salvo em lumina-diagnostico.txt.');
       } else if (action === 'toggle-diag') {
         global.LuminaEventBus.emit('diag:toggle');
       } else if (action === 'back') {

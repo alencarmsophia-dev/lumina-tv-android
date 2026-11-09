@@ -1,237 +1,117 @@
 (function (global) {
   'use strict';
 
-  var videoEl = null;
-  var currentEngine = null;
+  var STATES = {
+    IDLE: 'IDLE',
+    LOADING: 'LOADING',
+    PLAYING: 'PLAYING',
+    PAUSED: 'PAUSED',
+    BUFFERING: 'BUFFERING',
+    RETRYING: 'RETRYING',
+    ENDED: 'ENDED',
+    FAILED: 'FAILED'
+  };
+
+  var DEFAULT_USER_AGENT = 'VLC/3.0.20 LibVLC/3.0.20';
+  var ALT_USER_AGENTS = [
+    'Lumina TV/2.1.0 (Android)',
+    'okhttp/4.12.0',
+    'Mozilla/5.0 (Linux; Android 11; AFTKA) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0 Safari/537.36'
+  ];
+
+  var USER_AGENT_PRESETS = {
+    vlc: 'VLC/3.0.20 LibVLC/3.0.20',
+    lumina: 'Lumina TV/2.1.0 (Android)',
+    iptv: 'IPTVSmartersPlayer',
+    chrome: 'Mozilla/5.0 (Linux; Android 11; AFTKA) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0 Safari/537.36'
+  };
+
+  var GLOBAL_FALLBACK_BUDGET_MS = 45000;
+  var WATCHDOG_LIVE_MS = 20000;
+  var WATCHDOG_VOD_MS = 30000;
+
+  var state = STATES.IDLE;
   var currentItem = null;
-  var state = 'IDLE';
-  var openSessionId = 0;
-  var currentPlan = [];
-  var currentPlanIndex = 0;
-  var retryCount = 0;
-  var MAX_RETRIES = 2;
-  var retryTimer = null;
+  var activeEngine = null;
+  var fallbackPlan = [];
+  var fallbackIndex = 0;
+  var connectTimeout = null;
+  var progressSaveInterval = null;
   var watchdogTimer = null;
-  var saveProgressTimer = null;
   var nextEpCountdownTimer = null;
   var openStartTime = 0;
-  var firstPlayDone = false;
-  var resumeAppliedForItem = false;
-  var lastToggleAt = 0;
-  var lastWatchdogTime = -1;
-  var stallSeconds = 0;
-  var STALL_THRESHOLD_SEC = 8;
+  var stepStartTime = 0;
+  var lastProgressAdvanceAt = 0;
+  var lastObservedPositionSec = -1;
+  var zapDebounceTimer = null;
+  var hostUserAgentMap = {};
+  var currentUaFallbackIdx = -1;
+  var currentStepServerRetried = false;
+  var currentStepWatchdogRetried = false;
+  var forcedFormatOverride = null; // 'm3u8' | 'ts' | null
+  var forcedEngineOverride = null; // 'exo' | 'web' | null
 
-  function setState(nextState, extra) {
-    state = nextState;
-    if (global.LuminaStore) global.LuminaStore.set('playerState', nextState);
+  function isHlsPath(url) {
+    return /\.m3u8($|\?)/i.test(String(url || ''));
+  }
+
+  function isTsPath(url) {
+    return /\.ts($|\?)/i.test(String(url || ''));
+  }
+
+  function isMkvPath(url) {
+    return /\.mkv($|\?)/i.test(String(url || ''));
+  }
+
+  function isDirectVodPath(url) {
+    return /\.(mp4|mkv|avi|mov|webm|flv)($|\?)/i.test(String(url || ''));
+  }
+
+  function detectFormatLabel(url) {
+    var u = String(url || '');
+    if (isHlsPath(u)) return 'HLS';
+    if (isTsPath(u)) return 'MPEG-TS';
+    if (/\.mp4($|\?)/i.test(u)) return 'MP4';
+    if (isMkvPath(u)) return 'MKV';
+    return 'HLS/TS';
+  }
+
+  function extractHost(url) {
+    var m = String(url || '').match(/^https?:\/\/([^\/:?#]+)/i);
+    return m ? m[1].toLowerCase() : '';
+  }
+
+  function resolveUserAgentForItem(item, url) {
+    if (item && item.httpUserAgent && String(item.httpUserAgent).trim()) {
+      return String(item.httpUserAgent).trim();
+    }
+    var host = extractHost(url || (item && item.url) || '');
+    if (host && hostUserAgentMap[host]) {
+      return hostUserAgentMap[host];
+    }
+    var preset = (global.LuminaStore && global.LuminaStore.get('playerUserAgent')) || 'vlc';
+    if (preset === 'custom') {
+      var customUa = (global.LuminaStore && global.LuminaStore.get('playerUserAgentCustom')) || '';
+      return String(customUa).trim() || DEFAULT_USER_AGENT;
+    }
+    return USER_AGENT_PRESETS[preset] || DEFAULT_USER_AGENT;
+  }
+
+  function setState(newState, extra) {
+    state = newState;
+    if (global.LuminaStore) global.LuminaStore.set('playerState', newState);
     if (global.LuminaEventBus) {
-      global.LuminaEventBus.emit('player:state', { state: nextState, item: currentItem, extra: extra || null });
+      global.LuminaEventBus.emit('player:state', { state: newState, item: currentItem, extra: extra || null });
     }
   }
 
-  function cleanUpEngineAndVideo() {
-    clearTimeout(retryTimer);
-    retryTimer = null;
-    clearInterval(watchdogTimer);
-    watchdogTimer = null;
-    clearInterval(saveProgressTimer);
-    saveProgressTimer = null;
-    cancelNextEpisodeCountdown();
-
-    if (currentEngine) {
-      try { currentEngine.destroy(); } catch (e) {}
-      currentEngine = null;
-    }
-    if (videoEl) {
-      try {
-        videoEl.pause();
-        videoEl.removeAttribute('src');
-        if (typeof videoEl.load === 'function') videoEl.load();
-      } catch (e) {}
-    }
+  function clearTimers() {
+    if (connectTimeout) { clearTimeout(connectTimeout); connectTimeout = null; }
+    if (progressSaveInterval) { clearInterval(progressSaveInterval); progressSaveInterval = null; }
+    if (watchdogTimer) { clearInterval(watchdogTimer); watchdogTimer = null; }
   }
 
-  function buildFallbackPlan(item) {
-    var rawUrl = String((item && item.url) || '').trim();
-    var lower = rawUrl.toLowerCase();
-    var isLive = item && item.kind === 'live';
-    var urls = [rawUrl];
-
-    // B4.3: Para ao vivo Xtream, adiciona URL alternativa (.m3u8 <-> .ts)
-    if (isLive && /\/live\/[^\/]+\/[^\/]+\/\d+\.(m3u8|ts)$/i.test(rawUrl)) {
-      var altUrl = /\.m3u8$/i.test(rawUrl)
-        ? rawUrl.replace(/\.m3u8$/i, '.ts')
-        : rawUrl.replace(/\.ts$/i, '.m3u8');
-      var preferFmt = (global.LuminaStore && global.LuminaStore.get('preferOutputFormat')) || 'auto';
-      if (preferFmt === 'ts' && /\.m3u8$/i.test(rawUrl)) {
-        urls = [altUrl, rawUrl];
-      } else {
-        urls.push(altUrl);
-      }
-    }
-
-    var canNativeHls = !!(global.LuminaPlatform && global.LuminaPlatform.canNativeHls);
-    var canHlsJs = !!(global.LuminaHlsEngine && global.LuminaHlsEngine.isSupported && global.LuminaHlsEngine.isSupported());
-    var canMpegts = !!(global.LuminaMpegtsEngine && global.LuminaMpegtsEngine.isSupported && global.LuminaMpegtsEngine.isSupported());
-
-    var plan = [];
-    for (var uIdx = 0; uIdx < urls.length; uIdx++) {
-      var u = urls[uIdx];
-      var ul = u.toLowerCase();
-      var isHls = ul.indexOf('.m3u8') !== -1;
-      var isTs = ul.indexOf('.ts') !== -1 || (isLive && !isHls && !/\.(mp4|mkv|webm)(\?|$)/i.test(ul));
-
-      if (isHls) {
-        if (canNativeHls) {
-          plan.push({ engine: 'NativeEngine', url: u });
-          if (canHlsJs) plan.push({ engine: 'HlsJsEngine', url: u });
-        } else {
-          if (canHlsJs) plan.push({ engine: 'HlsJsEngine', url: u });
-          plan.push({ engine: 'NativeEngine', url: u });
-        }
-      } else if (isTs) {
-        if (canMpegts) {
-          plan.push({ engine: 'MpegtsEngine', url: u });
-          plan.push({ engine: 'NativeEngine', url: u });
-        } else {
-          plan.push({ engine: 'NativeEngine', url: u });
-          if (canHlsJs) plan.push({ engine: 'HlsJsEngine', url: u });
-        }
-      } else {
-        plan.push({ engine: 'NativeEngine', url: u });
-        if (canHlsJs) plan.push({ engine: 'HlsJsEngine', url: u });
-      }
-    }
-
-    if (!plan.length) {
-      plan.push({ engine: 'NativeEngine', url: rawUrl });
-    }
-    return plan;
-  }
-
-  function mapFriendlyErrorMessage(err) {
-    var rawMsg = (err && err.message) ? String(err.message) : String(err || 'Erro desconhecido');
-    var status = (err && err.httpStatus) ? Number(err.httpStatus) : 0;
-    if (!status) {
-      var m = rawMsg.match(/\b(401|403|404|429|500|502|503|504)\b/);
-      if (m) status = parseInt(m[1], 10);
-    }
-
-    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
-      return {
-        title: 'Sem conexão com a internet',
-        message: 'Verifique o Wi-Fi ou cabo de rede da sua TV e tente novamente.',
-        code: 'OFFLINE',
-        suggestedAction: 'retry'
-      };
-    }
-    if (status === 401 || status === 403 || /401|403|forbidden|unauthorized/i.test(rawMsg)) {
-      return {
-        title: 'Acesso recusado pelo servidor (401/403)',
-        message: 'Verifique se sua assinatura está ativa ou se o limite de telas simultâneas foi atingido.',
-        code: 'AUTH_OR_LIMIT',
-        suggestedAction: 'check-account'
-      };
-    }
-    if (status === 429 || /max_connections|limite/i.test(rawMsg)) {
-      return {
-        title: 'Limite de conexões simultâneas atingido',
-        message: 'Feche a reprodução em outro aparelho ou aguarde alguns segundos antes de tentar de novo.',
-        code: 'MAX_CONNECTIONS',
-        suggestedAction: 'retry'
-      };
-    }
-    if (status === 404 || /404|not found/i.test(rawMsg)) {
-      return {
-        title: 'Conteúdo não encontrado no servidor (404)',
-        message: 'Este canal ou título mudou de endereço. Atualize sua lista em Parear / Fontes.',
-        code: 'NOT_FOUND',
-        suggestedAction: 'reload-source'
-      };
-    }
-    if (/timeout/i.test(rawMsg) || (err && err.code === 'TIMEOUT')) {
-      return {
-        title: 'Servidor demorou demais para responder',
-        message: 'O servidor do canal está lento no momento. Tente novamente ou troque de motor.',
-        code: 'TIMEOUT',
-        suggestedAction: 'switch-engine'
-      };
-    }
-    if (/SRC_NOT_SUPPORTED|DECODE|formato|codec/i.test(rawMsg) || (err && (err.code === 3 || err.code === 4))) {
-      return {
-        title: 'Formato de vídeo ou áudio não suportado',
-        message: 'O codec deste conteúdo não pôde ser decodificado pelo motor atual. Tente alternar o motor no player.',
-        code: 'UNSUPPORTED_FORMAT',
-        suggestedAction: 'switch-engine'
-      };
-    }
-    return {
-      title: 'Não foi possível reproduzir este conteúdo',
-      message: 'Falha ao conectar ao fluxo de mídia (' + rawMsg + ').',
-      code: 'GENERIC_ERROR',
-      suggestedAction: 'retry'
-    };
-  }
-
-  function findNextEpisode(epItem, cb) {
-    if (!epItem || (!epItem.seriesKey && !epItem.xtreamSeriesId)) return cb(null);
-    var allLists = ((global.LuminaStore && global.LuminaStore.get('seriesList')) || [])
-      .concat((global.LuminaStore && global.LuminaStore.get('novelasList')) || []);
-
-    var targetShow = null;
-    for (var i = 0; i < allLists.length; i++) {
-      var show = allLists[i];
-      if (show.id === epItem.seriesKey || (epItem.xtreamSeriesId && String(show.xtreamSeriesId) === String(epItem.xtreamSeriesId))) {
-        targetShow = show;
-        break;
-      }
-    }
-    if (!targetShow) return cb(null);
-
-    function findInLoadedShow(sh) {
-      var flat = [];
-      var seasons = sh.seasons || [];
-      for (var s = 0; s < seasons.length; s++) {
-        flat = flat.concat(seasons[s].episodes || []);
-      }
-      for (var e = 0; e < flat.length - 1; e++) {
-        if (flat[e].id === epItem.id) return flat[e + 1];
-      }
-      return null;
-    }
-
-    if (targetShow.needsSeriesInfo && global.LuminaXtream && global.LuminaXtream.fetchSeriesInfo) {
-      var creds = global.LuminaStore ? global.LuminaStore.get('xtreamCreds') : null;
-      global.LuminaXtream.fetchSeriesInfo(creds, targetShow, function (err, hydrated) {
-        if (err || !hydrated) return cb(null);
-        cb(findInLoadedShow(hydrated));
-      });
-      return;
-    }
-
-    cb(findInLoadedShow(targetShow));
-  }
-
-  function startNextEpisodeCountdown(nextEp) {
-    cancelNextEpisodeCountdown();
-    var sec = 5;
-    global.LuminaStore.set('nextEpisodePrompt', { nextEpisode: nextEp, secondsLeft: sec });
-    global.LuminaEventBus.emit('player:next-ep-tick', { nextEpisode: nextEp, secondsLeft: sec });
-
-    nextEpCountdownTimer = setInterval(function () {
-      sec--;
-      if (sec <= 0) {
-        cancelNextEpisodeCountdown();
-        open(nextEp);
-      } else {
-        global.LuminaStore.set('nextEpisodePrompt', { nextEpisode: nextEp, secondsLeft: sec });
-        global.LuminaEventBus.emit('player:next-ep-tick', { nextEpisode: nextEp, secondsLeft: sec });
-      }
-    }, 1000);
-  }
-
-  function cancelNextEpisodeCountdown() {
+  function cancelNextEpisodePrompt() {
     if (nextEpCountdownTimer) {
       clearInterval(nextEpCountdownTimer);
       nextEpCountdownTimer = null;
@@ -239,368 +119,943 @@
     if (global.LuminaStore) global.LuminaStore.set('nextEpisodePrompt', null);
   }
 
-  function persistVodPosition(forceTime, forceDur, forceCompleted) {
-    if (!currentItem || currentItem.kind === 'live') return;
-    var realDur = (videoEl && isFinite(videoEl.duration) && videoEl.duration > 0) ? videoEl.duration : 0;
-    var dur = (typeof forceDur === 'number' && forceDur > 0) ? forceDur : (realDur || currentItem.durationSecs || 0);
-    if (dur <= 0) return;
+  function destroyEngine() {
+    clearTimers();
+    if (global.LuminaPlayback) {
+      global.LuminaPlayback.stop();
+    } else if (activeEngine) {
+      var v = (typeof document !== 'undefined') ? document.getElementById('main-video') : null;
+      activeEngine.destroy(v);
+    }
+    activeEngine = null;
+  }
 
-    var pos = typeof forceTime === 'number' ? forceTime : ((videoEl && videoEl.currentTime) || 0);
-    if (pos < 5 && !forceCompleted) return;
+  function buildXtreamVariantUrl(url, kind, targetExt) {
+    var u = String(url || '');
+    if (!u) return '';
+    var qIdx = u.indexOf('?');
+    var pathPart = qIdx !== -1 ? u.slice(0, qIdx) : u;
+    var queryPart = qIdx !== -1 ? u.slice(qIdx) : '';
 
-    var completed = !!forceCompleted || (dur > 0 && (pos / dur) >= 0.95);
-    var map = (global.LuminaStore && global.LuminaStore.get('watchProgress')) || {};
-    map[currentItem.id] = {
-      position: completed ? Math.floor(dur) : Math.floor(pos),
-      duration: Math.floor(dur),
-      percent: dur > 0 ? Math.min(100, Math.round((pos / dur) * 100)) : 0,
+    if (/\.(m3u8|ts|mp4|mkv|avi)$/i.test(pathPart)) {
+      return pathPart.replace(/\.(m3u8|ts|mp4|mkv|avi)$/i, '.' + targetExt) + queryPart;
+    }
+    if (kind === 'live' && /\/(live\/)?[^\/]+\/[^\/]+\/\d+$/i.test(pathPart)) {
+      return pathPart + '.' + targetExt + queryPart;
+    }
+    return '';
+  }
+
+  function isFormatAllowedByAccount(ext, accountInfo) {
+    if (!accountInfo || !Array.isArray(accountInfo.allowedOutputFormats) || !accountInfo.allowedOutputFormats.length) {
+      return true;
+    }
+    var allowed = accountInfo.allowedOutputFormats.map(function (f) { return String(f).toLowerCase(); });
+    if (ext === 'm3u8') return allowed.indexOf('m3u8') !== -1 || allowed.indexOf('hls') !== -1;
+    if (ext === 'ts') return allowed.indexOf('ts') !== -1 || allowed.indexOf('mpegts') !== -1;
+    return true;
+  }
+
+  // Plano de fallback enxuto e determinístico (Seção A8: máximo 3 passos, teto global 45s)
+  function buildFallbackPlan(item, options) {
+    var opts = options || {};
+    var url = (item && item.url) ? String(item.url) : '';
+    var kind = (item && item.kind) || 'live';
+    var isLive = (kind === 'live');
+    var accountInfo = opts.accountInfo || (global.LuminaStore ? global.LuminaStore.get('accountInfo') : null);
+    var preferFmt = opts.preferOutputFormat || forcedFormatOverride || (global.LuminaStore ? global.LuminaStore.get('preferOutputFormat') : 'auto') || 'auto';
+    var enginePref = opts.playerEngine || forcedEngineOverride || (global.LuminaStore ? global.LuminaStore.get('playerEngine') : 'auto') || 'auto';
+
+    var exoAvailable = typeof opts.exoAvailable === 'boolean'
+      ? opts.exoAvailable
+      : !!(global.LuminaExoEngine && global.LuminaExoEngine.isSupported());
+
+    var hlsJsAvailable = typeof opts.hlsJsAvailable === 'boolean'
+      ? opts.hlsJsAvailable
+      : !!(global.LuminaHlsEngine && global.LuminaHlsEngine.isSupported());
+
+    var mpegtsAvailable = typeof opts.mpegtsAvailable === 'boolean'
+      ? opts.mpegtsAvailable
+      : !!(global.LuminaMpegtsEngine && global.LuminaMpegtsEngine.isSupported());
+
+    var nativeHlsAvailable = typeof opts.nativeHlsAvailable === 'boolean'
+      ? opts.nativeHlsAvailable
+      : !!(global.LuminaPlatform && global.LuminaPlatform.detectNativeHls && global.LuminaPlatform.detectNativeHls());
+
+    var exoClass = global.LuminaExoEngine || { name: 'ExoPlayer', isNative: true };
+    var hlsClass = global.LuminaHlsEngine || { name: 'HlsJsEngine', isNative: false };
+    var tsClass = global.LuminaMpegtsEngine || { name: 'MpegtsEngine', isNative: false };
+    var natClass = global.LuminaNativeEngine || { name: 'NativeEngine', isNative: false };
+
+    var plan = [];
+
+    function addStep(engineName, stepUrl, timeoutMs, engineClass) {
+      if (!stepUrl || plan.length >= 3) return;
+      for (var i = 0; i < plan.length; i++) {
+        if (plan[i].engine === engineName && plan[i].url === stepUrl) return;
+      }
+      plan.push({
+        engine: engineName,
+        url: stepUrl,
+        timeoutMs: timeoutMs,
+        formatLabel: detectFormatLabel(stepUrl),
+        classRef: engineClass
+      });
+    }
+
+    var allowM3u8 = isFormatAllowedByAccount('m3u8', accountInfo);
+    var allowTs = isFormatAllowedByAccount('ts', accountInfo);
+
+    if (isLive) {
+      var m3u8Url = allowM3u8 ? (isHlsPath(url) ? url : (buildXtreamVariantUrl(url, 'live', 'm3u8') || (isTsPath(url) ? '' : url))) : '';
+      var tsUrl = allowTs ? (isTsPath(url) ? url : (buildXtreamVariantUrl(url, 'live', 'ts') || (!isHlsPath(url) ? url : ''))) : '';
+
+      var primaryLiveUrl = url;
+      var secondaryLiveUrl = '';
+
+      if (preferFmt === 'ts') {
+        primaryLiveUrl = tsUrl || m3u8Url || url;
+        secondaryLiveUrl = (primaryLiveUrl === tsUrl) ? m3u8Url : tsUrl;
+      } else {
+        // 'auto' ou 'm3u8': prefere HLS primeiro quando permitido
+        primaryLiveUrl = m3u8Url || tsUrl || url;
+        secondaryLiveUrl = (primaryLiveUrl === m3u8Url) ? tsUrl : m3u8Url;
+      }
+
+      if (exoAvailable && enginePref !== 'web') {
+        addStep('ExoPlayer', primaryLiveUrl, 15000, exoClass);
+        if (secondaryLiveUrl && secondaryLiveUrl !== primaryLiveUrl) {
+          addStep('ExoPlayer', secondaryLiveUrl, 15000, exoClass);
+        }
+        if (enginePref !== 'exo') {
+          if (m3u8Url && hlsJsAvailable) {
+            addStep('HlsJsEngine', m3u8Url, 12000, hlsClass);
+          } else if (tsUrl && mpegtsAvailable) {
+            addStep('MpegtsEngine', tsUrl, 12000, tsClass);
+          }
+        }
+      } else {
+        // Web / LG webOS ou modo WebView forçado
+        if (preferFmt === 'ts' && tsUrl && mpegtsAvailable) {
+          addStep('MpegtsEngine', tsUrl, 15000, tsClass);
+          if (m3u8Url && hlsJsAvailable) addStep('HlsJsEngine', m3u8Url, 15000, hlsClass);
+        } else {
+          if (m3u8Url && hlsJsAvailable) addStep('HlsJsEngine', m3u8Url, 15000, hlsClass);
+          if (tsUrl && mpegtsAvailable) addStep('MpegtsEngine', tsUrl, 15000, tsClass);
+        }
+        if (m3u8Url && nativeHlsAvailable) {
+          addStep('NativeEngine', m3u8Url, 12000, natClass);
+        }
+        if (!plan.length) {
+          addStep('NativeEngine', primaryLiveUrl, 12000, natClass);
+        }
+      }
+      return plan.slice(0, 3);
+    }
+
+    // VOD (Filmes e Episódios de Séries/Novelas)
+    var mp4Variant = (isMkvPath(url) || isTsPath(url)) ? buildXtreamVariantUrl(url, kind, 'mp4') : '';
+    var m3u8VodVariant = item && item.hlsUrl ? item.hlsUrl : '';
+
+    if (exoAvailable && enginePref !== 'web') {
+      addStep('ExoPlayer', url, 20000, exoClass);
+      if (mp4Variant && mp4Variant !== url) {
+        addStep('ExoPlayer', mp4Variant, 15000, exoClass);
+      } else if (m3u8VodVariant && m3u8VodVariant !== url) {
+        addStep('ExoPlayer', m3u8VodVariant, 15000, exoClass);
+      }
+      if (enginePref !== 'exo') {
+        if (isHlsPath(url) && hlsJsAvailable) {
+          addStep('HlsJsEngine', url, 12000, hlsClass);
+        } else if (!isMkvPath(url)) {
+          addStep('NativeEngine', mp4Variant || url, 12000, natClass);
+        } else if (mp4Variant) {
+          addStep('NativeEngine', mp4Variant, 12000, natClass);
+        }
+      }
+    } else {
+      if (isHlsPath(url)) {
+        if (hlsJsAvailable) addStep('HlsJsEngine', url, 18000, hlsClass);
+        if (nativeHlsAvailable) addStep('NativeEngine', url, 12000, natClass);
+      } else if (isTsPath(url)) {
+        if (mpegtsAvailable) addStep('MpegtsEngine', url, 18000, tsClass);
+        if (mp4Variant) addStep('NativeEngine', mp4Variant, 15000, natClass);
+      } else {
+        if (!isMkvPath(url)) {
+          addStep('NativeEngine', url, 20000, natClass);
+        } else if (mp4Variant) {
+          addStep('NativeEngine', mp4Variant, 20000, natClass);
+        } else {
+          addStep('NativeEngine', url, 15000, natClass);
+        }
+        if (m3u8VodVariant && hlsJsAvailable) {
+          addStep('HlsJsEngine', m3u8VodVariant, 15000, hlsClass);
+        }
+      }
+    }
+
+    return plan.slice(0, 3);
+  }
+
+  // Classificação semântica de erros de reprodução (Seções A8 e A10)
+  function classifyPlaybackError(errDetail, context) {
+    var d = errDetail || {};
+    var ctx = context || {};
+    var status = Number(d.httpStatus || 0);
+    var code = String(d.code || '').toUpperCase();
+    var msg = String(d.message || '');
+
+    // Extrai HTTP status de mensagens se não veio explícito
+    if (!status) {
+      var mHttp = msg.match(/\bHTTP\s+(\d{3})\b/i) || msg.match(/\bstatus code:\s*(\d{3})\b/i);
+      if (mHttp) status = parseInt(mHttp[1], 10);
+    }
+
+    var acc = ctx.accountInfo || (global.LuminaStore ? global.LuminaStore.get('accountInfo') : null);
+    var isConnLimitAccount = !!(acc && acc.maxConnections > 0 && acc.activeCons >= acc.maxConnections);
+
+    if (status === 429 || status === 458 || status === 884 || (isConnLimitAccount && (status === 401 || status === 403))) {
+      return {
+        category: 'CONN_LIMIT',
+        action: 'STOP',
+        httpStatus: status,
+        title: 'Limite de conexões atingido',
+        humanMessage: 'Limite de conexões simultâneas atingido nesta lista. Feche o app em outro aparelho e tente de novo.'
+      };
+    }
+
+    if (status === 401 || status === 403) {
+      return {
+        category: 'AUTH_OR_UA',
+        action: 'TRY_ALT_UA_THEN_STOP',
+        httpStatus: status,
+        title: 'Acesso negado pelo servidor',
+        humanMessage: 'Acesso negado pelo servidor da lista (código ' + status + '). Sua assinatura pode ter vencido ou o canal está bloqueado.'
+      };
+    }
+
+    if (status === 404 || code === 'IO_FILE_NOT_FOUND') {
+      return {
+        category: 'NOT_FOUND',
+        action: ctx.isLive ? 'TRY_ALT_FORMAT_ONCE' : 'STOP',
+        httpStatus: status || 404,
+        title: 'Conteúdo indisponível',
+        humanMessage: 'Este conteúdo não está disponível no servidor da lista (erro 404).'
+      };
+    }
+
+    if (status >= 500 && status <= 599) {
+      return {
+        category: 'SERVER_5XX',
+        action: 'RETRY_SAME_ONCE',
+        httpStatus: status,
+        title: 'Servidor instável',
+        humanMessage: 'O servidor da lista está instável no momento (erro ' + status + '). Tente de novo em instantes.'
+      };
+    }
+
+    if (code === 'IO_NETWORK_CONNECTION_FAILED' || /DNS|UnknownHost|ECONNREFUSED|ENETUNREACH/i.test(msg)) {
+      return {
+        category: 'NETWORK_DOWN',
+        action: 'STOP',
+        httpStatus: status,
+        title: 'Sem conexão com o servidor',
+        humanMessage: 'Não foi possível conectar ao servidor da lista. Verifique a internet da TV.'
+      };
+    }
+
+    if (code === 'AUDIO_TRACK_INIT_FAILED' || (code === 'DECODING_FAILED' && /audio/i.test(msg))) {
+      return {
+        category: 'AUDIO_DECODER',
+        action: 'TRY_NEXT_AUDIO_TRACK',
+        httpStatus: status,
+        title: 'Formato de áudio incompatível',
+        humanMessage: 'Este aparelho não suporta o formato de vídeo ou áudio deste título.'
+      };
+    }
+
+    if (code === 'DECODER_INIT_FAILED' || code === 'DECODING_FORMAT_UNSUPPORTED' || code === 'DECODING_FORMAT_EXCEEDS_CAPABILITIES' || code === 'DECODING_FAILED') {
+      return {
+        category: 'VIDEO_DECODER',
+        action: 'NEXT_STEP',
+        httpStatus: status,
+        title: 'Formato incompatível',
+        humanMessage: 'Este aparelho não suporta o formato de vídeo ou áudio deste título.'
+      };
+    }
+
+    if (code === 'IO_NETWORK_CONNECTION_TIMEOUT' || code === 'TIMEOUT' || /timeout|tempo esgotado/i.test(msg)) {
+      return {
+        category: 'TIMEOUT',
+        action: 'NEXT_STEP',
+        httpStatus: status,
+        title: 'Servidor demorou para responder',
+        humanMessage: 'O servidor demorou demais para responder. Tente trocar o formato para MPEG-TS ou HLS.'
+      };
+    }
+
+    if (code === 'PARSING_CONTAINER_UNSUPPORTED' || code === 'PARSING_CONTAINER_MALFORMED' || code === 'PARSING_MANIFEST_MALFORMED' || code === 'PARSING_MANIFEST_UNSUPPORTED') {
+      return {
+        category: 'CONTAINER_OR_MANIFEST',
+        action: 'NEXT_STEP',
+        httpStatus: status,
+        title: 'Formato inválido ou vazio',
+        humanMessage: 'O servidor enviou dados em formato inválido ou vazio.'
+      };
+    }
+
+    return {
+      category: 'GENERIC',
+      action: 'NEXT_STEP',
+      httpStatus: status,
+      title: 'Não foi possível reproduzir',
+      humanMessage: 'Não foi possível reproduzir este conteúdo agora. Tente trocar o formato ou o motor.'
+    };
+  }
+
+  function updateDiagnosticsStore(fields) {
+    if (!global.LuminaStore) return;
+    var diag = global.LuminaStore.get('diagnostics') || {};
+    var keys = Object.keys(fields || {});
+    for (var i = 0; i < keys.length; i++) {
+      diag[keys[i]] = fields[keys[i]];
+    }
+    global.LuminaStore.set('diagnostics', diag);
+  }
+
+  function saveCurrentWatchProgress() {
+    if (!currentItem || currentItem.kind === 'live' || !global.LuminaPlayback) return;
+    var st = global.LuminaPlayback.getState();
+    var pos = st.currentTime || 0;
+    var dur = st.duration || currentItem.durationSecs || 0;
+    if (pos <= 2) return;
+
+    var prog = (global.LuminaStore && global.LuminaStore.get('watchProgress')) || {};
+    var pct = dur > 0 ? Math.min(100, Math.round((pos / dur) * 100)) : 15;
+    var completed = pct >= 92;
+
+    prog[currentItem.id] = {
+      position: completed ? 0 : pos,
+      duration: dur,
+      percent: completed ? 100 : pct,
       completed: completed,
       updatedAt: Date.now()
     };
-    if (global.LuminaStore) global.LuminaStore.set('watchProgress', map);
-    if (global.LuminaStorage) global.LuminaStorage.saveMeta('watchProgress', map);
-
-    if (completed && currentItem.kind === 'episode' && !(global.LuminaStore && global.LuminaStore.get('nextEpisodePrompt'))) {
-      findNextEpisode(currentItem, function (nextEp) {
-        if (nextEp) startNextEpisodeCountdown(nextEp);
-      });
-    }
+    if (global.LuminaStore) global.LuminaStore.set('watchProgress', prog);
+    if (global.LuminaStorage) global.LuminaStorage.saveMeta('watchProgress', prog);
   }
 
-  function tryApplySavedResume() {
-    if (resumeAppliedForItem || !currentItem || currentItem.kind === 'live' || !videoEl) return;
-    var map = (global.LuminaStore && global.LuminaStore.get('watchProgress')) || {};
-    var saved = map[currentItem.id];
-    if (!saved || saved.completed || saved.position <= 5) {
-      resumeAppliedForItem = true;
-      return;
+  function findNextEpisodeFor(epItem) {
+    if (!epItem || (epItem.kind !== 'episode' && epItem.kind !== 'series') || !epItem.seriesKey) return null;
+    var shows = [].concat(
+      (global.LuminaStore && global.LuminaStore.get('seriesList')) || [],
+      (global.LuminaStore && global.LuminaStore.get('novelasList')) || []
+    );
+    var targetShow = null;
+    for (var i = 0; i < shows.length; i++) {
+      if (shows[i].seriesKey === epItem.seriesKey) {
+        targetShow = shows[i];
+        break;
+      }
     }
-    var dur = (isFinite(videoEl.duration) && videoEl.duration > 0) ? videoEl.duration : (saved.duration || 0);
-    if (dur > 0 && (saved.position / dur) >= 0.95) {
-      resumeAppliedForItem = true;
-      return;
+    if (!targetShow || !targetShow.seasons) return null;
+    var flat = [];
+    for (var s = 0; s < targetShow.seasons.length; s++) {
+      var eps = targetShow.seasons[s].episodes || [];
+      for (var e = 0; e < eps.length; e++) flat.push(eps[e]);
     }
-    try {
-      videoEl.currentTime = saved.position;
-      resumeAppliedForItem = true;
-    } catch (e) {}
+    for (var k = 0; k < flat.length; k++) {
+      if (flat[k].id === epItem.id && k + 1 < flat.length) {
+        return flat[k + 1];
+      }
+    }
+    return null;
   }
 
-  function startWatchdog(sessionToken) {
-    clearInterval(watchdogTimer);
-    lastWatchdogTime = -1;
-    stallSeconds = 0;
+  function triggerNextEpisodeFlow(finishedItem) {
+    var nextEp = findNextEpisodeFor(finishedItem);
+    if (!nextEp) return;
+    cancelNextEpisodePrompt();
+    var secLeft = 5;
+    global.LuminaStore.set('nextEpisodePrompt', { nextEpisode: nextEp, secondsLeft: secLeft });
+    global.LuminaEventBus.emit('player:next-ep-tick', { nextEpisode: nextEp, secondsLeft: secLeft });
 
-    watchdogTimer = setInterval(function () {
-      if (sessionToken !== openSessionId || !videoEl || !currentItem) return;
-      if (state !== 'PLAYING') {
-        stallSeconds = 0;
+    nextEpCountdownTimer = setInterval(function () {
+      secLeft--;
+      var currentPrompt = global.LuminaStore.get('nextEpisodePrompt');
+      if (!currentPrompt) {
+        clearInterval(nextEpCountdownTimer);
+        nextEpCountdownTimer = null;
         return;
       }
-      if (videoEl.paused || videoEl.ended) return;
-
-      var curT = Number(videoEl.currentTime || 0);
-      if (lastWatchdogTime >= 0 && Math.abs(curT - lastWatchdogTime) < 0.05) {
-        stallSeconds += 2;
-        if (stallSeconds >= STALL_THRESHOLD_SEC) {
-          stallSeconds = 0;
-          var diag = (global.LuminaStore && global.LuminaStore.get('diagnostics')) || {};
-          diag.reconnections = (diag.reconnections || 0) + 1;
-          diag.lastError = 'Watchdog: congelamento detectado (' + STALL_THRESHOLD_SEC + 's sem avanço)';
-          if (global.LuminaStore) global.LuminaStore.set('diagnostics', diag);
-          setState('RETRYING', { attempt: retryCount + 1, max: MAX_RETRIES + 1, reason: 'Reconectando transmissão congelada...' });
-          launchCurrentStep(sessionToken);
-        }
+      if (secLeft <= 0) {
+        cancelNextEpisodePrompt();
+        open(nextEp);
       } else {
-        stallSeconds = 0;
-        lastWatchdogTime = curT;
+        global.LuminaStore.set('nextEpisodePrompt', { nextEpisode: nextEp, secondsLeft: secLeft });
+        global.LuminaEventBus.emit('player:next-ep-tick', { nextEpisode: nextEp, secondsLeft: secLeft });
       }
-    }, 2000);
+    }, 1000);
   }
 
-  function handleError(err, sessionToken) {
-    if (sessionToken !== openSessionId) return;
-    var friendly = mapFriendlyErrorMessage(err);
-    var diag = (global.LuminaStore && global.LuminaStore.get('diagnostics')) || {};
-    diag.lastError = friendly.title + ' - ' + friendly.message;
-    if (global.LuminaStore) global.LuminaStore.set('diagnostics', diag);
+  function startWatchdog(isLive) {
+    if (watchdogTimer) clearInterval(watchdogTimer);
+    lastProgressAdvanceAt = Date.now();
+    lastObservedPositionSec = -1;
+    var thresholdMs = isLive ? WATCHDOG_LIVE_MS : WATCHDOG_VOD_MS;
 
-    // 1. Se for erro 401/403 (login/limite), não adianta trocar de motor: informa direto
-    if (friendly.code === 'AUTH_OR_LIMIT' || friendly.code === 'OFFLINE') {
-      setState('FAILED', friendly);
+    watchdogTimer = setInterval(function () {
+      if (state !== STATES.PLAYING && state !== STATES.BUFFERING) {
+        lastProgressAdvanceAt = Date.now();
+        return;
+      }
+      var pbState = global.LuminaPlayback ? global.LuminaPlayback.getState() : null;
+      var curPos = pbState ? pbState.currentTime : 0;
+      if (curPos !== lastObservedPositionSec && curPos > 0) {
+        lastObservedPositionSec = curPos;
+        lastProgressAdvanceAt = Date.now();
+        return;
+      }
+      if (Date.now() - lastProgressAdvanceAt >= thresholdMs) {
+        lastProgressAdvanceAt = Date.now();
+        if (!currentStepWatchdogRetried) {
+          currentStepWatchdogRetried = true;
+          if (global.LuminaDiagLog) {
+            global.LuminaDiagLog.record('retry', {
+              engine: activeEngine ? activeEngine.name : '-',
+              url: fallbackPlan[fallbackIndex] ? fallbackPlan[fallbackIndex].url : '',
+              format: fallbackPlan[fallbackIndex] ? fallbackPlan[fallbackIndex].formatLabel : '-',
+              code: 'WATCHDOG_STALL',
+              elapsedMs: thresholdMs,
+              message: 'Fluxo parado por ' + Math.round(thresholdMs / 1000) + 's; reconectando passo atual'
+            });
+          }
+          executeStep(fallbackIndex, resolveCurrentUserAgent());
+        } else {
+          handleStepError({
+            code: 'TIMEOUT',
+            httpStatus: 0,
+            message: 'Fluxo sem avanço de posição (watchdog)'
+          });
+        }
+      }
+    }, 2500);
+  }
+
+  function resolveCurrentUserAgent() {
+    var step = fallbackPlan[fallbackIndex];
+    var stepUrl = step ? step.url : (currentItem ? currentItem.url : '');
+    if (currentUaFallbackIdx >= 0 && currentUaFallbackIdx < ALT_USER_AGENTS.length) {
+      return ALT_USER_AGENTS[currentUaFallbackIdx];
+    }
+    return resolveUserAgentForItem(currentItem, stepUrl);
+  }
+
+  function executeStep(index, overrideUa) {
+    if (!currentItem) return;
+    var totalElapsed = Date.now() - openStartTime;
+    if (index >= fallbackPlan.length || totalElapsed >= GLOBAL_FALLBACK_BUDGET_MS) {
+      finalizeFailure({
+        title: 'Não foi possível reproduzir',
+        message: 'O servidor demorou demais para responder ou o formato não é compatível. Tente trocar o formato para MPEG-TS ou HLS.'
+      });
       return;
     }
 
-    // 2. Tenta o próximo motor/URL na cadeia de fallback antes de gastar uma retentativa completa (B4.2)
-    if (currentPlanIndex + 1 < currentPlan.length) {
-      currentPlanIndex++;
-      var nextStep = currentPlan[currentPlanIndex];
-      setState('RETRYING', {
-        attempt: currentPlanIndex + 1,
-        max: currentPlan.length,
-        engine: nextStep.engine,
-        message: 'Alternando para ' + nextStep.engine + '...'
-      });
-      retryTimer = setTimeout(function () {
-        launchCurrentStep(sessionToken);
-      }, 450);
-      return;
-    }
+    fallbackIndex = index;
+    var step = fallbackPlan[index];
+    activeEngine = step.classRef;
+    if (global.LuminaPlayback) global.LuminaPlayback.setActiveEngine(activeEngine);
 
-    // 3. Se todos os motores da rodada falharam, repete a cadeia com backoff exponencial
-    if (retryCount < MAX_RETRIES && currentItem) {
-      retryCount++;
-      currentPlanIndex = 0;
-      diag.reconnections = (diag.reconnections || 0) + 1;
-      if (global.LuminaStore) global.LuminaStore.set('diagnostics', diag);
-      var delayMs = Math.min(1200 * Math.pow(1.8, retryCount - 1), 5000);
-      setState('RETRYING', {
-        attempt: retryCount,
-        max: MAX_RETRIES,
-        message: 'Reconectando... (tentativa ' + retryCount + '/' + MAX_RETRIES + ')'
-      });
-      retryTimer = setTimeout(function () {
-        launchCurrentStep(sessionToken);
-      }, delayMs);
-    } else {
-      setState('FAILED', friendly);
-    }
-  }
+    var uaToUse = overrideUa || resolveUserAgentForItem(currentItem, step.url);
+    var refererToUse = (currentItem && currentItem.httpReferrer) ? String(currentItem.httpReferrer) : '';
+    var isLive = (currentItem.kind === 'live');
+    var bufferProfile = (global.LuminaStore && global.LuminaStore.get('bufferProfile')) || 'normal';
 
-  function createEngineByName(engineName, isLive, perfMode, callbacks) {
-    if (engineName === 'HlsJsEngine' && global.LuminaHlsEngine) {
-      return global.LuminaHlsEngine.create(videoEl, callbacks, isLive, perfMode);
-    }
-    if (engineName === 'MpegtsEngine' && global.LuminaMpegtsEngine) {
-      return global.LuminaMpegtsEngine.create(videoEl, callbacks, isLive);
-    }
-    return global.LuminaNativeEngine.create(videoEl, callbacks);
-  }
-
-  function launchCurrentStep(sessionToken) {
-    if (sessionToken !== openSessionId || !currentItem || !videoEl) return;
-    cleanUpEngineAndVideo();
-    firstPlayDone = false;
-
-    var step = currentPlan[currentPlanIndex] || { engine: 'NativeEngine', url: currentItem.url };
-    var isLive = currentItem.kind === 'live';
-    var perfMode = (global.LuminaStore && global.LuminaStore.get('performanceMode')) || 'auto';
-
-    // Registra cabeçalhos customizados (#EXTVLCOPT:http-user-agent / http-referrer) no proxy Android se presentes (B4.9)
     if (global.LuminaPlatform && global.LuminaPlatform.registerStreamHeaders) {
-      if (currentItem.httpUserAgent || currentItem.httpReferrer) {
-        global.LuminaPlatform.registerStreamHeaders(step.url, currentItem.httpUserAgent, currentItem.httpReferrer);
-      }
+      global.LuminaPlatform.registerStreamHeaders(step.url, uaToUse, refererToUse);
     }
 
-    // Aplica proporção salva para o conteúdo ou padrão
-    if (global.LuminaTracks && global.LuminaTracks.applyAspectRatio) {
-      var ratioMap = (global.LuminaStore && global.LuminaStore.get('aspectRatioByContent')) || {};
-      var ratioMode = ratioMap[currentItem.id] || (global.LuminaStore && global.LuminaStore.get('defaultAspectRatio')) || 'auto';
-      global.LuminaTracks.applyAspectRatio(videoEl, ratioMode);
+    var progMap = (global.LuminaStore && global.LuminaStore.get('watchProgress')) || {};
+    var savedProg = (!isLive && progMap[currentItem.id]) ? progMap[currentItem.id] : null;
+    var startPosMs = (savedProg && savedProg.position > 2 && !savedProg.completed)
+      ? Math.round(savedProg.position * 1000)
+      : 0;
+
+    var chainDesc = fallbackPlan.map(function (s, idx) {
+      return (idx === index ? '[' + s.engine + ':' + s.formatLabel + ']' : (s.engine + ':' + s.formatLabel));
+    }).join(' -> ');
+
+    updateDiagnosticsStore({
+      engine: step.engine,
+      userAgent: uaToUse,
+      attemptedChain: chainDesc
+    });
+
+    if (index === 0 && currentUaFallbackIdx < 0 && !currentStepServerRetried) {
+      setState(STATES.LOADING, {
+        stepIndex: 1,
+        totalSteps: fallbackPlan.length,
+        formatLabel: step.formatLabel,
+        engine: step.engine
+      });
+    } else {
+      var pillMsg = 'Tentando de novo\u2026 (' + (index + 1) + ' de ' + fallbackPlan.length + ') \u00B7 ' + step.formatLabel;
+      setState(STATES.RETRYING, {
+        stepIndex: index + 1,
+        totalSteps: fallbackPlan.length,
+        formatLabel: step.formatLabel,
+        engine: step.engine,
+        message: pillMsg
+      });
     }
 
-    var diag = (global.LuminaStore && global.LuminaStore.get('diagnostics')) || {};
-    diag.engine = step.engine;
-    diag.attemptedChain = currentPlan.slice(0, currentPlanIndex + 1).map(function (p) { return p.engine; }).join(' -> ');
-    if (global.LuminaStore) global.LuminaStore.set('diagnostics', diag);
+    stepStartTime = Date.now();
+    if (global.LuminaDiagLog) {
+      global.LuminaDiagLog.record('open', {
+        engine: step.engine,
+        url: step.url,
+        format: step.formatLabel,
+        userAgent: uaToUse,
+        code: 'STEP_' + (index + 1),
+        elapsedMs: 0,
+        message: 'Iniciando passo ' + (index + 1) + '/' + fallbackPlan.length
+      });
+    }
 
-    setState('LOADING', { engine: step.engine, url: step.url });
+    clearTimers();
+    var remainingBudget = Math.max(5000, GLOBAL_FALLBACK_BUDGET_MS - (Date.now() - openStartTime));
+    var stepTimeoutMs = Math.min(step.timeoutMs || 15000, remainingBudget);
 
-    var callbacks = {
-      onLoadedMetadata: function () {
-        if (sessionToken !== openSessionId) return;
-        tryApplySavedResume();
-      },
+    connectTimeout = setTimeout(function () {
+      handleStepError({
+        code: 'IO_NETWORK_CONNECTION_TIMEOUT',
+        httpStatus: 0,
+        message: 'Timeout após ' + stepTimeoutMs + 'ms em ' + step.engine
+      });
+    }, stepTimeoutMs);
+
+    var videoEl = global.LuminaPlayback ? global.LuminaPlayback.getVideoElement() : null;
+    var byContent = (global.LuminaStore && global.LuminaStore.get('aspectRatioByContent')) || {};
+    var targetRatio = byContent[currentItem.id] || (global.LuminaStore && global.LuminaStore.get('defaultAspectRatio')) || 'auto';
+    if (global.LuminaTracks) {
+      global.LuminaTracks.applyAspectRatio(videoEl, targetRatio);
+    }
+
+    step.classRef.play(videoEl, step.url, {
       onReady: function () {
-        if (sessionToken !== openSessionId) return;
-        tryApplySavedResume();
-        setState('BUFFERING', { engine: step.engine });
-      },
-      onBuffering: function () {
-        if (sessionToken !== openSessionId) return;
-        if (state === 'PLAYING') setState('BUFFERING', { engine: step.engine });
-      },
-      onPause: function () {
-        if (sessionToken !== openSessionId) return;
-        if (videoEl && !videoEl.ended && (state === 'PLAYING' || state === 'BUFFERING')) {
-          setState('PAUSED');
+        if (global.LuminaDiagLog) {
+          global.LuminaDiagLog.record('ready', {
+            engine: step.engine,
+            url: step.url,
+            format: step.formatLabel,
+            userAgent: uaToUse,
+            code: 'READY',
+            elapsedMs: Date.now() - stepStartTime
+          });
+        }
+        if (!step.classRef.isNative && videoEl && startPosMs > 0) {
+          try { videoEl.currentTime = Math.floor(startPosMs / 1000); } catch (e) {}
         }
       },
       onPlaying: function () {
-        if (sessionToken !== openSessionId) return;
-        tryApplySavedResume();
-        if (firstPlayDone) {
-          if (state !== 'PLAYING') setState('PLAYING', { engine: step.engine });
-          return;
+        clearTimeout(connectTimeout);
+        var ttff = Date.now() - stepStartTime;
+        var host = extractHost(step.url);
+        if (host && currentUaFallbackIdx >= 0) {
+          hostUserAgentMap[host] = uaToUse;
         }
-        firstPlayDone = true;
-        var ttff = Date.now() - openStartTime;
-        var d = (global.LuminaStore && global.LuminaStore.get('diagnostics')) || {};
-        d.engine = currentEngine ? currentEngine.name : step.engine;
-        d.ttffMs = ttff;
-        if (global.LuminaStore) global.LuminaStore.set('diagnostics', d);
-        retryCount = 0;
-        setState('PLAYING', { ttffMs: ttff, engine: d.engine });
-
-        startWatchdog(sessionToken);
+        updateDiagnosticsStore({
+          engine: step.engine,
+          userAgent: uaToUse,
+          ttffMs: ttff,
+          lastError: '-'
+        });
+        if (global.LuminaDiagLog) {
+          global.LuminaDiagLog.record('playing', {
+            engine: step.engine,
+            url: step.url,
+            format: step.formatLabel,
+            userAgent: uaToUse,
+            httpStatus: 200,
+            code: 'OK',
+            elapsedMs: ttff,
+            message: 'Reprodução iniciada'
+          });
+        }
+        setState(STATES.PLAYING, { formatLabel: step.formatLabel, engine: step.engine });
+        startWatchdog(isLive);
 
         if (!isLive) {
-          clearInterval(saveProgressTimer);
-          saveProgressTimer = setInterval(function () {
-            if (sessionToken === openSessionId) persistVodPosition();
-          }, 10000);
+          if (progressSaveInterval) clearInterval(progressSaveInterval);
+          progressSaveInterval = setInterval(saveCurrentWatchProgress, 5000);
         }
       },
-      onEnded: function () {
-        if (sessionToken !== openSessionId) return;
-        var realDur = (videoEl && isFinite(videoEl.duration) && videoEl.duration > 0)
-          ? videoEl.duration
-          : (currentItem.durationSecs || 0);
-        persistVodPosition(realDur, realDur, true);
+      onPaused: function () {
+        if (state === STATES.PLAYING || state === STATES.BUFFERING) {
+          setState(STATES.PAUSED);
+        }
       },
-      onError: function (err) {
-        handleError(err, sessionToken);
+      onWaiting: function () {
+        if (state === STATES.PLAYING) {
+          setState(STATES.BUFFERING);
+        }
+      },
+      onPosition: function () {
+        lastProgressAdvanceAt = Date.now();
+      },
+      onEnded: function () {
+        saveCurrentWatchProgress();
+        setState(STATES.ENDED);
+        if (currentItem && (currentItem.kind === 'episode' || currentItem.kind === 'series')) {
+          triggerNextEpisodeFlow(currentItem);
+        }
+      },
+      onError: function (errDetail) {
+        handleStepError(errDetail || { code: 'ERROR_CODE_UNSPECIFIED', httpStatus: 0, message: 'Erro de mídia' });
       }
-    };
-
-    currentEngine = createEngineByName(step.engine, isLive, perfMode, callbacks);
-    currentEngine.load(step.url, isLive ? 7000 : 9000);
+    }, {
+      isLive: isLive,
+      startPositionMs: startPosMs,
+      userAgent: uaToUse,
+      referer: refererToUse,
+      bufferProfile: bufferProfile,
+      preferredAudioLang: 'pt'
+    });
   }
 
-  function open(item) {
-    if (!item) return;
-    if (!videoEl && typeof document !== 'undefined') videoEl = document.getElementById('main-video');
+  function finalizeFailure(info) {
+    destroyEngine();
+    var title = (info && info.title) || 'Não foi possível reproduzir';
+    var msg = (info && info.message) || 'Não foi possível reproduzir este conteúdo agora.';
+    updateDiagnosticsStore({ lastError: msg });
+    setState(STATES.FAILED, {
+      title: title,
+      message: msg,
+      httpStatus: (info && info.httpStatus) || 0,
+      category: (info && info.category) || 'GENERIC'
+    });
+  }
 
-    openSessionId++;
-    var sessionToken = openSessionId;
+  function handleStepError(errDetail) {
+    clearTimeout(connectTimeout);
+    var step = fallbackPlan[fallbackIndex] || { engine: 'none', url: '', formatLabel: '-' };
+    var elapsed = Date.now() - stepStartTime;
+    var isLive = !!(currentItem && currentItem.kind === 'live');
+    var decision = classifyPlaybackError(errDetail, {
+      isLive: isLive,
+      accountInfo: global.LuminaStore ? global.LuminaStore.get('accountInfo') : null
+    });
 
-    if (currentItem && currentItem.kind === 'live' && item.kind === 'live' && currentItem.id !== item.id) {
-      if (global.LuminaStore) global.LuminaStore.set('lastChannelId', currentItem.id);
+    if (global.LuminaDiagLog) {
+      global.LuminaDiagLog.record('error', {
+        engine: step.engine,
+        url: step.url,
+        format: step.formatLabel,
+        userAgent: resolveCurrentUserAgent(),
+        httpStatus: decision.httpStatus || Number(errDetail && errDetail.httpStatus) || 0,
+        code: (errDetail && errDetail.code) || decision.category,
+        elapsedMs: elapsed,
+        message: (errDetail && errDetail.message) || decision.humanMessage
+      });
     }
-    currentItem = item;
-    resumeAppliedForItem = false;
+
+    var diag = (global.LuminaStore && global.LuminaStore.get('diagnostics')) || {};
+    updateDiagnosticsStore({
+      reconnections: (diag.reconnections || 0) + 1,
+      lastError: decision.humanMessage
+    });
+
+    // 1. Falha de decodificador de áudio: tenta selecionar outra faixa de áudio suportada no ExoPlayer
+    if (decision.action === 'TRY_NEXT_AUDIO_TRACK' && global.LuminaPlayback && global.LuminaPlayback.isNativeActive()) {
+      var tracks = global.LuminaPlayback.getTracks().audio || [];
+      if (tracks.length > 1) {
+        for (var t = 0; t < tracks.length; t++) {
+          if (!tracks[t].selected) {
+            global.LuminaPlayback.setAudioTrack(tracks[t].id);
+            global.LuminaPlayback.play();
+            return;
+          }
+        }
+      }
+    }
+
+    // 2. HTTP 403 / 401: tenta User-Agents alternativos antes de desistir (Seção A6)
+    if (decision.action === 'TRY_ALT_UA_THEN_STOP') {
+      var nextUaIdx = currentUaFallbackIdx + 1;
+      if (nextUaIdx < ALT_USER_AGENTS.length && (Date.now() - openStartTime) < GLOBAL_FALLBACK_BUDGET_MS) {
+        currentUaFallbackIdx = nextUaIdx;
+        var altUa = ALT_USER_AGENTS[currentUaFallbackIdx];
+        if (global.LuminaDiagLog) {
+          global.LuminaDiagLog.record('fallback', {
+            engine: step.engine,
+            url: step.url,
+            format: step.formatLabel,
+            userAgent: altUa,
+            httpStatus: decision.httpStatus,
+            code: 'ALT_USER_AGENT',
+            elapsedMs: elapsed,
+            message: 'Tentando User-Agent alternativo após HTTP ' + decision.httpStatus
+          });
+        }
+        destroyEngine();
+        executeStep(fallbackIndex, altUa);
+        return;
+      }
+      finalizeFailure({
+        title: decision.title,
+        message: decision.humanMessage,
+        httpStatus: decision.httpStatus,
+        category: decision.category
+      });
+      return;
+    }
+
+    // 3. Erros terminais imediatos (429/458/884 limite de conexões, DNS/rede caída, 404 em VOD)
+    if (decision.action === 'STOP') {
+      finalizeFailure({
+        title: decision.title,
+        message: decision.humanMessage,
+        httpStatus: decision.httpStatus,
+        category: decision.category
+      });
+      return;
+    }
+
+    // 4. Erro 5xx do servidor: 1 retry no mesmo passo após 1.5s
+    if (decision.action === 'RETRY_SAME_ONCE' && !currentStepServerRetried) {
+      currentStepServerRetried = true;
+      destroyEngine();
+      setTimeout(function () {
+        if (currentItem) executeStep(fallbackIndex);
+      }, 1500);
+      return;
+    }
+
+    // 5. 404 em canal ao vivo: só tenta 1 vez se o próximo passo for outro formato (.m3u8 <-> .ts)
+    if (decision.action === 'TRY_ALT_FORMAT_ONCE') {
+      var nextFmtIdx = -1;
+      for (var i = fallbackIndex + 1; i < fallbackPlan.length; i++) {
+        if (fallbackPlan[i].url !== step.url) {
+          nextFmtIdx = i;
+          break;
+        }
+      }
+      if (nextFmtIdx !== -1 && (Date.now() - openStartTime) < GLOBAL_FALLBACK_BUDGET_MS) {
+        destroyEngine();
+        currentUaFallbackIdx = -1;
+        currentStepServerRetried = false;
+        currentStepWatchdogRetried = false;
+        executeStep(nextFmtIdx);
+        return;
+      }
+      finalizeFailure({
+        title: decision.title,
+        message: decision.humanMessage,
+        httpStatus: decision.httpStatus,
+        category: decision.category
+      });
+      return;
+    }
+
+    // 6. Avança para o próximo passo do plano se houver tempo dentro do orçamento global de 45s
+    var nextStepIdx = fallbackIndex + 1;
+    if (nextStepIdx < fallbackPlan.length && (Date.now() - openStartTime) < GLOBAL_FALLBACK_BUDGET_MS) {
+      if (global.LuminaDiagLog) {
+        global.LuminaDiagLog.record('fallback', {
+          engine: fallbackPlan[nextStepIdx].engine,
+          url: fallbackPlan[nextStepIdx].url,
+          format: fallbackPlan[nextStepIdx].formatLabel,
+          userAgent: resolveCurrentUserAgent(),
+          httpStatus: decision.httpStatus,
+          code: 'STEP_FALLBACK',
+          elapsedMs: elapsed,
+          message: 'Alternando para passo ' + (nextStepIdx + 1) + ' (' + fallbackPlan[nextStepIdx].engine + ')'
+        });
+      }
+      destroyEngine();
+      currentUaFallbackIdx = -1;
+      currentStepServerRetried = false;
+      currentStepWatchdogRetried = false;
+      executeStep(nextStepIdx);
+      return;
+    }
+
+    finalizeFailure({
+      title: decision.title,
+      message: decision.humanMessage,
+      httpStatus: decision.httpStatus,
+      category: decision.category
+    });
+  }
+
+  function open(item, options) {
+    if (!item || !item.url) return;
+    var opts = options || {};
+    cancelNextEpisodePrompt();
+    saveCurrentWatchProgress();
+    destroyEngine();
+
+    if (!opts.keepOverrides) {
+      forcedFormatOverride = null;
+      forcedEngineOverride = null;
+    }
+
     if (item.kind === 'live' && global.LuminaStore) {
+      var prevCh = global.LuminaStore.get('currentChannelId');
+      if (prevCh && prevCh !== item.id) {
+        global.LuminaStore.set('lastChannelId', prevCh);
+      }
       global.LuminaStore.set('currentChannelId', item.id);
     }
-    retryCount = 0;
-    currentPlan = buildFallbackPlan(item);
-    currentPlanIndex = 0;
-    openStartTime = Date.now();
 
-    if (typeof document !== 'undefined') {
-      var stage = document.getElementById('video-stage');
-      if (stage) stage.classList.add('is-active');
+    currentItem = item;
+    openStartTime = Date.now();
+    currentUaFallbackIdx = -1;
+    currentStepServerRetried = false;
+    currentStepWatchdogRetried = false;
+
+    var stage = (typeof document !== 'undefined') ? document.getElementById('video-stage') : null;
+    if (stage) stage.classList.add('is-active');
+
+    fallbackPlan = buildFallbackPlan(item);
+    fallbackIndex = 0;
+
+    if (global.LuminaEventBus) {
+      global.LuminaEventBus.emit('player:item-changed', item);
     }
-    if (global.LuminaEventBus) global.LuminaEventBus.emit('player:item-changed', item);
-    launchCurrentStep(sessionToken);
+    executeStep(0);
   }
 
-  function switchEngineManually() {
-    if (!currentItem || !currentPlan.length) return null;
-    openSessionId++;
-    var sessionToken = openSessionId;
-    currentPlanIndex = (currentPlanIndex + 1) % currentPlan.length;
-    retryCount = 0;
-    launchCurrentStep(sessionToken);
-    return currentPlan[currentPlanIndex];
+  function stop() {
+    cancelNextEpisodePrompt();
+    saveCurrentWatchProgress();
+    destroyEngine();
+    var stage = (typeof document !== 'undefined') ? document.getElementById('video-stage') : null;
+    if (stage) stage.classList.remove('is-active');
+    setState(STATES.IDLE);
+  }
+
+  function togglePlayPause() {
+    if (!currentItem || !global.LuminaPlayback) return;
+    if (state === STATES.PLAYING || state === STATES.BUFFERING) {
+      global.LuminaPlayback.pause();
+      setState(STATES.PAUSED);
+    } else if (state === STATES.PAUSED) {
+      global.LuminaPlayback.play();
+      setState(STATES.PLAYING);
+    } else if (state === STATES.FAILED || state === STATES.ENDED) {
+      open(currentItem, { keepOverrides: true });
+    }
   }
 
   function seekRelative(deltaSec) {
-    if (!videoEl || !currentItem || currentItem.kind === 'live') return;
-    var dur = (isFinite(videoEl.duration) && videoEl.duration > 0) ? videoEl.duration : (currentItem.durationSecs || 0);
-    if (dur <= 0) return;
-    var cur = (videoEl.currentTime || 0) + deltaSec;
-    var target = Math.max(0, Math.min(dur, cur));
-    try { videoEl.currentTime = target; } catch (e) {}
-    persistVodPosition(target, dur, false);
-    if (global.LuminaEventBus) global.LuminaEventBus.emit('player:state', { state: state, item: currentItem });
+    if (!currentItem || currentItem.kind === 'live' || !global.LuminaPlayback) return;
+    global.LuminaPlayback.seekBy(deltaSec);
+    saveCurrentWatchProgress();
   }
 
-  function zapRelative(offset) {
+  function switchEngine() {
+    if (!currentItem) return null;
+    var curEng = activeEngine ? activeEngine.name : 'ExoPlayer';
+    forcedEngineOverride = (curEng === 'ExoPlayer') ? 'web' : 'exo';
+    open(currentItem, { keepOverrides: true });
+    return fallbackPlan[0] || null;
+  }
+
+  function toggleFormat() {
+    if (!currentItem) return null;
+    var step = fallbackPlan[fallbackIndex] || fallbackPlan[0];
+    var curUrl = step ? step.url : currentItem.url;
+    forcedFormatOverride = isHlsPath(curUrl) ? 'ts' : 'm3u8';
+    open(currentItem, { keepOverrides: true });
+    return forcedFormatOverride;
+  }
+
+  function zapChannel(delta) {
     var channels = (global.LuminaStore && global.LuminaStore.get('channels')) || [];
-    if (!channels.length) return;
-    var curId = (currentItem && currentItem.id) || (global.LuminaStore && global.LuminaStore.get('currentChannelId'));
-    var idx = 0;
+    if (!channels.length || !currentItem) return;
+    var idx = -1;
     for (var i = 0; i < channels.length; i++) {
-      if (channels[i].id === curId) { idx = i; break; }
+      if (channels[i].id === currentItem.id) { idx = i; break; }
     }
-    open(channels[(idx + offset + channels.length) % channels.length]);
+    var nextIdx = (idx + delta + channels.length) % channels.length;
+    var targetCh = channels[nextIdx];
+    if (!targetCh) return;
+
+    currentItem = targetCh;
+    if (global.LuminaEventBus) global.LuminaEventBus.emit('player:item-changed', targetCh);
+    clearTimeout(zapDebounceTimer);
+    zapDebounceTimer = setTimeout(function () {
+      open(targetCh);
+    }, 180);
   }
 
-  global.LuminaPlayer = {
-    init: function (customVideoEl) {
-      videoEl = customVideoEl || (typeof document !== 'undefined' ? document.getElementById('main-video') : null);
+  function zapLastChannel() {
+    var lastId = global.LuminaStore && global.LuminaStore.get('lastChannelId');
+    if (!lastId) return false;
+    var channels = (global.LuminaStore && global.LuminaStore.get('channels')) || [];
+    for (var i = 0; i < channels.length; i++) {
+      if (channels[i].id === lastId) {
+        open(channels[i]);
+        return true;
+      }
+    }
+    return false;
+  }
+
+
+  function mapFriendlyErrorMessage(errDetail) {
+    var c = classifyPlaybackError(errDetail, {});
+    var legacyCode = c.category;
+    if (c.category === 'AUTH_OR_UA' || c.category === 'CONN_LIMIT') legacyCode = 'AUTH_OR_LIMIT';
+    return {
+      code: legacyCode,
+      category: c.category,
+      action: c.action,
+      title: c.title,
+      message: c.humanMessage
+    };
+  }
+
+  var api = {
+    STATES: STATES,
+    mapFriendlyErrorMessage: mapFriendlyErrorMessage,
+    DEFAULT_USER_AGENT: DEFAULT_USER_AGENT,
+    ALT_USER_AGENTS: ALT_USER_AGENTS,
+    USER_AGENT_PRESETS: USER_AGENT_PRESETS,
+    GLOBAL_FALLBACK_BUDGET_MS: GLOBAL_FALLBACK_BUDGET_MS,
+    isHlsPath: isHlsPath,
+    isTsPath: isTsPath,
+    isMkvPath: isMkvPath,
+    isDirectVodPath: isDirectVodPath,
+    detectFormatLabel: detectFormatLabel,
+    buildFallbackPlan: buildFallbackPlan,
+    classifyPlaybackError: classifyPlaybackError,
+    resolveUserAgentForItem: resolveUserAgentForItem,
+    init: function () {
+      if (typeof document !== 'undefined' && global.LuminaPlayback) {
+        global.LuminaPlayback.setVideoElement(document.getElementById('main-video'));
+      }
     },
     open: open,
-    stop: function () {
-      openSessionId++;
-      persistVodPosition();
-      cleanUpEngineAndVideo();
-      if (typeof document !== 'undefined') {
-        var stage = document.getElementById('video-stage');
-        if (stage) stage.classList.remove('is-active');
-      }
-      currentItem = null;
-      firstPlayDone = false;
-      resumeAppliedForItem = false;
-      setState('IDLE');
-    },
-    retry: function () {
-      if (!currentItem) return;
-      openSessionId++;
-      retryCount = 0;
-      currentPlanIndex = 0;
-      launchCurrentStep(openSessionId);
-    },
-    switchEngine: switchEngineManually,
-    togglePlayPause: function () {
-      if (!videoEl || !currentItem) return;
-      var nowT = Date.now();
-      if (nowT - lastToggleAt < 350) return;
-      lastToggleAt = nowT;
-      if (videoEl.paused) {
-        setState('BUFFERING');
-        var p = videoEl.play();
-        if (p && p.catch) p.catch(function () {});
-      } else {
-        videoEl.pause();
-        persistVodPosition();
-        setState('PAUSED');
-      }
-    },
+    stop: stop,
+    retry: function () { if (currentItem) open(currentItem, { keepOverrides: true }); },
+    switchEngine: switchEngine,
+    toggleFormat: toggleFormat,
+    togglePlayPause: togglePlayPause,
     seekRelative: seekRelative,
-    simulateProgressPercent: function (pct) {
-      if (!currentItem) return;
-      var dur = (videoEl && isFinite(videoEl.duration) && videoEl.duration > 0) ? videoEl.duration : 120;
-      persistVodPosition(Math.round((pct / 100) * dur), dur, pct >= 95);
-      if (global.LuminaEventBus) global.LuminaEventBus.emit('player:state', { state: state, item: currentItem });
-    },
-    cancelNextEpisode: function () {
-      cancelNextEpisodeCountdown();
-      if (global.LuminaEventBus) global.LuminaEventBus.emit('player:state', { state: state, item: currentItem });
-    },
-    zapNext: function () { zapRelative(1); },
-    zapPrev: function () { zapRelative(-1); },
-    zapLastChannel: function () {
-      var lastId = global.LuminaStore && global.LuminaStore.get('lastChannelId');
-      var channels = (global.LuminaStore && global.LuminaStore.get('channels')) || [];
-      for (var i = 0; i < channels.length; i++) {
-        if (channels[i].id === lastId) { open(channels[i]); break; }
-      }
-    },
-    forceFail: function (reason) {
-      openSessionId++;
-      cleanUpEngineAndVideo();
-      setState('FAILED', { title: 'Falha na reprodução', message: reason || 'Não foi possível abrir este canal.' });
-    },
-    buildFallbackPlan: buildFallbackPlan,
-    mapFriendlyErrorMessage: mapFriendlyErrorMessage,
+    zapNext: function () { zapChannel(1); },
+    zapPrev: function () { zapChannel(-1); },
+    zapLastChannel: zapLastChannel,
+    cancelNextEpisode: cancelNextEpisodePrompt,
     getCurrentItem: function () { return currentItem; },
-    getActiveEngine: function () { return currentEngine; },
     getState: function () { return state; },
-    getVideoElement: function () { return videoEl; }
+    getVideoElement: function () { return global.LuminaPlayback ? global.LuminaPlayback.getVideoElement() : null; },
+    getActiveEngine: function () { return activeEngine; },
+    getFallbackPlan: function () { return fallbackPlan.slice(); }
   };
 
-  if (typeof module !== 'undefined' && module.exports) module.exports = global.LuminaPlayer;
+  if (typeof module !== 'undefined' && module.exports) module.exports = api;
+  global.LuminaPlayer = api;
 })(typeof window !== 'undefined' ? window : global);

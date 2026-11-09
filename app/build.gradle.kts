@@ -20,8 +20,8 @@ android {
         applicationId = "com.luminatv.player"
         minSdk = 22
         targetSdk = 34
-        versionCode = 2000
-        versionName = "2.0.0"
+        versionCode = 2100
+        versionName = "2.1.0"
     }
 
     signingConfigs {
@@ -53,9 +53,9 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-            val releaseSigning = signingConfigs.getByName("release")
-            signingConfig = if (releaseSigning.storeFile != null && releaseSigning.storeFile!!.exists()) {
-                releaseSigning
+            val releaseConfig = signingConfigs.findByName("release")
+            signingConfig = if (releaseConfig?.storeFile != null) {
+                releaseConfig
             } else {
                 signingConfigs.getByName("debug")
             }
@@ -70,20 +70,14 @@ android {
     kotlinOptions {
         jvmTarget = "17"
     }
-
-    androidResources {
-        noCompress += listOf("m3u", "m3u8", "json", "svg", "png", "js", "css", "html")
-    }
-
-    packaging {
-        resources {
-            excludes += "/META-INF/{AL2.0,LGPL2.1}"
-        }
-    }
 }
 
 dependencies {
-    implementation("androidx.webkit:webkit:1.11.0")
-    implementation("androidx.core:core:1.12.0")
+    implementation("androidx.core:core-ktx:1.12.0")
+    implementation("androidx.webkit:webkit:1.10.0")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("androidx.media3:media3-exoplayer:1.3.1")
+    implementation("androidx.media3:media3-exoplayer-hls:1.3.1")
+    implementation("androidx.media3:media3-datasource-okhttp:1.3.1")
+    implementation("androidx.media3:media3-ui:1.3.1")
 }

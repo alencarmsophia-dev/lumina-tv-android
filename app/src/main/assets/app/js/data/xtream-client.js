@@ -1,580 +1,764 @@
 (function (global) {
   'use strict';
 
-  var seriesInfoMemoryCache = {};
-  var searchTokenCache = {}; // índice separado para não poluir os objetos persistidos (_searchKey)
+  var TIMEOUT_SMALL_API_MS = 25000;   // 25s para autenticação e categorias (Seção C5)
+  var TIMEOUT_LIVE_MS = 60000;        // 60s para get_live_streams
+  var TIMEOUT_VOD_SERIES_MS = 90000;  // 90s para get_vod_streams e get_series
+  var RETRY_DELAYS_MS = [1500, 3000]; // Até 2 retries automáticos com backoff (1.5s, 3s)
+  var SERIES_TTL_MS = 6 * 3600 * 1000; // 6 horas
 
-  function normalizeBaseUrl(serverUrl) {
-    var s = String(serverUrl || '').trim().replace(/\/+$/, '');
+  function normalizeBaseUrl(server) {
+    var s = String(server || '').trim().replace(/\/+$/, '');
     if (s && !/^https?:\/\//i.test(s)) s = 'http://' + s;
     return s;
   }
 
+  function formatDateBrFromUnix(sec) {
+    var ms = Number(sec || 0) * 1000;
+    if (!ms || isNaN(ms)) return '';
+    var d = new Date(ms);
+    var dd = d.getDate() < 10 ? ('0' + d.getDate()) : String(d.getDate());
+    var mm = (d.getMonth() + 1) < 10 ? ('0' + (d.getMonth() + 1)) : String(d.getMonth() + 1);
+    var yyyy = d.getFullYear();
+    return dd + '/' + mm + '/' + yyyy;
+  }
+
+  function buildNetworkError(status, proxyErrType, rawMsg, url) {
+    var err;
+    if (proxyErrType === 'SSL' || /SSL|CertPath|certificate/i.test(String(rawMsg || ''))) {
+      err = new Error('O certificado de segurança (HTTPS) deste servidor é inválido ou autoassinado.');
+      err.code = 'SSL_ERROR';
+      err.isSslError = true;
+    } else if (proxyErrType === 'DNS' || /DNS|UnknownHost/i.test(String(rawMsg || ''))) {
+      err = new Error('Não foi possível encontrar este servidor (erro de DNS). Confira o endereço digitado.');
+      err.code = 'DNS_ERROR';
+    } else if (proxyErrType === 'TIMEOUT' || /timeout|tempo/i.test(String(rawMsg || ''))) {
+      err = new Error('O servidor demorou demais para responder. Tente novamente em instantes.');
+      err.code = 'TIMEOUT_ERROR';
+    } else if (status === 401 || status === 403) {
+      err = new Error('Usuário ou senha incorretos. Confira os dados com seu fornecedor.');
+      err.code = 'AUTH_INVALID';
+    } else if (status === 404) {
+      err = new Error('Este servidor não parece ser compatível com Xtream Codes (erro 404 em player_api.php).');
+      err.code = 'NOT_XTREAM_404';
+    } else {
+      err = new Error(rawMsg || ('Falha ao conectar ao servidor (HTTP ' + (status || 0) + ').'));
+      err.code = 'NETWORK_ERROR';
+    }
+    err.httpStatus = status || 0;
+    err.proxyError = proxyErrType || '';
+    err.url = url || '';
+    return err;
+  }
+
+  function xhrJsonWithRetry(url, timeoutMs, cb, cancelToken, onProgress) {
+    var maxRetries = RETRY_DELAYS_MS.length;
+    var attempt = 0;
+
+    function runAttempt() {
+      if (cancelToken && cancelToken.cancelled) {
+        return cb(new Error('Operação cancelada pelo usuário.'), null);
+      }
+      if (typeof XMLHttpRequest === 'undefined') {
+        return cb(new Error('XMLHttpRequest indisponível neste ambiente.'), null);
+      }
+
+      var startMs = Date.now();
+      var xhr = new XMLHttpRequest();
+      if (cancelToken) cancelToken.activeXhr = xhr;
+
+      try {
+        xhr.open('GET', url, true);
+        xhr.timeout = timeoutMs || TIMEOUT_SMALL_API_MS;
+      } catch (e) {
+        return cb(e, null);
+      }
+
+      xhr.onprogress = function (ev) {
+        if (onProgress && ev && ev.loaded > 0) {
+          var mb = (ev.loaded / 1048576).toFixed(1);
+          onProgress({ loadedBytes: ev.loaded, loadedMb: mb });
+        }
+      };
+
+      function shouldRetry(status, proxyErr) {
+        if (cancelToken && cancelToken.cancelled) return false;
+        if (attempt >= maxRetries) return false;
+        if (status === 401 || status === 403 || status === 404) return false;
+        if (proxyErr === 'SSL' || proxyErr === 'DNS') return false;
+        return true;
+      }
+
+      function retryOrFail(errObj) {
+        if (shouldRetry(errObj.httpStatus, errObj.proxyError)) {
+          var delay = RETRY_DELAYS_MS[attempt];
+          attempt++;
+          if (onProgress) {
+            onProgress({ retrying: true, attempt: attempt, maxRetries: maxRetries });
+          }
+          setTimeout(runAttempt, delay);
+          return;
+        }
+        if (global.LuminaDiagLog) {
+          global.LuminaDiagLog.record('list-load', {
+            engine: 'XtreamClient',
+            url: url,
+            httpStatus: errObj.httpStatus || 0,
+            code: errObj.code || 'ERROR',
+            elapsedMs: Date.now() - startMs,
+            message: errObj.message
+          });
+        }
+        cb(errObj, null);
+      }
+
+      xhr.onload = function () {
+        if (cancelToken && cancelToken.cancelled) {
+          return cb(new Error('Operação cancelada pelo usuário.'), null);
+        }
+        var proxyHeader = '';
+        try { proxyHeader = xhr.getResponseHeader('X-Lumina-Proxy-Error') || ''; } catch (e) {}
+
+        if (xhr.status === 502 && proxyHeader) {
+          var pJson = null;
+          try { pJson = JSON.parse(xhr.responseText); } catch (e) {}
+          var pMsg = (pJson && pJson.message) || '';
+          return retryOrFail(buildNetworkError(502, proxyHeader, pMsg, url));
+        }
+
+        if (xhr.status >= 200 && xhr.status < 300) {
+          try {
+            var data = JSON.parse(xhr.responseText);
+            return cb(null, data);
+          } catch (err) {
+            var rawTrim = String(xhr.responseText || '').trim();
+            if (/^<!DOCTYPE\s+html|^<html/i.test(rawTrim)) {
+              var htmlErr = new Error('O servidor retornou uma página HTML em vez de dados JSON da lista.');
+              htmlErr.code = 'HTML_RESPONSE';
+              htmlErr.httpStatus = xhr.status;
+              return cb(htmlErr, null);
+            }
+            return cb(new Error('O servidor enviou uma resposta JSON inválida ou incompleta.'), null);
+          }
+        }
+        retryOrFail(buildNetworkError(xhr.status, proxyHeader, 'Erro HTTP ' + xhr.status + ' no painel Xtream.', url));
+      };
+
+      xhr.onerror = function () {
+        retryOrFail(buildNetworkError(0, 'CONNECT', 'Falha de rede ao conectar ao servidor da lista.', url));
+      };
+
+      xhr.ontimeout = function () {
+        retryOrFail(buildNetworkError(0, 'TIMEOUT', 'Tempo limite esgotado ao aguardar o servidor da lista.', url));
+      };
+
+      xhr.send();
+    }
+
+    runAttempt();
+  }
+
   function buildApiUrl(creds, action, extraParams) {
     var base = normalizeBaseUrl(creds.server);
-    var url = base + '/player_api.php?username=' + encodeURIComponent(creds.username || '') +
-              '&password=' + encodeURIComponent(creds.password || '');
+    var u = encodeURIComponent(creds.username || '');
+    var p = encodeURIComponent(creds.password || '');
+    var url = base + '/player_api.php?username=' + u + '&password=' + p;
     if (action) url += '&action=' + encodeURIComponent(action);
     if (extraParams) {
-      for (var k in extraParams) {
-        if (Object.prototype.hasOwnProperty.call(extraParams, k)) {
-          url += '&' + encodeURIComponent(k) + '=' + encodeURIComponent(extraParams[k]);
-        }
+      var keys = Object.keys(extraParams);
+      for (var i = 0; i < keys.length; i++) {
+        url += '&' + encodeURIComponent(keys[i]) + '=' + encodeURIComponent(extraParams[keys[i]]);
       }
     }
     return url;
   }
 
-  function buildLiveStreamUrl(creds, streamId, ext) {
-    var base = normalizeBaseUrl(creds.server);
-    var user = encodeURIComponent(creds.username || '');
-    var pass = encodeURIComponent(creds.password || '');
-    var format = ext || 'm3u8';
-    return base + '/live/' + user + '/' + pass + '/' + streamId + '.' + format;
-  }
-
-  // Interpreta user_info e server_info devolvidos por player_api.php sem action (B5)
-  function parseAccountInfo(rawJson) {
-    if (!rawJson || typeof rawJson !== 'object' || !rawJson.user_info) {
-      return null;
+  function parseAccountInfo(data) {
+    var ui = (data && data.user_info) || {};
+    var si = (data && data.server_info) || {};
+    var allowed = ui.allowed_output_formats;
+    if (!Array.isArray(allowed) || !allowed.length) {
+      allowed = ['m3u8', 'ts'];
     }
-    var u = rawJson.user_info;
-    var s = rawJson.server_info || {};
-    var auth = Number(u.auth || 0) === 1 || String(u.status || '').toLowerCase() === 'active';
-    var status = String(u.status || (auth ? 'Active' : 'Disabled'));
-    var expTimestampSec = u.exp_date ? parseInt(u.exp_date, 10) : null;
-    var expDateIso = null;
-    var daysRemaining = null;
-    var isExpired = false;
-    var isExpiringSoon = false;
-
-    if (expTimestampSec && !isNaN(expTimestampSec) && expTimestampSec > 0) {
-      var expMs = expTimestampSec * 1000;
-      expDateIso = new Date(expMs).toISOString().slice(0, 10);
-      var diffDays = Math.ceil((expMs - Date.now()) / (1000 * 60 * 60 * 24));
-      daysRemaining = diffDays;
-      isExpired = diffDays < 0;
-      isExpiringSoon = diffDays >= 0 && diffDays <= 7;
-    }
-    if (status.toLowerCase() === 'expired') isExpired = true;
-
-    var allowedFormats = Array.isArray(u.allowed_output_formats)
-      ? u.allowed_output_formats.map(function (f) { return String(f).toLowerCase(); })
-      : ['m3u8', 'ts'];
+    var authVal = ui.auth;
+    var isAuthenticated = !(authVal === 0 || authVal === '0' || authVal === false || String(ui.status || '').toLowerCase() === 'invalid');
+    var statusStr = String(ui.status || 'Active');
+    var expSec = ui.exp_date ? parseInt(ui.exp_date, 10) : null;
+    var nowSec = Math.floor(Date.now() / 1000);
+    var isExpired = (statusStr.toLowerCase() === 'expired') || (expSec && expSec > 0 && expSec < nowSec);
+    var isDisabled = /^(banned|disabled|blocked)$/i.test(statusStr);
+    var maxCons = parseInt(ui.max_connections || '1', 10) || 1;
+    var actCons = parseInt(ui.active_cons || '0', 10) || 0;
+    var daysRemaining = (expSec && expSec > nowSec) ? Math.ceil((expSec - nowSec) / 86400) : null;
+    var isExpiringSoon = !!(daysRemaining !== null && daysRemaining >= 0 && daysRemaining <= 7);
 
     return {
-      auth: auth && !isExpired,
-      status: status,
-      username: u.username || '',
-      isTrial: String(u.is_trial || '0') === '1',
-      activeCons: parseInt(u.active_cons || '0', 10) || 0,
-      maxConnections: parseInt(u.max_connections || '1', 10) || 1,
-      expDate: expDateIso,
-      daysRemaining: daysRemaining,
-      isExpired: isExpired,
+      username: ui.username || '',
+      status: statusStr,
+      auth: isAuthenticated,
+      isAuthenticated: isAuthenticated,
       isExpiringSoon: isExpiringSoon,
-      allowedOutputFormats: allowedFormats,
-      serverProtocol: s.server_protocol || 'http',
-      timezone: s.timezone || 'America/Sao_Paulo',
-      checkedAt: Date.now()
+      daysRemaining: daysRemaining,
+      isExpired: !!isExpired,
+      isDisabled: !!isDisabled,
+      expDate: expSec,
+      expDateFormatted: expSec ? formatDateBrFromUnix(expSec) : '',
+      maxConnections: maxCons,
+      activeCons: actCons,
+      connLimitWarning: (maxCons > 0 && actCons >= maxCons)
+        ? 'Atenção: todas as conexões desta conta estão em uso no momento.'
+        : '',
+      isTrial: ui.is_trial === '1' || ui.is_trial === 1,
+      allowedOutputFormats: allowed,
+      serverProtocol: si.server_protocol || 'http',
+      timezone: si.timezone || 'America/Sao_Paulo'
     };
   }
 
-  // Converte respostas de get_live_streams, get_vod_streams e get_series da API Xtream
-  // B3 corrigido: NÃO cria mais episódios falsos quando sr.episodes está ausente!
-  function convertXtreamPayloadToRawItems(creds, payload, preferredLiveExt) {
-    var base = normalizeBaseUrl(creds.server);
-    var user = encodeURIComponent(creds.username || '');
-    var pass = encodeURIComponent(creds.password || '');
-    var liveExt = preferredLiveExt || 'm3u8';
-    var rawItems = [];
-
-    var liveCatMap = {};
-    var vodCatMap = {};
-    var seriesCatMap = {};
-
-    var i, c;
-    var liveCats = payload.liveCategories || [];
-    for (i = 0; i < liveCats.length; i++) {
-      c = liveCats[i];
-      liveCatMap[c.category_id] = c.category_name;
+  // Valida autenticação e estado da conta Xtream com mensagens humanas claras (Seção B5)
+  function authenticateAndCheckAccount(creds, cb, cancelToken) {
+    if (!creds || !creds.server || !creds.username || !creds.password) {
+      return cb(new Error('Credenciais Xtream incompletas.'), null);
     }
-    var vodCats = payload.vodCategories || [];
-    for (i = 0; i < vodCats.length; i++) {
-      c = vodCats[i];
-      vodCatMap[c.category_id] = c.category_name;
-    }
-    var serCats = payload.seriesCategories || [];
-    for (i = 0; i < serCats.length; i++) {
-      c = serCats[i];
-      seriesCatMap[c.category_id] = c.category_name;
-    }
-
-    // 1. Canais ao Vivo (get_live_streams)
-    var lives = payload.liveStreams || [];
-    for (i = 0; i < lives.length; i++) {
-      var lv = lives[i];
-      var streamId = lv.stream_id || (i + 1);
-      rawItems.push({
-        xtreamId: String(streamId),
-        xtreamKind: 'live',
-        tvgId: lv.epg_channel_id || ('xt_live_' + streamId),
-        tvgName: lv.name || 'Canal Xtream',
-        tvgLogo: lv.stream_icon || '',
-        tvgType: 'live',
-        groupTitle: liveCatMap[lv.category_id] || 'Xtream | Canais',
-        title: lv.name || 'Canal Xtream',
-        url: base + '/live/' + user + '/' + pass + '/' + streamId + '.' + liveExt,
-        epgNow: lv.epg_now || 'Transmissão Ao Vivo',
-        epgNext: lv.epg_next || 'Programação Contínua',
-        addedAt: lv.added ? parseInt(lv.added, 10) * 1000 : (Date.now() - i),
-        sourceId: 'xtream'
-      });
-    }
-
-    // 2. Filmes VOD (get_vod_streams)
-    var vods = payload.vodStreams || [];
-    for (i = 0; i < vods.length; i++) {
-      var vd = vods[i];
-      var vodId = vd.stream_id || (1000 + i);
-      var ext = vd.container_extension || 'mp4';
-      rawItems.push({
-        xtreamId: String(vodId),
-        xtreamKind: 'movie',
-        tvgId: 'xt_vod_' + vodId,
-        tvgName: vd.name || 'Filme Xtream',
-        tvgLogo: vd.stream_icon || '',
-        tvgType: 'movie',
-        tvgRating: String(vd.rating || ''),
-        groupTitle: vodCatMap[vd.category_id] || 'Xtream | Filmes',
-        title: vd.name || 'Filme Xtream',
-        url: base + '/movie/' + user + '/' + pass + '/' + vodId + '.' + ext,
-        addedAt: vd.added ? parseInt(vd.added, 10) * 1000 : (Date.now() - i),
-        sourceId: 'xtream'
-      });
-    }
-
-    // 3. Séries (get_series)
-    // Se a fixture de teste já trouxe sr.episodes embutido, converte-os;
-    // Se veio de um servidor Xtream real (sem sr.episodes), cria o item-pai da série para busca sob demanda via get_series_info!
-    var seriesArr = payload.seriesStreams || [];
-    for (i = 0; i < seriesArr.length; i++) {
-      var sr = seriesArr[i];
-      var seriesId = sr.series_id || (2000 + i);
-      var catName = seriesCatMap[sr.category_id] || 'Xtream | Séries';
-      var isNovelaCat = /novela|folhetim|vale a pena/i.test(catName);
-
-      if (Array.isArray(sr.episodes) && sr.episodes.length > 0) {
-        for (var e = 0; e < sr.episodes.length; e++) {
-          var ep = sr.episodes[e];
-          var epExt = ep.container_extension || 'mp4';
-          rawItems.push({
-            xtreamId: String(ep.id),
-            xtreamSeriesId: String(seriesId),
-            xtreamKind: isNovelaCat ? 'novela' : 'series',
-            tvgId: 'xt_ser_' + ep.id,
-            tvgName: ep.title,
-            tvgLogo: sr.cover || '',
-            tvgType: isNovelaCat ? 'novela' : 'series',
-            tvgRating: String(sr.rating || ''),
-            groupTitle: catName,
-            title: ep.title,
-            season: parseInt(ep.season || '1', 10) || 1,
-            episode: parseInt(ep.episode_num || (e + 1), 10) || (e + 1),
-            url: base + '/series/' + user + '/' + pass + '/' + ep.id + '.' + epExt,
-            sourceId: 'xtream'
-          });
-        }
-      } else {
-        rawItems.push({
-          xtreamId: String(seriesId),
-          xtreamSeriesId: String(seriesId),
-          xtreamKind: isNovelaCat ? 'novela-show' : 'series-show',
-          needsSeriesInfo: true,
-          tvgId: 'xt_show_' + seriesId,
-          tvgName: sr.name || 'Série Xtream',
-          tvgLogo: sr.cover || '',
-          backdrop: (Array.isArray(sr.backdrop_path) && sr.backdrop_path[0]) ? sr.backdrop_path[0] : '',
-          synopsis: sr.plot || '',
-          tvgType: isNovelaCat ? 'novela-show' : 'series-show',
-          tvgRating: String(sr.rating || ''),
-          groupTitle: catName,
-          title: sr.name || 'Série Xtream',
-          url: '',
-          addedAt: sr.last_modified ? parseInt(sr.last_modified, 10) * 1000 : (Date.now() - i),
-          sourceId: 'xtream'
-        });
+    xhrJsonWithRetry(buildApiUrl(creds, ''), TIMEOUT_SMALL_API_MS, function (err, data) {
+      if (err) return cb(err, null);
+      if (!data || typeof data !== 'object' || (!data.user_info && !data.server_info)) {
+        var invalidPanelErr = new Error('Este endereço não respondeu como um painel Xtream Codes válido.');
+        invalidPanelErr.code = 'INVALID_XTREAM_PANEL';
+        return cb(invalidPanelErr, null);
       }
-    }
 
-    return rawItems;
+      var acc = parseAccountInfo(data);
+      if (!acc.isAuthenticated) {
+        var authErr = new Error('Usuário ou senha incorretos. Confira os dados com seu fornecedor.');
+        authErr.code = 'AUTH_INVALID';
+        return cb(authErr, acc);
+      }
+      if (acc.isExpired) {
+        var expMsg = acc.expDateFormatted
+          ? ('Esta conta expirou em ' + acc.expDateFormatted + '.')
+          : 'Esta conta está expirada no servidor.';
+        var expErr = new Error(expMsg);
+        expErr.code = 'ACCOUNT_EXPIRED';
+        return cb(expErr, acc);
+      }
+      if (acc.isDisabled) {
+        var disErr = new Error('Esta conta está desativada no servidor.');
+        disErr.code = 'ACCOUNT_DISABLED';
+        return cb(disErr, acc);
+      }
+      cb(null, acc);
+    }, cancelToken);
   }
 
-  // Converte a resposta de player_api.php?action=get_series_info&series_id=<id> em temporadas e episódios reais (B3)
-  function convertSeriesInfoResponse(creds, parentShow, apiData) {
+  function pickPreferredLiveExtension(accountInfo, preferFormat) {
+    var pref = preferFormat || (global.LuminaStore && global.LuminaStore.get('preferOutputFormat')) || 'auto';
+    var allowed = (accountInfo && accountInfo.allowedOutputFormats) || ['m3u8', 'ts'];
+    var hasM3u8 = allowed.indexOf('m3u8') !== -1;
+    var hasTs = allowed.indexOf('ts') !== -1;
+
+    if (pref === 'ts' && hasTs) return 'ts';
+    if (pref === 'm3u8' && hasM3u8) return 'm3u8';
+    // Em 'auto', prefere m3u8 quando disponível (melhor compatibilidade em ExoPlayer e HLS.js)
+    if (hasM3u8) return 'm3u8';
+    if (hasTs) return 'ts';
+    return 'm3u8';
+  }
+
+  function mapCategoriesToById(list) {
+    var map = {};
+    if (!Array.isArray(list)) return map;
+    for (var i = 0; i < list.length; i++) {
+      var c = list[i];
+      if (c && c.category_id != null) {
+        map[String(c.category_id)] = String(c.category_name || 'Geral').trim();
+      }
+    }
+    return map;
+  }
+
+  // Fallback por categoria quando get_vod_streams ou get_series inteiro falha por tamanho/timeout (Seção B5)
+  function fetchStreamsByCategoryFallback(creds, actionName, catList, cancelToken, onProgress, doneCb) {
+    if (!Array.isArray(catList) || !catList.length) {
+      return doneCb([]);
+    }
+    var maxCats = Math.min(catList.length, 30);
+    var combined = [];
+    var idx = 0;
+
+    function nextCat() {
+      if (cancelToken && cancelToken.cancelled) return doneCb(combined);
+      if (idx >= maxCats) return doneCb(combined);
+      var cat = catList[idx++];
+      var catId = cat && cat.category_id;
+      if (catId == null) return nextCat();
+
+      xhrJsonWithRetry(
+        buildApiUrl(creds, actionName, { category_id: String(catId) }),
+        TIMEOUT_SMALL_API_MS,
+        function (_err, arr) {
+          if (Array.isArray(arr)) {
+            for (var i = 0; i < arr.length; i++) combined.push(arr[i]);
+          }
+          if (onProgress) {
+            onProgress({ catIdx: idx, catTotal: maxCats, count: combined.length });
+          }
+          setTimeout(nextCat, 0);
+        },
+        cancelToken
+      );
+    }
+    nextCat();
+  }
+
+  function fetchCompleteCatalog(creds, onProgress, callback, cancelToken) {
+    if (!creds || !creds.server || !creds.username || !creds.password) {
+      return callback(new Error('Credenciais Xtream incompletas.'), null);
+    }
+
     var base = normalizeBaseUrl(creds.server);
-    var user = encodeURIComponent(creds.username || '');
-    var pass = encodeURIComponent(creds.password || '');
-    var episodesBySeason = (apiData && apiData.episodes) || {};
-    var info = (apiData && apiData.info) || {};
+    var user = encodeURIComponent(creds.username);
+    var pass = encodeURIComponent(creds.password);
+
+    if (onProgress) onProgress({ stage: '2/4 \u00B7 Conectando ao servidor\u2026', percent: 8 });
+
+    authenticateAndCheckAccount(creds, function (authErr, accountInfo) {
+      if (authErr) return callback(authErr, null);
+
+      if (global.LuminaStore) global.LuminaStore.set('accountInfo', accountInfo);
+      if (global.LuminaStorage) global.LuminaStorage.saveMeta('accountInfo', accountInfo);
+      if (accountInfo.connLimitWarning && global.LuminaUI && global.LuminaUI.toast) {
+        global.LuminaUI.toast(accountInfo.connLimitWarning);
+      }
+
+      var liveExt = pickPreferredLiveExtension(accountInfo);
+
+      if (onProgress) onProgress({ stage: '2/4 \u00B7 Carregando categorias\u2026', percent: 18 });
+      xhrJsonWithRetry(buildApiUrl(creds, 'get_live_categories'), TIMEOUT_SMALL_API_MS, function (_, liveCats) {
+        var liveCatMap = mapCategoriesToById(liveCats);
+
+        xhrJsonWithRetry(buildApiUrl(creds, 'get_vod_categories'), TIMEOUT_SMALL_API_MS, function (_, vodCats) {
+          var vodCatMap = mapCategoriesToById(vodCats);
+
+          xhrJsonWithRetry(buildApiUrl(creds, 'get_series_categories'), TIMEOUT_SMALL_API_MS, function (_, seriesCats) {
+            var seriesCatMap = mapCategoriesToById(seriesCats);
+
+            if (onProgress) onProgress({ stage: '3/4 \u00B7 Baixando canais ao vivo\u2026', percent: 32 });
+            xhrJsonWithRetry(buildApiUrl(creds, 'get_live_streams'), TIMEOUT_LIVE_MS, function (liveErr, liveStreams) {
+              var lives = (!liveErr && Array.isArray(liveStreams)) ? liveStreams : [];
+
+              if (onProgress) {
+                onProgress({
+                  stage: '3/4 \u00B7 Canais: ' + lives.length + ' \u00B7 Baixando filmes\u2026',
+                  percent: 54
+                });
+              }
+
+              xhrJsonWithRetry(buildApiUrl(creds, 'get_vod_streams'), TIMEOUT_VOD_SERIES_MS, function (vodErr, vodStreams) {
+                function afterVods(vods) {
+                  if (onProgress) {
+                    onProgress({
+                      stage: '3/4 \u00B7 Canais: ' + lives.length + ' \u00B7 Filmes: ' + vods.length + ' \u00B7 Baixando séries\u2026',
+                      percent: 76
+                    });
+                  }
+
+                  xhrJsonWithRetry(buildApiUrl(creds, 'get_series'), TIMEOUT_VOD_SERIES_MS, function (serErr, seriesStreams) {
+                    function afterSeries(seriesArr) {
+                      if (!lives.length && !vods.length && !seriesArr.length) {
+                        return callback(new Error('Nenhum canal, filme ou série retornado pelo servidor Xtream.'), null);
+                      }
+
+                      if (onProgress) {
+                        onProgress({
+                          stage: '3/4 \u00B7 Canais: ' + lives.length + ' \u00B7 Filmes: ' + vods.length + ' \u00B7 Séries: ' + seriesArr.length,
+                          percent: 90
+                        });
+                      }
+
+                      var rawItems = [];
+                      var now = Date.now();
+
+                      for (var i = 0; i < lives.length; i++) {
+                        var l = lives[i];
+                        var streamId = l.stream_id || (i + 1);
+                        var catName = liveCatMap[String(l.category_id)] || 'Canais Ao Vivo';
+                        rawItems.push(global.LuminaClassifier.classifyEntry({
+                          id: 'xt_live_' + streamId,
+                          title: l.name || ('Canal ' + streamId),
+                          groupTitle: catName,
+                          tvgLogo: l.stream_icon || '',
+                          tvgId: l.epg_channel_id || '',
+                          url: base + '/live/' + user + '/' + pass + '/' + streamId + '.' + liveExt,
+                          addedAt: l.added ? Number(l.added) * 1000 : (now - i),
+                          sourceId: 'xtream',
+                          forcedKind: 'live'
+                        }));
+                      }
+
+                      for (var j = 0; j < vods.length; j++) {
+                        var v = vods[j];
+                        var vodId = v.stream_id || (j + 1);
+                        var ext = v.container_extension || 'mp4';
+                        var vCatName = vodCatMap[String(v.category_id)] || 'Filmes';
+                        var ratingNum = parseFloat(v.rating || v.rating_5based || '0') || 0;
+                        rawItems.push(global.LuminaClassifier.classifyEntry({
+                          id: 'xt_vod_' + vodId,
+                          title: v.name || ('Filme ' + vodId),
+                          groupTitle: vCatName,
+                          tvgLogo: v.stream_icon || v.cover || '',
+                          tvgRating: ratingNum,
+                          url: base + '/movie/' + user + '/' + pass + '/' + vodId + '.' + ext,
+                          addedAt: v.added ? Number(v.added) * 1000 : (now - j),
+                          sourceId: 'xtream',
+                          forcedKind: 'movie'
+                        }));
+                      }
+
+                      for (var k = 0; k < seriesArr.length; k++) {
+                        var s = seriesArr[k];
+                        var serId = s.series_id || (k + 1);
+                        var sCatName = seriesCatMap[String(s.category_id)] || 'Séries';
+                        var sRating = parseFloat(s.rating || s.rating_5based || '0') || 0;
+                        var classified = global.LuminaClassifier.classifyEntry({
+                          id: 'xt_ser_' + serId,
+                          title: s.name || ('Série ' + serId),
+                          groupTitle: sCatName,
+                          tvgLogo: s.cover || '',
+                          tvgRating: sRating,
+                          url: '',
+                          addedAt: s.last_modified ? Number(s.last_modified) * 1000 : (now - k),
+                          sourceId: 'xtream',
+                          forcedKind: 'series',
+                          xtreamSeriesId: String(serId),
+                          needsSeriesInfo: true,
+                          synopsis: s.plot || ''
+                        });
+                        rawItems.push(classified);
+                      }
+
+                      if (global.LuminaDiagLog) {
+                        global.LuminaDiagLog.record('list-load', {
+                          engine: 'XtreamClient',
+                          url: base,
+                          httpStatus: 200,
+                          code: 'OK',
+                          elapsedMs: Date.now() - now,
+                          message: 'Xtream carregado: ' + lives.length + ' canais, ' + vods.length + ' filmes, ' + seriesArr.length + ' séries'
+                        });
+                      }
+
+                      callback(null, rawItems, {
+                        accountInfo: accountInfo,
+                        counts: {
+                          channels: lives.length,
+                          movies: vods.length,
+                          series: seriesArr.length
+                        }
+                      });
+                    }
+
+                    if (!serErr && Array.isArray(seriesStreams)) {
+                      afterSeries(seriesStreams);
+                    } else if (Array.isArray(seriesCats) && seriesCats.length) {
+                      fetchStreamsByCategoryFallback(creds, 'get_series', seriesCats, cancelToken, function (p) {
+                        if (onProgress) {
+                          onProgress({
+                            stage: '3/4 \u00B7 Baixando séries por categoria (' + p.catIdx + '/' + p.catTotal + ')\u2026',
+                            percent: 82
+                          });
+                        }
+                      }, afterSeries);
+                    } else {
+                      afterSeries([]);
+                    }
+                  }, cancelToken, function (prog) {
+                    if (onProgress && prog && prog.loadedMb) {
+                      onProgress({ stage: '3/4 \u00B7 Baixando séries (' + prog.loadedMb + ' MB)\u2026', percent: 80 });
+                    }
+                  });
+                }
+
+                if (!vodErr && Array.isArray(vodStreams)) {
+                  afterVods(vodStreams);
+                } else if (Array.isArray(vodCats) && vodCats.length) {
+                  fetchStreamsByCategoryFallback(creds, 'get_vod_streams', vodCats, cancelToken, function (p) {
+                    if (onProgress) {
+                      onProgress({
+                        stage: '3/4 \u00B7 Baixando filmes por categoria (' + p.catIdx + '/' + p.catTotal + ')\u2026',
+                        percent: 62
+                      });
+                    }
+                  }, afterVods);
+                } else {
+                  afterVods([]);
+                }
+              }, cancelToken, function (prog) {
+                if (onProgress && prog && prog.loadedMb) {
+                  onProgress({ stage: '3/4 \u00B7 Baixando filmes (' + prog.loadedMb + ' MB)\u2026', percent: 60 });
+                }
+              });
+            }, cancelToken, function (prog) {
+              if (onProgress && prog && prog.loadedMb) {
+                onProgress({ stage: '3/4 \u00B7 Baixando canais (' + prog.loadedMb + ' MB)\u2026', percent: 40 });
+              }
+            });
+          }, cancelToken);
+        }, cancelToken);
+      }, cancelToken);
+    }, cancelToken);
+  }
+
+  function hydrateShowFromEpisodesMap(creds, showItem, infoData) {
+    var base = normalizeBaseUrl(creds.server);
+    var user = encodeURIComponent(creds.username);
+    var pass = encodeURIComponent(creds.password);
+    var episodesBySeason = (infoData && infoData.episodes) || {};
+    var infoMeta = (infoData && infoData.info) || {};
+    if (infoMeta.plot && !showItem.synopsis) showItem.synopsis = infoMeta.plot;
+    if (infoMeta.cover && !showItem.logo) showItem.logo = infoMeta.cover;
+
+    var seasonKeys = Object.keys(episodesBySeason).sort(function (a, b) {
+      return parseInt(a, 10) - parseInt(b, 10);
+    });
+
     var seasons = [];
     var totalEps = 0;
-
-    var seasonKeys = Object.keys(episodesBySeason);
-    seasonKeys.sort(function (a, b) { return parseInt(a, 10) - parseInt(b, 10); });
+    var itemByIdMap = (global.LuminaStore && global.LuminaStore.get('itemByIdMap')) || {};
 
     for (var i = 0; i < seasonKeys.length; i++) {
       var sKey = seasonKeys[i];
       var sNum = parseInt(sKey, 10) || (i + 1);
-      var rawEps = episodesBySeason[sKey];
-      if (!Array.isArray(rawEps) || !rawEps.length) continue;
+      var rawEps = episodesBySeason[sKey] || [];
+      var epsOut = [];
 
-      var epList = [];
       for (var j = 0; j < rawEps.length; j++) {
         var ep = rawEps[j];
-        var epId = String(ep.id || (parentShow.xtreamSeriesId + '_' + sNum + '_' + (j + 1)));
+        var epId = ep.id || (showItem.xtreamSeriesId + '_' + sNum + '_' + (j + 1));
+        var ext = ep.container_extension || 'mp4';
         var epNum = parseInt(ep.episode_num || (j + 1), 10) || (j + 1);
-        var ext = String(ep.container_extension || 'mp4').replace(/^\.+/, '');
-        var epInfo = ep.info || {};
-        var rawTitle = ep.title || (parentShow.cleanTitle + ' - T' + sNum + ':E' + epNum);
-
-        var epItem = {
-          id: 'i:xt:ep:' + epId,
-          xtreamId: epId,
-          xtreamSeriesId: String(parentShow.xtreamSeriesId || ''),
+        var epObj = {
+          id: 'xt_ep_' + epId,
           kind: 'episode',
-          isNovela: !!parentShow.isNovela,
-          title: rawTitle,
-          cleanTitle: rawTitle,
-          seriesTitle: parentShow.cleanTitle,
-          seriesKey: parentShow.id,
+          isNovela: !!showItem.isNovela,
+          title: ep.title || ('Episódio ' + epNum),
+          cleanTitle: ep.title || ('Episódio ' + epNum),
+          seriesTitle: showItem.cleanTitle,
+          seriesKey: showItem.seriesKey,
           season: sNum,
           episode: epNum,
-          durationSecs: parseInt(epInfo.duration_secs || '0', 10) || 0,
-          synopsis: epInfo.plot || '',
-          logo: epInfo.movie_image || parentShow.logo || info.cover || '',
-          groupOriginal: parentShow.groupOriginal || 'Séries',
-          groupDisplay: parentShow.groupDisplay || parentShow.groupOriginal || 'Séries',
-          groupMapped: parentShow.isNovela ? 'Novelas' : 'Séries',
-          quality: parentShow.quality || 'FHD',
-          lang: parentShow.lang || 'DUB',
-          adult: !!parentShow.adult,
-          url: base + '/series/' + user + '/' + pass + '/' + epId + '.' + ext,
-          sourceId: 'xtream'
+          logo: (ep.info && ep.info.movie_image) || showItem.logo || '',
+          synopsis: (ep.info && ep.info.plot) || showItem.synopsis || '',
+          durationSecs: (ep.info && ep.info.duration_secs) ? Number(ep.info.duration_secs) : 2700,
+          groupOriginal: showItem.groupOriginal,
+          groupDisplay: showItem.groupDisplay,
+          quality: 'HD',
+          lang: showItem.lang || 'DUB',
+          url: base + '/series/' + user + '/' + pass + '/' + epId + '.' + ext
         };
-        epList.push(epItem);
+        epsOut.push(epObj);
+        itemByIdMap[epObj.id] = epObj;
         totalEps++;
       }
 
-      epList.sort(function (a, b) { return a.episode - b.episode; });
-      seasons.push({
-        seasonNumber: sNum,
-        episodes: epList
-      });
+      if (epsOut.length) {
+        seasons.push({ seasonNumber: sNum, episodes: epsOut });
+      }
     }
 
-    return {
-      seasons: seasons,
-      totalEpisodes: totalEps,
-      synopsis: info.plot || parentShow.synopsis || '',
-      backdrop: (Array.isArray(info.backdrop_path) && info.backdrop_path[0]) ? info.backdrop_path[0] : (parentShow.backdrop || ''),
-      cover: info.cover || parentShow.logo || ''
-    };
+    showItem.seasons = seasons;
+    showItem.totalEpisodes = totalEps;
+    showItem.needsSeriesInfo = false;
+    if (global.LuminaStore) global.LuminaStore.set('itemByIdMap', itemByIdMap);
+    return showItem;
   }
 
-  function xhrGetJsonWithRetry(url, timeoutMs, maxRetries, cancelToken, cb) {
-    var attempt = 0;
-    var max = typeof maxRetries === 'number' ? maxRetries : 2;
+  function fetchSeriesInfo(creds, showItem, callback) {
+    if (!showItem || !showItem.xtreamSeriesId) {
+      return callback(new Error('Série sem identificador Xtream.'));
+    }
+    var serId = String(showItem.xtreamSeriesId);
 
-    function tryOnce() {
-      if (cancelToken && cancelToken.cancelled) {
-        return cb(new Error('Operação cancelada pelo usuário.'));
+    global.LuminaStorage.loadSeriesDetail(serId, function (_, cached) {
+      var now = Date.now();
+      if (cached && cached.data && (now - (cached.updatedAt || 0) < SERIES_TTL_MS)) {
+        hydrateShowFromEpisodesMap(creds, showItem, cached.data);
+        return callback(null, showItem);
       }
-      attempt++;
-      var xhr = new XMLHttpRequest();
-      xhr.open('GET', url, true);
-      xhr.timeout = timeoutMs || 35000;
-      xhr.onload = function () {
-        if (xhr.status === 401 || xhr.status === 403) {
-          return cb(new Error('Servidor Xtream recusou o login (usuário/senha incorretos ou assinatura expirada).'));
+
+      if (!creds || !creds.server) {
+        if (cached && cached.data) {
+          hydrateShowFromEpisodesMap(creds || {}, showItem, cached.data);
+          return callback(null, showItem);
         }
-        if (xhr.status >= 200 && xhr.status < 300) {
-          try {
-            var parsed = JSON.parse(xhr.responseText);
-            return cb(null, parsed);
-          } catch (e) {
-            return cb(new Error('Resposta inválida do servidor Xtream.'));
+        return callback(new Error('Credenciais Xtream ausentes para buscar episódios.'));
+      }
+
+      var url = buildApiUrl(creds, 'get_series_info', { series_id: serId });
+      xhrJsonWithRetry(url, TIMEOUT_SMALL_API_MS, function (err, data) {
+        if (err || !data) {
+          if (cached && cached.data) {
+            hydrateShowFromEpisodesMap(creds, showItem, cached.data);
+            return callback(null, showItem);
           }
+          return callback(err || new Error('Não foi possível carregar os episódios desta série.'));
         }
-        retryOrFail(new Error('Erro HTTP ' + xhr.status));
-      };
-      xhr.onerror = function () {
-        retryOrFail(new Error('Falha de rede ao conectar ao servidor Xtream.'));
-      };
-      xhr.ontimeout = function () {
-        retryOrFail(new Error('Tempo limite esgotado ao aguardar o servidor Xtream.'));
-      };
-      try {
-        xhr.send();
-      } catch (ex) {
-        retryOrFail(ex);
-      }
-    }
-
-    function retryOrFail(err) {
-      if (attempt <= max && !(cancelToken && cancelToken.cancelled)) {
-        var delay = Math.min(1500 * Math.pow(2, attempt - 1), 6000);
-        setTimeout(tryOnce, delay);
-      } else {
-        cb(err);
-      }
-    }
-
-    tryOnce();
-  }
-
-  function fetchAccountInfo(creds, cb) {
-    if (!creds || !creds.server || !creds.username || !creds.password) {
-      return cb(new Error('Credenciais Xtream incompletas.'));
-    }
-    var url = buildApiUrl(creds, null);
-    xhrGetJsonWithRetry(url, 15000, 1, null, function (err, data) {
-      if (err) return cb(err, null);
-      var info = parseAccountInfo(data);
-      if (!info) return cb(new Error('Não foi possível validar os dados da conta Xtream.'), null);
-      cb(null, info);
+        global.LuminaStorage.saveSeriesDetail(serId, data);
+        hydrateShowFromEpisodesMap(creds, showItem, data);
+        callback(null, showItem);
+      });
     });
   }
 
-  // Carrega temporadas e episódios reais sob demanda (get_series_info) com cache em memória e no IndexedDB (B3)
-  function fetchSeriesInfo(creds, parentShow, cb, forceRefresh) {
-    if (!parentShow) return cb(new Error('Série inválida.'));
-    if (!parentShow.needsSeriesInfo && parentShow.seasons && parentShow.seasons.length > 0 && !forceRefresh) {
-      return cb(null, parentShow);
-    }
-    var seriesId = String(parentShow.xtreamSeriesId || '').trim();
-    if (!seriesId) return cb(new Error('ID da série ausente para consulta Xtream.'));
-
-    function applyConverted(converted) {
-      parentShow.seasons = converted.seasons || [];
-      parentShow.totalEpisodes = converted.totalEpisodes || 0;
-      parentShow.needsSeriesInfo = false;
-      if (converted.synopsis && !parentShow.synopsis) parentShow.synopsis = converted.synopsis;
-      if (converted.backdrop && !parentShow.backdrop) parentShow.backdrop = converted.backdrop;
-      if (converted.cover && !parentShow.logo) parentShow.logo = converted.cover;
-
-      // Registra episódios no itemByIdMap global para que o player, favoritos e "Continuar Assistindo" os encontrem
-      if (global.LuminaStore) {
-        var byId = global.LuminaStore.get('itemByIdMap') || {};
-        for (var s = 0; s < parentShow.seasons.length; s++) {
-          var eps = parentShow.seasons[s].episodes || [];
-          for (var e = 0; e < eps.length; e++) {
-            byId[eps[e].id] = eps[e];
-          }
-        }
-        global.LuminaStore.set('itemByIdMap', byId);
-      }
-      cb(null, parentShow);
-    }
-
-    if (!forceRefresh && seriesInfoMemoryCache[seriesId]) {
-      return applyConverted(seriesInfoMemoryCache[seriesId]);
-    }
-
-    if (!forceRefresh && global.LuminaStorage && global.LuminaStorage.loadSeriesDetail) {
-      global.LuminaStorage.loadSeriesDetail(seriesId, function (_, cachedRec) {
-        var MAX_AGE_MS = 24 * 60 * 60 * 1000;
-        if (cachedRec && cachedRec.data && (Date.now() - (cachedRec.updatedAt || 0) < MAX_AGE_MS)) {
-          seriesInfoMemoryCache[seriesId] = cachedRec.data;
-          return applyConverted(cachedRec.data);
-        }
-        fetchFromServer();
-      });
-      return;
-    }
-
-    fetchFromServer();
-
-    function fetchFromServer() {
-      var activeCreds = creds || (global.LuminaStore && global.LuminaStore.get('xtreamCreds'));
-      if (!activeCreds || !activeCreds.server) {
-        return cb(new Error('Credenciais Xtream não encontradas para carregar episódios.'));
-      }
-      var url = buildApiUrl(activeCreds, 'get_series_info', { series_id: seriesId });
-      xhrGetJsonWithRetry(url, 25000, 2, null, function (err, data) {
-        if (err) return cb(err);
-        var converted = convertSeriesInfoResponse(activeCreds, parentShow, data);
-        seriesInfoMemoryCache[seriesId] = converted;
-        if (global.LuminaStorage && global.LuminaStorage.saveSeriesDetail) {
-          global.LuminaStorage.saveSeriesDetail(seriesId, converted);
-        }
-        applyConverted(converted);
-      });
-    }
+  function normalizeSearchTerm(s) {
+    return String(s || '')
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .trim();
   }
 
-  function fetchXtreamCatalog(creds, onProgress, onComplete, cancelToken) {
-    if (!creds || !creds.server || !creds.username || !creds.password) {
-      return onComplete(new Error('Login Xtream incompleto.'));
+  function searchCatalog(query, state) {
+    var q = normalizeSearchTerm(query);
+    if (!q) return { channels: [], movies: [], series: [], novelas: [], total: 0 };
+
+    function filterArr(arr, max) {
+      var res = [];
+      if (!arr) return res;
+      for (var i = 0; i < arr.length; i++) {
+        var it = arr[i];
+        var hay = normalizeSearchTerm((it.cleanTitle || '') + ' ' + (it.groupDisplay || ''));
+        if (hay.indexOf(q) !== -1) {
+          res.push(it);
+          if (res.length >= max) break;
+        }
+      }
+      return res;
     }
 
-    // Etapa 0: Valida conta (user_info) para checar expiração e formato preferido
-    fetchAccountInfo(creds, function (accErr, accInfo) {
-      if (accInfo && global.LuminaStore) {
-        global.LuminaStore.set('accountInfo', accInfo);
-        if (global.LuminaStorage) global.LuminaStorage.saveMeta('accountInfo', accInfo);
-        if (accInfo.isExpired || !accInfo.auth) {
-          return onComplete(new Error('Sua conta Xtream está expirada ou inativa (status: ' + accInfo.status + ').'));
-        }
-      }
+    var ch = filterArr(state.channels, 20);
+    var mv = filterArr(state.movies, 20);
+    var sr = filterArr(state.seriesList, 20);
+    var nv = filterArr(state.novelasList, 20);
+    return {
+      channels: ch,
+      movies: mv,
+      series: sr,
+      novelas: nv,
+      total: ch.length + mv.length + sr.length + nv.length
+    };
+  }
 
-      var preferredExt = 'm3u8';
-      if (accInfo && Array.isArray(accInfo.allowedOutputFormats)) {
-        if (accInfo.allowedOutputFormats.indexOf('m3u8') !== -1) preferredExt = 'm3u8';
-        else if (accInfo.allowedOutputFormats.indexOf('ts') !== -1) preferredExt = 'ts';
-      }
 
-      var actions = [
-        { key: 'liveCategories', action: 'get_live_categories', label: 'categorias de canais', timeout: 25000 },
-        { key: 'vodCategories', action: 'get_vod_categories', label: 'categorias de filmes', timeout: 25000 },
-        { key: 'seriesCategories', action: 'get_series_categories', label: 'categorias de séries', timeout: 25000 },
-        { key: 'liveStreams', action: 'get_live_streams', label: 'canais ao vivo', timeout: 45000 },
-        { key: 'vodStreams', action: 'get_vod_streams', label: 'filmes VOD', timeout: 60000 },
-        { key: 'seriesStreams', action: 'get_series', label: 'séries e novelas', timeout: 45000 }
-      ];
+  function convertXtreamPayloadToRawItems(creds, payload) {
+    var p = payload || {};
+    var base = normalizeBaseUrl((creds && creds.server) || 'http://localhost');
+    var user = encodeURIComponent((creds && creds.username) || 'user');
+    var pass = encodeURIComponent((creds && creds.password) || 'pass');
+    var liveCatMap = mapCategoriesToById(p.liveCategories || []);
+    var vodCatMap = mapCategoriesToById(p.vodCategories || []);
+    var seriesCatMap = mapCategoriesToById(p.seriesCategories || []);
+    var lives = p.liveStreams || [];
+    var vods = p.vodStreams || [];
+    var seriesArr = p.seriesStreams || [];
+    var out = [];
+    var now = Date.now();
 
-      var collected = {};
-      var stepReport = [];
-      var idx = 0;
+    for (var i = 0; i < lives.length; i++) {
+      var l = lives[i];
+      var sid = l.stream_id || (i + 1);
+      out.push({
+        id: 'xt_live_' + sid,
+        title: l.name || ('Canal ' + sid),
+        groupTitle: liveCatMap[String(l.category_id)] || 'Canais',
+        tvgLogo: l.stream_icon || '',
+        tvgId: l.epg_channel_id || '',
+        url: base + '/live/' + user + '/' + pass + '/' + sid + '.m3u8',
+        addedAt: now - i,
+        sourceId: 'xtream',
+        forcedKind: 'live',
+        xtreamKind: 'live'
+      });
+    }
 
-      function nextStep() {
-        if (cancelToken && cancelToken.cancelled) {
-          return onComplete(new Error('Atualização cancelada pelo usuário.'));
-        }
-        if (idx >= actions.length) {
-          var rawItems = convertXtreamPayloadToRawItems(creds, collected, preferredExt);
-          return onComplete(null, rawItems, { accountInfo: accInfo, stepReport: stepReport });
-        }
+    for (var j = 0; j < vods.length; j++) {
+      var v = vods[j];
+      var vid = v.stream_id || (j + 1);
+      var ext = v.container_extension || 'mp4';
+      out.push({
+        id: 'xt_vod_' + vid,
+        title: v.name || ('Filme ' + vid),
+        groupTitle: vodCatMap[String(v.category_id)] || 'Filmes',
+        tvgLogo: v.stream_icon || v.cover || '',
+        tvgRating: parseFloat(v.rating || '0') || 0,
+        url: base + '/movie/' + user + '/' + pass + '/' + vid + '.' + ext,
+        addedAt: now - j,
+        sourceId: 'xtream',
+        forcedKind: 'movie',
+        xtreamKind: 'movie'
+      });
+    }
 
-        var step = actions[idx];
-        if (onProgress) {
-          onProgress({
-            percent: Math.round(((idx + 1) / actions.length) * 100),
-            status: 'Baixando ' + step.label + ' (' + (idx + 1) + '/' + actions.length + ')...'
+    for (var k = 0; k < seriesArr.length; k++) {
+      var s = seriesArr[k];
+      var serId = s.series_id || (k + 1);
+      var sCat = seriesCatMap[String(s.category_id)] || 'Séries';
+      if (Array.isArray(s.episodes) && s.episodes.length) {
+        for (var eIdx = 0; eIdx < s.episodes.length; eIdx++) {
+          var ep = s.episodes[eIdx];
+          var epId = ep.id || (serId + '_' + (eIdx + 1));
+          var epExt = ep.container_extension || 'mp4';
+          out.push({
+            id: 'xt_ep_' + epId,
+            title: ep.title || (s.name + ' S01E0' + (eIdx + 1)),
+            groupTitle: sCat,
+            tvgLogo: s.cover || '',
+            tvgRating: parseFloat(s.rating || '0') || 0,
+            url: base + '/series/' + user + '/' + pass + '/' + epId + '.' + epExt,
+            addedAt: now - k,
+            sourceId: 'xtream',
+            forcedKind: 'series',
+            xtreamKind: 'episode'
           });
         }
-
-        var url = buildApiUrl(creds, step.action);
-        xhrGetJsonWithRetry(url, step.timeout, 2, cancelToken, function (err, data) {
-          if (err) {
-            // Se falhar logo na 1ª etapa e não tínhamos validação de conta, aborta
-            if (idx === 0 && !accInfo) {
-              return onComplete(err);
-            }
-            // Falha isolada em uma etapa (ex.: get_series) não derruba canais e filmes já baixados (B6.1)
-            collected[step.key] = [];
-            stepReport.push({ action: step.action, label: step.label, ok: false, error: err.message });
-          } else {
-            if (!Array.isArray(data)) {
-              if (idx === 0 && !accInfo) {
-                return onComplete(new Error('Servidor Xtream recusou o login (usuário/senha inválidos ou conta expirada).'));
-              }
-              collected[step.key] = [];
-              stepReport.push({ action: step.action, label: step.label, ok: false, error: 'Formato inesperado' });
-            } else {
-              collected[step.key] = data;
-              stepReport.push({ action: step.action, label: step.label, ok: true, count: data.length });
-            }
-          }
-          idx++;
-          nextStep();
+      } else {
+        out.push({
+          id: 'xt_ser_' + serId,
+          title: s.name || ('Série ' + serId),
+          groupTitle: sCat,
+          tvgLogo: s.cover || '',
+          tvgRating: parseFloat(s.rating || '0') || 0,
+          url: '',
+          addedAt: now - k,
+          sourceId: 'xtream',
+          forcedKind: 'series',
+          xtreamKind: 'series-show',
+          xtreamSeriesId: String(serId),
+          needsSeriesInfo: true
         });
       }
-
-      nextStep();
-    });
-  }
-
-  function normalizeSearchText(str) {
-    var s = String(str || '').toLowerCase();
-    if (typeof s.normalize === 'function') {
-      s = s.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-    } else {
-      s = s.replace(/[áàãâä]/g, 'a').replace(/[éèêë]/g, 'e').replace(/[íìîï]/g, 'i')
-           .replace(/[óòõôö]/g, 'o').replace(/[úùûü]/g, 'u').replace(/ç/g, 'c');
     }
-    return s.trim();
+    return out;
   }
 
-  function getSearchTokenForItem(it) {
-    var id = it.id || it.cleanTitle;
-    if (searchTokenCache[id]) return searchTokenCache[id];
-    var tok = normalizeSearchText((it.cleanTitle || '') + ' ' + (it.groupOriginal || ''));
-    searchTokenCache[id] = tok;
-    return tok;
-  }
-
-  // Busca com relevância (início do título > início de palavra > substring) sem mutar objetos do catálogo (B7)
-  function matchListFast(list, q, maxResults) {
-    var exactPrefix = [];
-    var wordPrefix = [];
-    var substring = [];
-    var cap = maxResults || 60;
-    var wordBoundary = ' ' + q;
-
-    for (var i = 0, len = list.length; i < len; i++) {
-      var it = list[i];
-      var tok = getSearchTokenForItem(it);
-      var pos = tok.indexOf(q);
-      if (pos === -1) continue;
-      if (pos === 0) {
-        exactPrefix.push(it);
-      } else if (tok.indexOf(wordBoundary) !== -1) {
-        wordPrefix.push(it);
-      } else {
-        substring.push(it);
-      }
-      if (exactPrefix.length >= cap) break;
-    }
-
-    return exactPrefix.concat(wordPrefix, substring).slice(0, cap);
-  }
-
-  function searchCatalog(query, storeState, maxPerSection) {
-    var q = normalizeSearchText(query);
-    if (!q) {
-      return { channels: [], movies: [], series: [], novelas: [], total: 0 };
-    }
-    var cap = maxPerSection || 60;
-    var channels = matchListFast(storeState.channels || [], q, cap);
-    var movies = matchListFast(storeState.movies || [], q, cap);
-    var series = matchListFast(storeState.seriesList || [], q, cap);
-    var novelas = matchListFast(storeState.novelasList || [], q, cap);
-    return {
-      channels: channels,
-      movies: movies,
-      series: series,
-      novelas: novelas,
-      total: channels.length + movies.length + series.length + novelas.length
-    };
-  }
-
-  function clearSearchCache() {
-    searchTokenCache = {};
+  function convertSeriesInfoResponse(creds, showItem, infoData) {
+    return hydrateShowFromEpisodesMap(creds, showItem, infoData);
   }
 
   var api = {
-    buildApiUrl: buildApiUrl,
-    buildLiveStreamUrl: buildLiveStreamUrl,
-    parseAccountInfo: parseAccountInfo,
+    TIMEOUT_SMALL_API_MS: TIMEOUT_SMALL_API_MS,
     convertXtreamPayloadToRawItems: convertXtreamPayloadToRawItems,
     convertSeriesInfoResponse: convertSeriesInfoResponse,
-    fetchAccountInfo: fetchAccountInfo,
+    TIMEOUT_LIVE_MS: TIMEOUT_LIVE_MS,
+    TIMEOUT_VOD_SERIES_MS: TIMEOUT_VOD_SERIES_MS,
+    SERIES_TTL_MS: SERIES_TTL_MS,
+    normalizeBaseUrl: normalizeBaseUrl,
+    parseAccountInfo: parseAccountInfo,
+    authenticateAndCheckAccount: authenticateAndCheckAccount,
+    pickPreferredLiveExtension: pickPreferredLiveExtension,
+    fetchCompleteCatalog: fetchCompleteCatalog,
     fetchSeriesInfo: fetchSeriesInfo,
-    fetchXtreamCatalog: fetchXtreamCatalog,
-    normalizeSearchText: normalizeSearchText,
-    searchCatalog: searchCatalog,
-    clearSearchCache: clearSearchCache
+    searchCatalog: searchCatalog
   };
 
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

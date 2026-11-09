@@ -1,22 +1,25 @@
 (function (global) {
   'use strict';
 
+  var MAX_SAVED_LISTS = 5;
   var defaultSalt = 'lumina_v16_default_salt';
   var defaultPinHash = (global.LuminaSettings && global.LuminaSettings.hashPinWithSalt)
     ? global.LuminaSettings.hashPinWithSalt('0000', defaultSalt)
     : '';
 
   var state = {
-    appVersion: '2.0.0',
+    appVersion: '2.1.0',
     currentRoute: 'home',
     searchQuery: '',
     searchHistory: [],
     heroBannerIndex: 0,
     pairingBaseUrl: 'https://surubim-player-pairing.vercel.app',
-    pairingStep: 'cards', // 'cards' | 'phone-qr'
+    pairingStep: 'cards',
     xtreamCreds: null,
     accountInfo: null,
     source: null,
+    savedLists: [],
+    activeListId: '',
     lastUpdateInfo: null,
     recentAddedIds: {},
     pairingError: null,
@@ -66,12 +69,16 @@
     aspectRatioByContent: {},
     defaultAspectRatio: 'auto',
     screenSafeMargin: 0,
-    performanceMode: 'auto', // 'auto' | 'normal' | 'lite'
-    motionLevel: 'Completas', // 'Completas' | 'Reduzidas' | 'Desligadas'
-    navDirection: 'forward', // 'forward' | 'back'
+    performanceMode: 'auto',
+    motionLevel: 'Completas',
+    navDirection: 'forward',
     sleepTimerMinutes: 0,
     autoUpdateHours: 12,
     preferOutputFormat: 'auto',
+    playerEngine: 'auto',
+    playerUserAgent: 'vlc',
+    playerUserAgentCustom: '',
+    bufferProfile: 'normal',
     includeCredentialsInBackup: false,
     liteModeActive: false,
     lastChannelId: null,
@@ -80,9 +87,12 @@
     nextEpisodePrompt: null,
     appUpdateInfo: null,
     appUpdateProgress: null,
+    streamTestResults: null,
+    streamTestRunning: false,
     diagnosticsVisible: false,
     diagnostics: {
-      engine: 'none',
+      engine: 'ExoPlayer',
+      userAgent: 'VLC/3.0.20 LibVLC/3.0.20',
       attemptedChain: '-',
       ttffMs: 0,
       reconnections: 0,
@@ -126,6 +136,10 @@
       key === 'tmdb' ||
       key === 'autoUpdateHours' ||
       key === 'preferOutputFormat' ||
+      key === 'playerEngine' ||
+      key === 'playerUserAgent' ||
+      key === 'playerUserAgentCustom' ||
+      key === 'bufferProfile' ||
       key === 'includeCredentialsInBackup' ||
       key === 'searchHistory'
     ) {
@@ -133,7 +147,80 @@
     }
   }
 
+  function buildListId(entry) {
+    if (entry && entry.id) return entry.id;
+    if (entry && entry.type === 'xtream' && entry.creds) {
+      return 'xt_' + String(entry.creds.server || '').replace(/[^a-z0-9]/gi, '_') + '_' + String(entry.creds.username || '');
+    }
+    if (entry && entry.type === 'm3u' && entry.url) {
+      return 'm3u_' + String(entry.url || '').slice(0, 64).replace(/[^a-z0-9]/gi, '_');
+    }
+    return 'list_' + Date.now();
+  }
+
+  function upsertSavedList(sourceObj, countsObj, accountInfoObj) {
+    if (!sourceObj) return null;
+    var listId = buildListId(sourceObj);
+    sourceObj.id = listId;
+    var listArr = Array.isArray(state.savedLists) ? state.savedLists.slice() : [];
+    var existingIdx = -1;
+    for (var i = 0; i < listArr.length; i++) {
+      if (listArr[i].id === listId) {
+        existingIdx = i;
+        break;
+      }
+    }
+
+    var counts = countsObj || {
+      channels: (state.channels || []).length,
+      movies: (state.movies || []).length,
+      series: (state.seriesList || []).length + (state.novelasList || []).length
+    };
+    var acc = accountInfoObj || state.accountInfo || null;
+
+    var record = {
+      id: listId,
+      name: sourceObj.name || 'Minha Lista',
+      type: sourceObj.type,
+      creds: sourceObj.type === 'xtream' ? sourceObj.creds : null,
+      url: sourceObj.type === 'm3u' ? sourceObj.url : '',
+      counts: counts,
+      expDate: acc && acc.expDate ? acc.expDate : null,
+      updatedAt: Date.now()
+    };
+
+    if (existingIdx !== -1) {
+      listArr.splice(existingIdx, 1);
+    }
+    listArr.unshift(record);
+    if (listArr.length > MAX_SAVED_LISTS) {
+      listArr = listArr.slice(0, MAX_SAVED_LISTS);
+    }
+
+    state.savedLists = listArr;
+    state.activeListId = listId;
+    if (global.LuminaStorage) {
+      global.LuminaStorage.saveMeta('savedLists', listArr);
+      global.LuminaStorage.saveMeta('activeListId', listId);
+    }
+    return record;
+  }
+
+  function removeSavedList(listId) {
+    var listArr = Array.isArray(state.savedLists) ? state.savedLists.slice() : [];
+    var nextArr = [];
+    for (var i = 0; i < listArr.length; i++) {
+      if (listArr[i].id !== listId) nextArr.push(listArr[i]);
+    }
+    state.savedLists = nextArr;
+    if (global.LuminaStorage) {
+      global.LuminaStorage.saveMeta('savedLists', nextArr);
+    }
+    return nextArr;
+  }
+
   global.LuminaStore = {
+    MAX_SAVED_LISTS: MAX_SAVED_LISTS,
     get: function (key) { return state[key]; },
     getState: function () { return state; },
     set: function (key, val) {
@@ -148,6 +235,9 @@
       persistSettingKeysIfNeeded(key);
       if (global.LuminaEventBus) global.LuminaEventBus.emit('store:' + key, val);
     },
+    buildListId: buildListId,
+    upsertSavedList: upsertSavedList,
+    removeSavedList: removeSavedList,
     reportDroppedFrames: function (count) {
       state.diagnostics.droppedFrames = count;
       if (state.performanceMode === 'auto' && count >= 25 && !state.liteModeActive) {
@@ -197,12 +287,29 @@
           };
         }
       }
+      var safeSavedLists = (state.savedLists || []).map(function (item) {
+        return {
+          id: item.id,
+          name: item.name,
+          type: item.type,
+          creds: item.creds ? {
+            server: item.creds.server,
+            username: item.creds.username,
+            password: withSecrets ? item.creds.password : ''
+          } : null,
+          url: withSecrets ? (item.url || '') : '',
+          counts: item.counts || { channels: 0, movies: 0, series: 0 },
+          expDate: item.expDate || null,
+          updatedAt: item.updatedAt || 0
+        };
+      });
       var backup = {
-        version: '2.0.0',
+        version: '2.1.0',
         exportedAt: new Date().toISOString(),
         includesCredentials: withSecrets,
         pairingBaseUrl: state.pairingBaseUrl,
         source: safeSource,
+        savedLists: safeSavedLists,
         xtreamCreds: (withSecrets && state.xtreamCreds) ? state.xtreamCreds : null,
         mappingProfile: state.mappingProfile,
         favorites: state.favorites,
@@ -212,6 +319,10 @@
         screenSafeMargin: state.screenSafeMargin,
         performanceMode: state.performanceMode,
         autoUpdateHours: state.autoUpdateHours,
+        preferOutputFormat: state.preferOutputFormat,
+        playerEngine: state.playerEngine,
+        playerUserAgent: state.playerUserAgent,
+        bufferProfile: state.bufferProfile,
         parental: {
           enabled: state.parental.enabled,
           hideAdultInSearchAndHome: state.parental.hideAdultInSearchAndHome,
@@ -234,6 +345,15 @@
       if (data.source && ((data.source.creds && data.source.creds.password) || data.source.url)) {
         state.source = data.source;
         if (global.LuminaStorage) global.LuminaStorage.saveMeta('source', data.source);
+      }
+      if (Array.isArray(data.savedLists) && data.savedLists.length) {
+        var validSaved = data.savedLists.filter(function (it) {
+          return (it.type === 'xtream' && it.creds && it.creds.password) || (it.type === 'm3u' && it.url);
+        });
+        if (validSaved.length) {
+          state.savedLists = validSaved.slice(0, MAX_SAVED_LISTS);
+          if (global.LuminaStorage) global.LuminaStorage.saveMeta('savedLists', state.savedLists);
+        }
       }
       if (data.mappingProfile) {
         state.mappingProfile = data.mappingProfile;
@@ -260,6 +380,10 @@
         applyLiteModeClass(data.performanceMode === 'lite');
       }
       if (typeof data.autoUpdateHours === 'number') state.autoUpdateHours = data.autoUpdateHours;
+      if (data.preferOutputFormat) state.preferOutputFormat = data.preferOutputFormat;
+      if (data.playerEngine) state.playerEngine = data.playerEngine;
+      if (data.playerUserAgent) state.playerUserAgent = data.playerUserAgent;
+      if (data.bufferProfile) state.bufferProfile = data.bufferProfile;
       if (data.parental) {
         state.parental.enabled = !!data.parental.enabled;
         if (typeof data.parental.hideAdultInSearchAndHome === 'boolean') {
@@ -287,7 +411,12 @@
       var favs = state.favorites;
       if (favs[itemId]) delete favs[itemId];
       else favs[itemId] = Date.now();
-      if (global.LuminaStorage) global.LuminaStorage.saveMeta('favorites', favs);
+      if (global.LuminaStorage) {
+        global.LuminaStorage.saveMeta('favorites', favs);
+        if (state.activeListId) {
+          global.LuminaStorage.saveMeta('favorites_' + state.activeListId, favs);
+        }
+      }
       if (global.LuminaEventBus) global.LuminaEventBus.emit('favorites:changed', favs);
       return !!favs[itemId];
     },
@@ -300,7 +429,12 @@
     removeWatchProgress: function (itemId) {
       if (state.watchProgress && state.watchProgress[itemId]) {
         delete state.watchProgress[itemId];
-        if (global.LuminaStorage) global.LuminaStorage.saveMeta('watchProgress', state.watchProgress);
+        if (global.LuminaStorage) {
+          global.LuminaStorage.saveMeta('watchProgress', state.watchProgress);
+          if (state.activeListId) {
+            global.LuminaStorage.saveMeta('watchProgress_' + state.activeListId, state.watchProgress);
+          }
+        }
         if (global.LuminaEventBus) global.LuminaEventBus.emit('progress:changed', state.watchProgress);
       }
     },

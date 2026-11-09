@@ -77,69 +77,85 @@
     global.LuminaPlayer.init();
     global.LuminaOSD.init();
 
-    // Inicia a interface e a abertura coreografada imediatamente enquanto os dados carregam em paralelo (Seção 12)
+    if (global.LuminaDiagLog && global.LuminaDiagLog.loadFromStorage) {
+      global.LuminaDiagLog.loadFromStorage();
+    }
+
     global.LuminaSettings.loadAndApplySettings(function () {
+      if (global.LuminaPlatform && global.LuminaPlatform.setDefaultUserAgent && global.LuminaPlayer) {
+        global.LuminaPlatform.setDefaultUserAgent(global.LuminaPlayer.resolveUserAgentForItem(null, ''));
+      }
       global.LuminaUI.init();
 
-      global.LuminaStorage.loadMeta('favorites', {}, function (favs) {
-        global.LuminaStore.set('favorites', favs || {});
-        global.LuminaStorage.loadMeta('watchProgress', {}, function (prog) {
-          global.LuminaStore.set('watchProgress', prog || {});
-          global.LuminaStorage.loadMeta('mappingProfile', { mode: 'auto', customGroupRules: {}, renamedGroups: {}, groupOrder: [] }, function (prof) {
-            global.LuminaStore.set('mappingProfile', prof || { mode: 'auto', customGroupRules: {}, renamedGroups: {}, groupOrder: [] });
-            global.LuminaStorage.loadMeta('accountInfo', null, function (acc) {
-              if (acc) global.LuminaStore.set('accountInfo', acc);
-              global.LuminaStorage.loadMeta('lastUpdateInfo', null, function (lastUpd) {
-                if (lastUpd) global.LuminaStore.set('lastUpdateInfo', lastUpd);
-                global.LuminaStorage.loadMeta('source', null, function (src) {
-                  if (src) {
-                    global.LuminaStore.set('source', src);
-                    if (src.type === 'xtream' && src.creds) global.LuminaStore.set('xtreamCreds', src.creds);
-                  }
+      global.LuminaStorage.loadMeta('savedLists', [], function (savedLists) {
+        if (Array.isArray(savedLists)) global.LuminaStore.set('savedLists', savedLists);
+        global.LuminaStorage.loadMeta('activeListId', '', function (activeListId) {
+          if (activeListId) global.LuminaStore.set('activeListId', activeListId);
 
-                  global.LuminaStorage.loadCatalog(function (err, storedItems, metaInfo) {
-                    var info = metaInfo || {};
-                    var diag = global.LuminaStore.get('diagnostics') || {};
-                    diag.catalogGeneration = info.generation || (info.migratedFromV1 ? 'v1-migrated' : 'empty');
-                    global.LuminaStore.set('diagnostics', diag);
+          global.LuminaStorage.loadMeta('favorites', {}, function (favs) {
+            global.LuminaStore.set('favorites', favs || {});
+            global.LuminaStorage.loadMeta('watchProgress', {}, function (prog) {
+              global.LuminaStore.set('watchProgress', prog || {});
+              global.LuminaStorage.loadMeta('mappingProfile', { mode: 'auto', customGroupRules: {}, renamedGroups: {}, groupOrder: [] }, function (prof) {
+                global.LuminaStore.set('mappingProfile', prof || { mode: 'auto', customGroupRules: {}, renamedGroups: {}, groupOrder: [] });
+                global.LuminaStorage.loadMeta('accountInfo', null, function (acc) {
+                  if (acc) global.LuminaStore.set('accountInfo', acc);
+                  global.LuminaStorage.loadMeta('lastUpdateInfo', null, function (lastUpd) {
+                    if (lastUpd) global.LuminaStore.set('lastUpdateInfo', lastUpd);
+                    global.LuminaStorage.loadMeta('source', null, function (src) {
+                      if (src) {
+                        global.LuminaStore.set('source', src);
+                        if (src.type === 'xtream' && src.creds) global.LuminaStore.set('xtreamCreds', src.creds);
+                      }
 
-                    var alreadyClassified = !info.migratedFromV1 &&
-                      info.classifierVersion === global.LuminaClassifier.CLASSIFIER_VERSION;
+                      global.LuminaStorage.loadCatalog(function (err, storedItems, metaInfo) {
+                        var info = metaInfo || {};
+                        var diag = global.LuminaStore.get('diagnostics') || {};
+                        diag.catalogGeneration = info.generation || (info.migratedFromV1 ? 'v1-migrated' : 'empty');
+                        global.LuminaStore.set('diagnostics', diag);
 
-                    if (storedItems && storedItems.length) {
-                      global.LuminaRepository.rebuildCatalogFromRawAsync(
-                        storedItems,
-                        function () {},
-                        function () {
+                        var alreadyClassified = !info.migratedFromV1 &&
+                          info.classifierVersion === global.LuminaClassifier.CLASSIFIER_VERSION;
+
+                        if (storedItems && storedItems.length) {
+                          global.LuminaRepository.rebuildCatalogFromRawAsync(
+                            storedItems,
+                            function () {},
+                            function () {
+                              if (src && (!savedLists || !savedLists.length)) {
+                                global.LuminaStore.upsertSavedList(src);
+                              }
+                              global.LuminaUI.renderCurrentRoute();
+                              if (global.LuminaUI.notifyCatalogReadyForIntro) {
+                                global.LuminaUI.notifyCatalogReadyForIntro();
+                              }
+
+                              if (!info.integrityOk && src) {
+                                triggerBackgroundCatalogRefresh(src, 'Atualizando lista em segundo plano...');
+                              } else if (info.migratedFromV1 && src) {
+                                triggerBackgroundCatalogRefresh(src, 'Sincronizando catálogo completo...');
+                              } else if (src) {
+                                var autoHours = global.LuminaStore.get('autoUpdateHours');
+                                var lastTs = (lastUpd && lastUpd.updatedAt) || info.updatedAt || 0;
+                                if (typeof autoHours === 'number' && autoHours > 0 && lastTs > 0) {
+                                  if (Date.now() - lastTs >= autoHours * 3600 * 1000) {
+                                    triggerBackgroundCatalogRefresh(src, 'Atualizando sua lista automaticamente...');
+                                  }
+                                }
+                              }
+                            },
+                            alreadyClassified
+                          );
+                        } else {
                           global.LuminaUI.renderCurrentRoute();
                           if (global.LuminaUI.notifyCatalogReadyForIntro) {
                             global.LuminaUI.notifyCatalogReadyForIntro();
                           }
+                        }
 
-                          if (!info.integrityOk && src) {
-                            triggerBackgroundCatalogRefresh(src, 'Atualizando lista em segundo plano...');
-                          } else if (info.migratedFromV1 && src) {
-                            triggerBackgroundCatalogRefresh(src, 'Sincronizando catálogo completo...');
-                          } else if (src) {
-                            var autoHours = global.LuminaStore.get('autoUpdateHours');
-                            var lastTs = (lastUpd && lastUpd.updatedAt) || info.updatedAt || 0;
-                            if (typeof autoHours === 'number' && autoHours > 0 && lastTs > 0) {
-                              if (Date.now() - lastTs >= autoHours * 3600 * 1000) {
-                                triggerBackgroundCatalogRefresh(src, 'Atualizando sua lista automaticamente...');
-                              }
-                            }
-                          }
-                        },
-                        alreadyClassified
-                      );
-                    } else {
-                      global.LuminaUI.renderCurrentRoute();
-                      if (global.LuminaUI.notifyCatalogReadyForIntro) {
-                        global.LuminaUI.notifyCatalogReadyForIntro();
-                      }
-                    }
-
-                    checkAutoAppUpdateIfAndroid();
+                        checkAutoAppUpdateIfAndroid();
+                      });
+                    });
                   });
                 });
               });

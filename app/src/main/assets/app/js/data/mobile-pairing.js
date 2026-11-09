@@ -454,6 +454,7 @@
     function save(source) {
       global.LuminaStore.set('source', source);
       if (global.LuminaStorage) global.LuminaStorage.saveMeta('source', source);
+      if (global.LuminaStore.upsertSavedList) global.LuminaStore.upsertSavedList(source);
     }
     if (!payload || !payload.type) {
       if (callback) callback(new Error('Dados de pareamento inválidos.'));

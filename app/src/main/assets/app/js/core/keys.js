@@ -8,8 +8,6 @@
     403: 'RED', 404: 'GREEN', 405: 'YELLOW', 406: 'BLUE'
   };
   var colorSequence = [];
-  // Segurar uma seta dispara dezenas de eventos por segundo; processar todos enfileira
-  // movimentos e o foco continua andando depois de soltar o botao. Limitamos as repeticoes.
   var REPEAT_MIN_MS = 90;
   var lastArrowAt = 0;
   function nowMs() { return (window.performance && performance.now) ? performance.now() : Date.now(); }
@@ -17,6 +15,24 @@
   function initKeys() {
     window.addEventListener('keydown', function (e) {
       var code = e.keyCode || e.which;
+
+      // Se o teclado na tela (LuminaKeyboard) estiver aberto e o usuário digitar em teclado físico USB/Bluetooth:
+      if (global.LuminaKeyboard && typeof global.LuminaKeyboard.isOpen === 'function' && global.LuminaKeyboard.isOpen()) {
+        // Backspace físico (8) apaga caractere no campo em vez de voltar de tela
+        if (code === 8) {
+          e.preventDefault();
+          e.stopPropagation();
+          global.LuminaKeyboard.handlePhysicalKeyEvent(e);
+          return;
+        }
+        if (!KEY_MAP[code] && e.key && e.key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey) {
+          e.preventDefault();
+          e.stopPropagation();
+          global.LuminaKeyboard.handlePhysicalKeyEvent(e);
+          return;
+        }
+      }
+
       var action = KEY_MAP[code];
       if (!action) return;
       e.preventDefault();
@@ -28,7 +44,6 @@
         lastArrowAt = t;
       }
 
-      // Segurar OK/VOLTAR/PLAY/PAUSE repetia o comando sozinho (pausa/play em loop)
       if (e.repeat && (action === 'OK' || action === 'BACK' || action === 'PLAY' || action === 'PAUSE' ||
                        action === 'STOP' || action === 'RED' || action === 'GREEN' || action === 'YELLOW' || action === 'BLUE')) return;
 

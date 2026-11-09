@@ -1,84 +1,89 @@
 (function (global) {
   'use strict';
 
-  var ua = (typeof navigator !== 'undefined' && navigator.userAgent) ? String(navigator.userAgent) : '';
-  var hasBridge = typeof global.LuminaAndroidBridge !== 'undefined' && global.LuminaAndroidBridge !== null;
-  var isWebOS = /Web0S|webOS|PalmSystem/i.test(ua) || (typeof global.PalmSystem !== 'undefined');
-  var isFireTv = /AFT[A-Z0-9]+|Amazon|Fire OS/i.test(ua);
-  var isAndroid = hasBridge || /Android/i.test(ua) || isFireTv;
+  var ua = (typeof navigator !== 'undefined' && navigator.userAgent) ? navigator.userAgent : '';
+  var isWebOS = /Web0S|webOS|LG Browser|NetCast/i.test(ua) || !!(typeof window !== 'undefined' && (window.webOS || window.PalmSystem));
+  var isFireTV = /\bAFT[A-Z0-9]+\b|Amazon|Silk/i.test(ua);
+  var isAndroid = /Android/i.test(ua) || isFireTV || !!(typeof window !== 'undefined' && window.LuminaAndroidBridge);
+  var FALLBACK_APP_VERSION = '2.1.0';
+  var probeSeq = 0;
+  var pendingProbes = {};
 
-  var platformName = isAndroid ? 'android' : (isWebOS ? 'webos' : 'browser');
-  var chromeMatch = ua.match(/Chrome\/(\d+)\./);
-  var webviewMajor = chromeMatch ? parseInt(chromeMatch[1], 10) : 0;
-
-  function detectNativeHls() {
-    if (typeof document === 'undefined' || !document.createElement) return isAndroid || isWebOS;
-    try {
-      var v = document.createElement('video');
-      if (!v || !v.canPlayType) return isAndroid || isWebOS;
-      var res = v.canPlayType('application/vnd.apple.mpegurl') || v.canPlayType('audio/mpegurl');
-      return res === 'probably' || res === 'maybe' || isAndroid || isWebOS;
-    } catch (e) {
-      return isAndroid || isWebOS;
+  function getBridge() {
+    if (typeof window !== 'undefined' && window.LuminaAndroidBridge) {
+      return window.LuminaAndroidBridge;
     }
+    return null;
+  }
+
+  // Causa A corrigida (Seção A9): NUNCA retorna true só porque é Android ou webOS.
+  // Só retorna true se <video>.canPlayType realmente suportar HLS nativamente.
+  function detectNativeHls() {
+    if (typeof document === 'undefined' || !document.createElement) return false;
+    var v = document.createElement('video');
+    if (!v || typeof v.canPlayType !== 'function') return false;
+    var can = v.canPlayType('application/vnd.apple.mpegurl') || v.canPlayType('application/x-mpegURL') || '';
+    return can === 'probably' || can === 'maybe';
+  }
+
+  function hasNativeExoPlayer() {
+    var b = getBridge();
+    if (b && typeof b.nativeIsAvailable === 'function') {
+      try {
+        return !!b.nativeIsAvailable();
+      } catch (e) {
+        return false;
+      }
+    }
+    return false;
   }
 
   function detectMse() {
-    return typeof global.MediaSource !== 'undefined' && typeof global.MediaSource.isTypeSupported === 'function';
-  }
-
-  function getBridge() {
-    return (typeof global.LuminaAndroidBridge !== 'undefined' && global.LuminaAndroidBridge) ? global.LuminaAndroidBridge : null;
+    return typeof window !== 'undefined' && !!(window.MediaSource || window.WebKitMediaSource);
   }
 
   function getAppVersion() {
     var b = getBridge();
     if (b && typeof b.getAppVersion === 'function') {
-      try { return String(b.getAppVersion() || '2.0.0'); } catch (e) {}
+      try { return String(b.getAppVersion() || FALLBACK_APP_VERSION); } catch (e) {}
     }
-    return '2.0.0';
+    return FALLBACK_APP_VERSION;
   }
 
   function getPlatformLabel() {
-    if (isFireTv) return 'Amazon Fire TV (Android WebView ' + (webviewMajor || '?') + ')';
-    if (isAndroid) return 'Android TV / Android (WebView ' + (webviewMajor || '?') + ')';
+    var chromeMatch = ua.match(/Chrome\/(\d+)/);
+    var chromeVer = chromeMatch ? ('Chromium ' + chromeMatch[1]) : 'WebView';
+    if (isFireTV) return 'Amazon Fire TV (' + chromeVer + ')';
+    if (isAndroid) return 'Android TV (' + chromeVer + ')';
     if (isWebOS) return 'LG webOS Smart TV';
-    return 'Navegador Web';
+    return 'Navegador Web (' + chromeVer + ')';
   }
 
-  function exitApp() {
+  function getDeviceInfo() {
     var b = getBridge();
-    if (b && typeof b.exitApp === 'function') {
-      try { b.exitApp(); return true; } catch (e) {}
+    if (b && typeof b.getDeviceInfo === 'function') {
+      try {
+        var raw = b.getDeviceInfo();
+        if (raw) {
+          var parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+          if (parsed && typeof parsed === 'object') return parsed;
+        }
+      } catch (e) {}
     }
-    if (typeof global.PalmSystem !== 'undefined' && global.PalmSystem.platformBack) {
-      try { global.PalmSystem.platformBack(); return true; } catch (e2) {}
-    }
-    if (typeof global.close === 'function') {
-      try { global.close(); return true; } catch (e3) {}
-    }
-    return false;
-  }
-
-  function saveBackupToDisk(filename, jsonStr) {
-    var b = getBridge();
-    if (b && typeof b.saveBackupToDisk === 'function') {
-      try { return !!b.saveBackupToDisk(String(filename || 'lumina-backup.json'), String(jsonStr || '')); } catch (e) {}
-    }
-    return false;
-  }
-
-  function readBackupFromDisk(filename) {
-    var b = getBridge();
-    if (b && typeof b.readBackupFromDisk === 'function') {
-      try { return String(b.readBackupFromDisk(String(filename || 'lumina-backup.json')) || ''); } catch (e) {}
-    }
-    return '';
+    var chromeMatch = ua.match(/Chrome\/(\d+)/);
+    return {
+      model: isFireTV ? 'Fire TV' : (isWebOS ? 'LG webOS' : 'Smart TV'),
+      manufacturer: isFireTV ? 'Amazon' : (isWebOS ? 'LG' : 'Web'),
+      sdkInt: isAndroid ? 30 : 0,
+      webviewVersion: chromeMatch ? ('Chromium ' + chromeMatch[1]) : 'N/A',
+      isFireTv: isFireTV,
+      supportedCodecs: ['H.264', 'AAC']
+    };
   }
 
   function registerStreamHeaders(url, userAgent, referer) {
     var b = getBridge();
-    if (b && typeof b.registerStreamHeaders === 'function' && url && (userAgent || referer)) {
+    if (b && typeof b.registerStreamHeaders === 'function' && url) {
       try {
         b.registerStreamHeaders(String(url), String(userAgent || ''), String(referer || ''));
         return true;
@@ -87,75 +92,185 @@
     return false;
   }
 
-  var pendingUpdateCheckCb = null;
-  var pendingUpdateProgressCb = null;
-  var pendingUpdateDoneCb = null;
+  function setDefaultUserAgent(uaStr) {
+    var b = getBridge();
+    if (b && typeof b.setDefaultUserAgent === 'function' && uaStr) {
+      try {
+        b.setDefaultUserAgent(String(uaStr));
+        return true;
+      } catch (e) {}
+    }
+    return false;
+  }
 
-  global.__luminaOnUpdateCheckResult = function (resultJson) {
-    var cb = pendingUpdateCheckCb;
-    pendingUpdateCheckCb = null;
-    if (!cb) return;
+  function trustInsecureHost(host) {
+    var b = getBridge();
+    if (b && typeof b.trustInsecureHost === 'function' && host) {
+      try {
+        b.trustInsecureHost(String(host));
+        return true;
+      } catch (e) {}
+    }
+    return false;
+  }
+
+  function getClipboardText() {
+    var b = getBridge();
+    if (b && typeof b.getClipboardText === 'function') {
+      try {
+        return String(b.getClipboardText() || '');
+      } catch (e) {}
+    }
+    return '';
+  }
+
+  if (typeof window !== 'undefined') {
+    window.__luminaOnProbeResult = function (callbackId, jsonStr) {
+      var cb = pendingProbes[callbackId];
+      if (!cb) return;
+      delete pendingProbes[callbackId];
+      var res = null;
+      try {
+        res = typeof jsonStr === 'string' ? JSON.parse(jsonStr) : jsonStr;
+      } catch (e) {
+        res = { ok: false, httpStatus: 0, error: 'Resposta inválida de probeStream' };
+      }
+      cb(null, res);
+    };
+  }
+
+  function probeStream(url, userAgent, timeoutMs, cb) {
+    var b = getBridge();
+    var tOut = typeof timeoutMs === 'number' && timeoutMs > 0 ? timeoutMs : 8000;
+    var uaToUse = String(userAgent || 'VLC/3.0.20 LibVLC/3.0.20');
+
+    if (b && typeof b.probeStream === 'function') {
+      var cid = 'probe_' + Date.now() + '_' + (++probeSeq);
+      pendingProbes[cid] = cb;
+      setTimeout(function () {
+        if (pendingProbes[cid]) {
+          var expiredCb = pendingProbes[cid];
+          delete pendingProbes[cid];
+          expiredCb(null, { ok: false, httpStatus: 0, elapsedMs: tOut, error: 'Tempo esgotado no teste de stream' });
+        }
+      }, tOut + 2000);
+      try {
+        b.probeStream(String(url), uaToUse, tOut, cid);
+        return;
+      } catch (e) {
+        delete pendingProbes[cid];
+      }
+    }
+
+    // Fallback Web/XHR para ambientes sem ponte Android
+    if (typeof XMLHttpRequest === 'undefined') {
+      if (cb) cb(null, { ok: false, httpStatus: 0, elapsedMs: 0, error: 'XHR indisponível' });
+      return;
+    }
+    var startMs = Date.now();
+    var done = false;
+    var xhr = new XMLHttpRequest();
+    function finish(resObj) {
+      if (done) return;
+      done = true;
+      try { xhr.abort(); } catch (e) {}
+      if (cb) cb(null, resObj);
+    }
     try {
-      var parsed = typeof resultJson === 'string' ? JSON.parse(resultJson) : resultJson;
-      cb(null, parsed);
-    } catch (e) {
-      cb(new Error('Resposta de atualização inválida.'));
+      xhr.open('GET', url, true);
+      xhr.timeout = tOut;
+      xhr.setRequestHeader('Range', 'bytes=0-4095');
+      xhr.onreadystatechange = function () {
+        if (xhr.readyState >= 3 && xhr.status >= 200 && xhr.status < 400) {
+          var elapsed = Date.now() - startMs;
+          var cType = xhr.getResponseHeader('Content-Type') || '';
+          finish({
+            ok: true,
+            httpStatus: xhr.status,
+            elapsedMs: elapsed,
+            bytesRead: (xhr.responseText || '').length,
+            contentType: cType,
+            detectedFormat: /\.m3u8($|\?)/i.test(url) ? 'HLS (.m3u8)' : (/\.ts($|\?)/i.test(url) ? 'MPEG-TS (.ts)' : 'Stream')
+          });
+        }
+      };
+      xhr.onload = function () {
+        var elapsed = Date.now() - startMs;
+        finish({
+          ok: xhr.status >= 200 && xhr.status < 400,
+          httpStatus: xhr.status,
+          elapsedMs: elapsed,
+          bytesRead: (xhr.responseText || '').length,
+          contentType: xhr.getResponseHeader('Content-Type') || '',
+          detectedFormat: /\.m3u8($|\?)/i.test(url) ? 'HLS (.m3u8)' : 'Stream'
+        });
+      };
+      xhr.onerror = function () {
+        finish({ ok: false, httpStatus: xhr.status || 0, elapsedMs: Date.now() - startMs, error: 'Falha de rede' });
+      };
+      xhr.ontimeout = function () {
+        finish({ ok: false, httpStatus: 0, elapsedMs: Date.now() - startMs, error: 'Tempo esgotado' });
+      };
+      xhr.send();
+    } catch (ex) {
+      finish({ ok: false, httpStatus: 0, elapsedMs: Date.now() - startMs, error: ex.message || 'Erro' });
     }
-  };
+  }
 
-  global.__luminaOnUpdateProgress = function (percent, downloadedMb, totalMb) {
-    if (pendingUpdateProgressCb) {
-      try { pendingUpdateProgressCb({ percent: percent, downloadedMb: downloadedMb, totalMb: totalMb }); } catch (e) {}
+  function saveBackupToDisk(filename, jsonContent) {
+    var b = getBridge();
+    if (b && typeof b.saveBackupToDisk === 'function') {
+      try { return !!b.saveBackupToDisk(filename, jsonContent); } catch (e) {}
     }
-  };
+    if (typeof document !== 'undefined') {
+      try {
+        var blob = new Blob([jsonContent], { type: 'application/json;charset=utf-8' });
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url;
+        a.download = filename || 'lumina-backup.json';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(function () { URL.revokeObjectURL(url); }, 2000);
+        return true;
+      } catch (e) {}
+    }
+    return false;
+  }
 
-  global.__luminaOnUpdateResult = function (resultJson) {
-    var cb = pendingUpdateDoneCb;
-    pendingUpdateDoneCb = null;
-    pendingUpdateProgressCb = null;
-    if (!cb) return;
-    try {
-      var parsed = typeof resultJson === 'string' ? JSON.parse(resultJson) : resultJson;
-      if (parsed && parsed.ok) cb(null, parsed);
-      else cb(new Error((parsed && parsed.error) || 'Não foi possível instalar a atualização.'));
-    } catch (e) {
-      cb(new Error('Erro ao processar instalação do APK.'));
+  function readBackupFromDisk(filename) {
+    var b = getBridge();
+    if (b && typeof b.readBackupFromDisk === 'function') {
+      try { return String(b.readBackupFromDisk(filename) || ''); } catch (e) {}
     }
-  };
+    return '';
+  }
 
   function checkForAppUpdate(cb) {
     var b = getBridge();
     if (!b || typeof b.checkForUpdate !== 'function') {
-      if (cb) cb(null, { supported: false, hasUpdate: false, currentVersion: getAppVersion() });
-      return;
+      return cb && cb(null, {
+        supported: false,
+        hasUpdate: false,
+        currentVersion: getAppVersion(),
+        message: 'Atualização automática via APK disponível apenas no app Android / Fire TV.'
+      });
     }
-    pendingUpdateCheckCb = cb;
+    if (typeof window !== 'undefined') {
+      window.__luminaOnUpdateCheckResult = function (jsonStr) {
+        try {
+          var res = typeof jsonStr === 'string' ? JSON.parse(jsonStr) : jsonStr;
+          if (cb) cb(null, res);
+        } catch (err) {
+          if (cb) cb(err, null);
+        }
+      };
+    }
     try {
       b.checkForUpdate();
     } catch (e) {
-      pendingUpdateCheckCb = null;
-      if (cb) cb(new Error('Falha ao consultar atualizações no Android.'));
-    }
-  }
-
-  function downloadAndInstallUpdate(downloadUrl, expectedSize, sha256, onProgress, onDone) {
-    var b = getBridge();
-    if (!b || typeof b.downloadAndInstallUpdate !== 'function') {
-      if (onDone) onDone(new Error('Atualização de APK só está disponível no aplicativo Android / Fire TV.'));
-      return;
-    }
-    pendingUpdateProgressCb = onProgress || null;
-    pendingUpdateDoneCb = onDone || null;
-    try {
-      b.downloadAndInstallUpdate(
-        String(downloadUrl || ''),
-        Number(expectedSize || 0),
-        String(sha256 || '')
-      );
-    } catch (e) {
-      pendingUpdateProgressCb = null;
-      pendingUpdateDoneCb = null;
-      if (onDone) onDone(new Error('Falha ao iniciar download da atualização.'));
+      if (cb) cb(e, null);
     }
   }
 
@@ -175,27 +290,74 @@
     return false;
   }
 
+  function downloadAndInstallUpdate(downloadUrl, assetSize, sha256, onProgress, onComplete) {
+    var b = getBridge();
+    if (!b || typeof b.downloadAndInstallUpdate !== 'function') {
+      if (onComplete) onComplete(new Error('Instalação de APK não suportada nesta plataforma.'));
+      return;
+    }
+    if (typeof window !== 'undefined') {
+      window.__luminaOnUpdateProgress = function (pct, downloadedMb, totalMb) {
+        if (onProgress) onProgress({ percent: Number(pct || 0), downloadedMb: downloadedMb, totalMb: totalMb });
+      };
+      window.__luminaOnUpdateResult = function (jsonStr) {
+        try {
+          var res = typeof jsonStr === 'string' ? JSON.parse(jsonStr) : jsonStr;
+          if (res && res.ok) {
+            if (onComplete) onComplete(null, res);
+          } else {
+            if (onComplete) onComplete(new Error((res && res.error) || 'Falha ao instalar atualização.'));
+          }
+        } catch (e) {
+          if (onComplete) onComplete(e);
+        }
+      };
+    }
+    try {
+      b.downloadAndInstallUpdate(String(downloadUrl || ''), Number(assetSize || 0), String(sha256 || ''));
+    } catch (e) {
+      if (onComplete) onComplete(e);
+    }
+  }
+
   var api = {
-    name: platformName,
-    isAndroid: isAndroid,
-    isFireTv: isFireTv,
     isWebOS: isWebOS,
-    webviewMajor: webviewMajor,
-    canNativeHls: detectNativeHls(),
-    canMsePlayer: detectMse(),
-    hasColorKeys: !isFireTv,
+    isFireTV: isFireTV,
+    isAndroid: isAndroid,
     hasBridge: function () { return !!getBridge(); },
-    maxMemoryHintMb: (isFireTv || isWebOS) ? 128 : 256,
+    hasNativeExoPlayer: hasNativeExoPlayer,
+    detectNativeHls: detectNativeHls,
+    detectMse: detectMse,
     getAppVersion: getAppVersion,
     getPlatformLabel: getPlatformLabel,
-    exitApp: exitApp,
+    getDeviceInfo: getDeviceInfo,
+    registerStreamHeaders: registerStreamHeaders,
+    setDefaultUserAgent: setDefaultUserAgent,
+    trustInsecureHost: trustInsecureHost,
+    getClipboardText: getClipboardText,
+    probeStream: probeStream,
     saveBackupToDisk: saveBackupToDisk,
     readBackupFromDisk: readBackupFromDisk,
-    registerStreamHeaders: registerStreamHeaders,
     checkForAppUpdate: checkForAppUpdate,
-    downloadAndInstallUpdate: downloadAndInstallUpdate,
     canInstallUnknownApps: canInstallUnknownApps,
-    openUnknownAppsSettings: openUnknownAppsSettings
+    openUnknownAppsSettings: openUnknownAppsSettings,
+    downloadAndInstallUpdate: downloadAndInstallUpdate,
+    exitApp: function () {
+      try {
+        var b = getBridge();
+        if (b && typeof b.exitApp === 'function') {
+          b.exitApp();
+          return;
+        }
+        if (typeof window !== 'undefined' && window.webOS && window.webOS.platformBack) {
+          window.webOS.platformBack();
+        } else if (typeof window !== 'undefined' && window.PalmSystem && window.PalmSystem.platformBack) {
+          window.PalmSystem.platformBack();
+        } else if (typeof window !== 'undefined') {
+          window.close();
+        }
+      } catch (e) {}
+    }
   };
 
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

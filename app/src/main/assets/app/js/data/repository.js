@@ -1,499 +1,597 @@
 (function (global) {
   'use strict';
 
-  var activeLoadCancelToken = null;
+  var M3U_DOWNLOAD_TIMEOUT_MS = 180000; // 180s para listas M3U grandes (Seção C5)
+  var M3U_RETRY_DELAYS_MS = [1500, 3000];
+  var activeCancelToken = null;
 
-  function buildCategoriesForList(list, allLabel) {
-    var map = {};
-    map[allLabel] = list.length;
-    for (var i = 0; i < list.length; i++) {
-      var g = list[i].groupDisplay || list[i].groupOriginal || 'Geral';
-      map[g] = (map[g] || 0) + 1;
-    }
-    var arr = [];
-    for (var k in map) {
-      if (Object.prototype.hasOwnProperty.call(map, k)) {
-        arr.push({ name: k, count: map[k] });
+  function createCancelToken() {
+    if (activeCancelToken) {
+      activeCancelToken.cancelled = true;
+      if (activeCancelToken.activeXhr) {
+        try { activeCancelToken.activeXhr.abort(); } catch (e) {}
       }
     }
-    return arr;
-  }
-
-  function defaultProfile() {
-    return (global.LuminaStore && global.LuminaStore.get('mappingProfile')) || {
-      mode: 'auto',
-      customGroupRules: {},
-      renamedGroups: {},
-      groupOrder: []
-    };
-  }
-
-  // Reassocia favoritos e progresso de reprodução caso os IDs tenham vindo da v1.5.1 ou de outro servidor/credencial (B2)
-  function migrateFavoritesAndProgressIfNeeded(allClassified, seriesList, novelasList, itemByIdMap) {
-    if (!global.LuminaStore) return;
-    var favs = global.LuminaStore.get('favorites') || {};
-    var prog = global.LuminaStore.get('watchProgress') || {};
-    var favKeys = Object.keys(favs);
-    var progKeys = Object.keys(prog);
-    if (!favKeys.length && !progKeys.length) return;
-
-    var legacyToNew = {};
-    var i;
-    for (i = 0; i < allClassified.length; i++) {
-      var it = allClassified[i];
-      if (it.legacyId && it.legacyId !== it.id) {
-        legacyToNew[it.legacyId] = it.id;
-      }
-    }
-    for (i = 0; i < seriesList.length; i++) {
-      var sh = seriesList[i];
-      var oldShHash = global.LuminaClassifier.stableHash('ser|' + String(sh.cleanTitle || '').toLowerCase());
-      legacyToNew[oldShHash] = sh.id;
-    }
-    for (i = 0; i < novelasList.length; i++) {
-      var nv = novelasList[i];
-      var oldNvHash = global.LuminaClassifier.stableHash('nov|' + String(nv.cleanTitle || '').toLowerCase());
-      legacyToNew[oldNvHash] = nv.id;
-    }
-
-    var favChanged = false;
-    for (i = 0; i < favKeys.length; i++) {
-      var fk = favKeys[i];
-      if (!itemByIdMap[fk] && legacyToNew[fk]) {
-        favs[legacyToNew[fk]] = favs[fk];
-        delete favs[fk];
-        favChanged = true;
-      }
-    }
-    if (favChanged) {
-      global.LuminaStore.set('favorites', favs);
-      if (global.LuminaStorage) global.LuminaStorage.saveMeta('favorites', favs);
-    }
-
-    var progChanged = false;
-    for (i = 0; i < progKeys.length; i++) {
-      var pk = progKeys[i];
-      if (!itemByIdMap[pk] && legacyToNew[pk]) {
-        prog[legacyToNew[pk]] = prog[pk];
-        delete prog[pk];
-        progChanged = true;
-      }
-    }
-    if (progChanged) {
-      global.LuminaStore.set('watchProgress', prog);
-      if (global.LuminaStorage) global.LuminaStorage.saveMeta('watchProgress', prog);
-    }
-  }
-
-  function classifyRange(st, entries, from, to, alreadyClassified) {
-    var profile = st.profile;
-    var hasCustomRules = profile.mode === 'all_live' ||
-      (profile.customGroupRules && Object.keys(profile.customGroupRules).length > 0) ||
-      (profile.renamedGroups && Object.keys(profile.renamedGroups).length > 0);
-
-    for (var i = from; i < to; i++) {
-      var raw = entries[i];
-      if (!raw) continue;
-      var gOrig = raw.groupOriginal || raw.groupTitle || 'Sem Grupo';
-      if (!st.groupMetaMap[gOrig]) {
-        st.groupMetaMap[gOrig] = {
-          originalName: gOrig,
-          displayName: (profile.renamedGroups && profile.renamedGroups[gOrig]) || gOrig,
-          count: 0,
-          suggested: global.LuminaClassifier.suggestGroupTarget(gOrig),
-          activeTarget: (profile.customGroupRules && profile.customGroupRules[gOrig]) || 'auto'
-        };
-      }
-      st.groupMetaMap[gOrig].count++;
-
-      var item;
-      if (alreadyClassified && raw.id && raw.kind && !hasCustomRules) {
-        item = raw;
-      } else {
-        item = global.LuminaClassifier.classifyEntry(raw, profile);
-      }
-      st.classified.push(item);
-    }
-  }
-
-  function assembleCatalog(st) {
-    var profile = st.profile;
-    var groupMetaMap = st.groupMetaMap;
-    var classified = st.classified;
-
-    var groupKeys = Object.keys(groupMetaMap);
-    var order = profile.groupOrder || [];
-    groupKeys.sort(function (a, b) {
-      var ia = order.indexOf(a);
-      var ib = order.indexOf(b);
-      if (ia !== -1 && ib !== -1) return ia - ib;
-      if (ia !== -1) return -1;
-      if (ib !== -1) return 1;
-      return a.localeCompare(b);
-    });
-
-    var originalGroups = [];
-    for (var gIdx = 0; gIdx < groupKeys.length; gIdx++) {
-      originalGroups.push(groupMetaMap[groupKeys[gIdx]]);
-    }
-
-    var channels = [];
-    var movies = [];
-    var unclassifiedList = [];
-    var visibleItems = [];
-    var itemByIdMap = {};
-
-    for (var j = 0; j < classified.length; j++) {
-      var it = classified[j];
-      if (it.kind === 'hidden') continue;
-      if (it.kind === 'unclassified') {
-        unclassifiedList.push(it);
-        itemByIdMap[it.id] = it;
-        continue;
-      }
-      visibleItems.push(it);
-      itemByIdMap[it.id] = it;
-      if (it.kind === 'live') {
-        it.channelNumber = channels.length + 1;
-        channels.push(it);
-      } else if (it.kind === 'movie') {
-        movies.push(it);
-      }
-    }
-
-    var grouped = global.LuminaGrouper.groupSeriesAndNovelas(visibleItems);
-    for (var sIdx = 0; sIdx < grouped.seriesList.length; sIdx++) {
-      itemByIdMap[grouped.seriesList[sIdx].id] = grouped.seriesList[sIdx];
-    }
-    for (var nIdx = 0; nIdx < grouped.novelasList.length; nIdx++) {
-      itemByIdMap[grouped.novelasList[nIdx].id] = grouped.novelasList[nIdx];
-    }
-
-    migrateFavoritesAndProgressIfNeeded(classified, grouped.seriesList, grouped.novelasList, itemByIdMap);
-
-    if (global.LuminaXtream && global.LuminaXtream.clearSearchCache) {
-      global.LuminaXtream.clearSearchCache();
-    }
-
-    global.LuminaStore.set('itemByIdMap', itemByIdMap);
-    // Guardamos os itens já classificados e liberamos duplicatas brutas para economizar RAM (Seção 4.6)
-    global.LuminaStore.set('rawItems', classified);
-    global.LuminaStore.set('items', visibleItems);
-    global.LuminaStore.set('originalGroups', originalGroups);
-    global.LuminaStore.set('channels', channels);
-    global.LuminaStore.set('movies', movies);
-    global.LuminaStore.set('seriesList', grouped.seriesList);
-    global.LuminaStore.set('novelasList', grouped.novelasList);
-    global.LuminaStore.set('unclassifiedList', unclassifiedList);
-
-    global.LuminaStore.set('categories', buildCategoriesForList(channels, 'Todos os Canais'));
-    global.LuminaStore.set('movieCategories', buildCategoriesForList(movies, 'Todos os Filmes'));
-    global.LuminaStore.set('seriesCategories', buildCategoriesForList(grouped.seriesList, 'Todas as Séries'));
-    global.LuminaStore.set('novelaCategories', buildCategoriesForList(grouped.novelasList, 'Todas as Novelas'));
-
-    if (channels.length && !global.LuminaStore.get('currentChannelId')) {
-      global.LuminaStore.set('currentChannelId', channels[0].id);
-    }
-
-    var statsSummary = {
-      total: visibleItems.length,
-      liveCount: channels.length,
-      movieCount: movies.length,
-      seriesCount: grouped.seriesList.length,
-      novelasCount: grouped.novelasList.length,
-      unclassifiedCount: unclassifiedList.length
-    };
-    global.LuminaEventBus.emit('catalog:updated', statsSummary);
-    return statsSummary;
-  }
-
-  function rebuildCatalogFromRaw(entries, alreadyClassified) {
-    var st = { profile: defaultProfile(), groupMetaMap: {}, classified: [] };
-    classifyRange(st, entries || [], 0, (entries || []).length, !!alreadyClassified);
-    return assembleCatalog(st);
-  }
-
-  function rebuildCatalogFromRawAsync(entries, onProgress, done, alreadyClassified) {
-    var list = entries || [];
-    var st = { profile: defaultProfile(), groupMetaMap: {}, classified: [] };
-    var N = list.length;
-    var SLICE = 2000;
-    var i = 0;
-
-    function step() {
-      var end = Math.min(i + SLICE, N);
-      try {
-        classifyRange(st, list, i, end, !!alreadyClassified);
-      } catch (e) {
-        return done && done(e);
-      }
-      i = end;
-      if (onProgress) onProgress(N ? i / N : 1);
-      if (i < N) return setTimeout(step, 0);
-      setTimeout(function () {
-        try {
-          var stats = assembleCatalog(st);
-          if (done) done(null, stats, st.classified);
-        } catch (e2) {
-          if (done) done(e2);
-        }
-      }, 0);
-    }
-    step();
-  }
-
-  function applyMappingAndPersist(nextProfile, cb) {
-    var prevProfile = JSON.parse(JSON.stringify(defaultProfile()));
-    var undoStack = (global.LuminaStore.get('organizerUndoStack') || []).slice(-9);
-    undoStack.push(prevProfile);
-    global.LuminaStore.set('organizerUndoStack', undoStack);
-
-    global.LuminaStore.set('mappingProfile', nextProfile);
-    global.LuminaStorage.saveMeta('mappingProfile', nextProfile, function () {
-      var raw = global.LuminaStore.get('rawItems') || [];
-      rebuildCatalogFromRaw(raw, false);
-      if (cb) cb();
-    });
-  }
-
-  function undoLastMappingChange(cb) {
-    var undoStack = (global.LuminaStore.get('organizerUndoStack') || []).slice();
-    if (!undoStack.length) return cb && cb(false);
-    var prev = undoStack.pop();
-    global.LuminaStore.set('organizerUndoStack', undoStack);
-    global.LuminaStore.set('mappingProfile', prev);
-    global.LuminaStorage.saveMeta('mappingProfile', prev, function () {
-      var raw = global.LuminaStore.get('rawItems') || [];
-      rebuildCatalogFromRaw(raw, false);
-      if (cb) cb(true);
-    });
-  }
-
-  function fmtInt(n) { return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, '.'); }
-  function fmtMb(bytes) { return (bytes / 1048576).toFixed(1).replace('.', ',') + ' MB'; }
-
-  function report(onProgress, base, span, status, frac) {
-    if (!onProgress) return;
-    onProgress({ status: status, percent: frac == null ? null : Math.round(base + span * frac) });
-  }
-
-  function computeCatalogDiff(prevIdsMap, prevCounts, newClassified, newStats) {
-    var addedIds = {};
-    var addedCount = 0;
-    var hasPrev = prevCounts && prevCounts.total > 0;
-    if (hasPrev) {
-      for (var i = 0; i < newClassified.length; i++) {
-        var id = newClassified[i].id;
-        if (!prevIdsMap[id]) {
-          addedIds[id] = true;
-          addedCount++;
-        }
-      }
-    }
-    return {
-      hasPrev: hasPrev,
-      addedTotal: addedCount,
-      liveDelta: hasPrev ? (newStats.liveCount - (prevCounts.liveCount || 0)) : newStats.liveCount,
-      movieDelta: hasPrev ? (newStats.movieCount - (prevCounts.movieCount || 0)) : newStats.movieCount,
-      seriesDelta: hasPrev ? (newStats.seriesCount - (prevCounts.seriesCount || 0)) : newStats.seriesCount,
-      novelasDelta: hasPrev ? (newStats.novelasCount - (prevCounts.novelasCount || 0)) : newStats.novelasCount,
-      addedIds: addedIds
-    };
-  }
-
-  function finishCatalog(rawItems, onProgress, onComplete, extraMeta) {
-    var prevById = global.LuminaStore.get('itemByIdMap') || {};
-    var prevIdsMap = {};
-    var prevKeys = Object.keys(prevById);
-    for (var pk = 0; pk < prevKeys.length; pk++) prevIdsMap[prevKeys[pk]] = true;
-    var prevLastUpdate = global.LuminaStore.get('lastUpdateInfo');
-    var prevCounts = prevLastUpdate && prevLastUpdate.stats ? prevLastUpdate.stats : null;
-
-    rebuildCatalogFromRawAsync(rawItems, function (f) {
-      report(onProgress, 50, 35, 'Classificando e organizando catálogo... ' + Math.round(f * 100) + '%', f);
-    }, function (err, statsSummary, classifiedItems) {
-      if (err) return onComplete && onComplete(err);
-
-      var diff = computeCatalogDiff(prevIdsMap, prevCounts, classifiedItems, statsSummary);
-      global.LuminaStore.set('recentAddedIds', diff.addedIds || {});
-
-      report(onProgress, 85, 15, 'Salvando catálogo de forma atômica no aparelho...', 0);
-      global.LuminaStorage.saveCatalogBatch(
-        classifiedItems,
-        function (saveErr, genMeta) {
-          var updateRecord = {
-            updatedAt: Date.now(),
-            generation: genMeta ? genMeta.generation : 'mem-only',
-            truncated: !!(genMeta && genMeta.truncated),
-            strippedMedia: !!(genMeta && genMeta.strippedMedia),
-            saveError: saveErr ? String(saveErr.message || saveErr) : null,
-            stats: statsSummary,
-            diff: {
-              hasPrev: diff.hasPrev,
-              addedTotal: diff.addedTotal,
-              liveDelta: diff.liveDelta,
-              movieDelta: diff.movieDelta,
-              seriesDelta: diff.seriesDelta,
-              novelasDelta: diff.novelasDelta
-            },
-            stepReport: (extraMeta && extraMeta.stepReport) || []
-          };
-
-          global.LuminaStore.set('lastUpdateInfo', updateRecord);
-          global.LuminaStorage.saveMeta('lastUpdateInfo', updateRecord);
-
-          var diag = global.LuminaStore.get('diagnostics') || {};
-          diag.catalogGeneration = updateRecord.generation;
-          global.LuminaStore.set('diagnostics', diag);
-
-          if (saveErr) {
-            if (global.LuminaUI && global.LuminaUI.toast) {
-              global.LuminaUI.toast('⚠ Catálogo carregado na memória, mas não pôde ser salvo no aparelho: ' + (saveErr.message || saveErr));
-            }
-          } else if (genMeta && genMeta.truncated) {
-            if (global.LuminaUI && global.LuminaUI.toast) {
-              global.LuminaUI.toast('⚠ Lista excedeu o limite máximo (' + fmtInt(global.LuminaStorage.MAX_PERSISTED_RAW_ITEMS) + ' itens).');
-            }
-          }
-
-          report(onProgress, 100, 0, 'Pronto!', 1);
-          if (onComplete) onComplete(null, global.LuminaStore.get('items'), updateRecord);
-        },
-        function (f) {
-          report(onProgress, 85, 15, 'Salvando catálogo no aparelho... ' + Math.round(f * 100) + '%', f);
-        },
-        { classifierVersion: global.LuminaClassifier.CLASSIFIER_VERSION }
-      );
-    }, false);
-  }
-
-  function ingestM3UText(rawText, sourceId, onProgress, onComplete, cancelToken) {
-    global.LuminaM3UParser.parseChunkedAsync(
-      rawText,
-      sourceId,
-      function (raw) { return raw; },
-      function (p) {
-        report(onProgress, 35, 15, 'Lendo lista... ' + fmtInt(p.itemsCount) + ' itens encontrados', p.percent / 100);
-      },
-      function (err, rawItems) {
-        if (err) return onComplete && onComplete(err);
-        if (!rawItems || !rawItems.length) {
-          if (onComplete) onComplete(new Error('A lista não tem nenhum canal, filme ou série válido (confira o link M3U).'));
-          return;
-        }
-        setTimeout(function () { finishCatalog(rawItems, onProgress, onComplete); }, 0);
-      },
-      cancelToken
-    );
-  }
-
-  function loadFromUrlOrLocalPath(urlOrPath, sourceId, onProgress, onComplete) {
-    cancelActiveLoad();
-    var cancelToken = { cancelled: false, xhr: null };
-    activeLoadCancelToken = cancelToken;
-
-    var curSrc = global.LuminaStore ? global.LuminaStore.get('source') : null;
-    var xhr = new XMLHttpRequest();
-    cancelToken.xhr = xhr;
-    xhr.open('GET', urlOrPath, true);
-    xhr.timeout = 180000;
-
-    // Atualização incremental condicional via ETag / If-Modified-Since quando disponível (B6.1)
-    if (curSrc && curSrc.url === urlOrPath && (global.LuminaStore.get('items') || []).length > 0) {
-      if (curSrc.etag) {
-        try { xhr.setRequestHeader('If-None-Match', curSrc.etag); } catch (e) {}
-      }
-      if (curSrc.lastModified) {
-        try { xhr.setRequestHeader('If-Modified-Since', curSrc.lastModified); } catch (e2) {}
-      }
-    }
-
-    report(onProgress, 0, 35, 'Baixando lista...', null);
-    xhr.onprogress = function (e) {
-      if (e.lengthComputable && e.total) {
-        report(onProgress, 0, 35, 'Baixando lista... ' + fmtMb(e.loaded) + ' de ' + fmtMb(e.total), e.loaded / e.total);
-      } else {
-        report(onProgress, 0, 35, 'Baixando lista... ' + fmtMb(e.loaded || 0), null);
-      }
-    };
-    xhr.onload = function () {
-      if (cancelToken.cancelled) return;
-      if (xhr.status === 304) {
-        report(onProgress, 100, 0, 'Lista já está atualizada (sem alterações no servidor).', 1);
-        if (onComplete) onComplete(null, global.LuminaStore.get('items'), { unchanged: true });
-        return;
-      }
-      if ((xhr.status >= 200 && xhr.status < 300) || (xhr.status === 0 && xhr.responseText)) {
-        var newEtag = '';
-        var newLastMod = '';
-        try {
-          newEtag = xhr.getResponseHeader('ETag') || '';
-          newLastMod = xhr.getResponseHeader('Last-Modified') || '';
-        } catch (e) {}
-        if (curSrc && curSrc.url === urlOrPath) {
-          curSrc.etag = newEtag;
-          curSrc.lastModified = newLastMod;
-          global.LuminaStore.set('source', curSrc);
-          if (global.LuminaStorage) global.LuminaStorage.saveMeta('source', curSrc);
-        }
-        ingestM3UText(xhr.responseText, sourceId, onProgress, onComplete, cancelToken);
-      } else {
-        if (onComplete) onComplete(new Error('Falha HTTP ' + xhr.status + ' ao carregar a lista.'));
-      }
-    };
-    xhr.onerror = function () {
-      if (!cancelToken.cancelled && onComplete) onComplete(new Error('Não foi possível abrir o endereço da lista.'));
-    };
-    xhr.ontimeout = function () {
-      if (!cancelToken.cancelled && onComplete) onComplete(new Error('A lista demorou demais para baixar (timeout).'));
-    };
-    xhr.send();
-  }
-
-  function loadFromXtream(creds, onProgress, onComplete) {
-    cancelActiveLoad();
-    var cancelToken = { cancelled: false };
-    activeLoadCancelToken = cancelToken;
-
-    global.LuminaXtream.fetchXtreamCatalog(
-      creds,
-      function (p) {
-        report(onProgress, 0, 45, p.status, (p.percent || 0) / 100);
-      },
-      function (err, rawItems, metaInfo) {
-        if (err) return onComplete && onComplete(err);
-        if (!rawItems || !rawItems.length) {
-          return onComplete && onComplete(new Error('O servidor Xtream não devolveu nenhum conteúdo.'));
-        }
-        setTimeout(function () {
-          finishCatalog(rawItems, onProgress, onComplete, metaInfo);
-        }, 0);
-      },
-      cancelToken
-    );
+    activeCancelToken = { cancelled: false, activeXhr: null };
+    return activeCancelToken;
   }
 
   function cancelActiveLoad() {
-    if (activeLoadCancelToken) {
-      activeLoadCancelToken.cancelled = true;
-      if (activeLoadCancelToken.xhr) {
-        try { activeLoadCancelToken.xhr.abort(); } catch (e) {}
+    if (activeCancelToken) {
+      activeCancelToken.cancelled = true;
+      if (activeCancelToken.activeXhr) {
+        try { activeCancelToken.activeXhr.abort(); } catch (e) {}
       }
-      activeLoadCancelToken = null;
+      activeCancelToken = null;
       return true;
     }
     return false;
   }
 
+  function buildCategoryCounts(items, allLabel) {
+    var counts = {};
+    var order = [];
+    for (var i = 0; i < items.length; i++) {
+      var g = items[i].groupDisplay || items[i].groupOriginal || 'Geral';
+      if (!counts[g]) {
+        counts[g] = 0;
+        order.push(g);
+      }
+      counts[g]++;
+    }
+    var out = [{ name: allLabel, count: items.length }];
+    for (var j = 0; j < order.length; j++) {
+      out.push({ name: order[j], count: counts[order[j]] });
+    }
+    return out;
+  }
+
+  function computeCatalogDiff(prevRaw, nextRaw) {
+    var prevIds = {};
+    var prevCounts = { live: 0, movie: 0, series: 0 };
+    var nextCounts = { live: 0, movie: 0, series: 0 };
+    var newIds = {};
+    var newCount = 0;
+
+    for (var i = 0; i < (prevRaw || []).length; i++) {
+      var p = prevRaw[i];
+      if (!p) continue;
+      prevIds[p.id] = true;
+      if (p.kind === 'live') prevCounts.live++;
+      else if (p.kind === 'movie') prevCounts.movie++;
+      else prevCounts.series++;
+    }
+
+    var hasPrev = (prevRaw && prevRaw.length > 0);
+    for (var j = 0; j < (nextRaw || []).length; j++) {
+      var n = nextRaw[j];
+      if (!n) continue;
+      if (n.kind === 'live') nextCounts.live++;
+      else if (n.kind === 'movie') nextCounts.movie++;
+      else nextCounts.series++;
+
+      if (hasPrev && !prevIds[n.id]) {
+        newIds[n.id] = Date.now();
+        newCount++;
+      }
+    }
+
+    return {
+      hasPrev: hasPrev,
+      liveDelta: nextCounts.live - prevCounts.live,
+      movieDelta: nextCounts.movie - prevCounts.movie,
+      seriesDelta: nextCounts.series - prevCounts.series,
+      newAddedCount: newCount,
+      recentAddedIds: newIds
+    };
+  }
+
+  function rebuildCatalogFromRawAsync(rawItems, onProgress, onDone, alreadyClassified) {
+    var profile = (global.LuminaStore && global.LuminaStore.get('mappingProfile')) || { mode: 'auto', customGroupRules: {}, renamedGroups: {}, groupOrder: [] };
+    var list = rawItems || [];
+    var total = list.length;
+    var processed = [];
+    var idx = 0;
+    var BATCH_SIZE = 3000;
+
+    function processSlice() {
+      var end = Math.min(idx + BATCH_SIZE, total);
+      for (; idx < end; idx++) {
+        var it = list[idx];
+        if (!it) continue;
+        if (!alreadyClassified || !it.cleanTitle || !it.kind) {
+          it = global.LuminaClassifier.classifyEntry(it);
+        }
+        processed.push(global.LuminaClassifier.applyProfileMapping(it, profile));
+      }
+
+      if (onProgress && total > 0) {
+        onProgress({ stage: 'Organizando catálogo...', percent: Math.round((idx / total) * 70) });
+      }
+
+      if (idx < total) {
+        setTimeout(processSlice, 0);
+      } else {
+        finalizeGrouping();
+      }
+    }
+
+    function finalizeGrouping() {
+      var grouped = global.LuminaGrouper.groupCatalog(processed);
+      var channels = [];
+      var movies = [];
+      var unclassified = [];
+      var itemByIdMap = {};
+      var groupMap = {};
+
+      for (var i = 0; i < processed.length; i++) {
+        var item = processed[i];
+        itemByIdMap[item.id] = item;
+        var origG = item.groupOriginal || 'Sem Grupo';
+        if (!groupMap[origG]) {
+          groupMap[origG] = {
+            originalName: origG,
+            displayName: (profile.renamedGroups && profile.renamedGroups[origG]) || item.groupDisplay || origG,
+            count: 0,
+            suggested: item.kind === 'episode' ? (item.isNovela ? 'novela' : 'series') : item.kind
+          };
+        }
+        groupMap[origG].count++;
+      }
+
+      for (var j = 0; j < grouped.standaloneItems.length; j++) {
+        var st = grouped.standaloneItems[j];
+        if (st.kind === 'hidden') continue;
+        if (st.kind === 'live') {
+          st.channelNumber = channels.length + 1;
+          channels.push(st);
+        } else if (st.kind === 'movie') {
+          movies.push(st);
+        } else {
+          unclassified.push(st);
+        }
+      }
+
+      for (var s = 0; s < grouped.seriesList.length; s++) {
+        itemByIdMap[grouped.seriesList[s].id] = grouped.seriesList[s];
+      }
+      for (var n = 0; n < grouped.novelasList.length; n++) {
+        itemByIdMap[grouped.novelasList[n].id] = grouped.novelasList[n];
+      }
+
+      var origGroupsArr = Object.keys(groupMap).map(function (k) { return groupMap[k]; });
+      origGroupsArr.sort(function (a, b) { return b.count - a.count; });
+
+      if (global.LuminaStore) {
+        global.LuminaStore.set('rawItems', processed);
+        global.LuminaStore.set('items', processed);
+        global.LuminaStore.set('channels', channels);
+        global.LuminaStore.set('movies', movies);
+        global.LuminaStore.set('seriesList', grouped.seriesList);
+        global.LuminaStore.set('novelasList', grouped.novelasList);
+        global.LuminaStore.set('unclassifiedList', unclassified);
+        global.LuminaStore.set('itemByIdMap', itemByIdMap);
+        global.LuminaStore.set('originalGroups', origGroupsArr);
+        global.LuminaStore.set('categories', buildCategoryCounts(channels, 'Todos os Canais'));
+        global.LuminaStore.set('movieCategories', buildCategoryCounts(movies, 'Todos os Filmes'));
+        global.LuminaStore.set('seriesCategories', buildCategoryCounts(grouped.seriesList, 'Todas as Séries'));
+        global.LuminaStore.set('novelaCategories', buildCategoryCounts(grouped.novelasList, 'Todas as Novelas'));
+      }
+
+      if (onDone) onDone(null, processed);
+    }
+
+    processSlice();
+  }
+
+  function applyMappingAndPersist(newProfile, cb) {
+    var curProfile = global.LuminaStore.get('mappingProfile');
+    if (curProfile) {
+      var undoStack = (global.LuminaStore.get('organizerUndoStack') || []).slice(-9);
+      undoStack.push(JSON.parse(JSON.stringify(curProfile)));
+      global.LuminaStore.set('organizerUndoStack', undoStack);
+    }
+    global.LuminaStore.set('mappingProfile', newProfile);
+    if (global.LuminaStorage) global.LuminaStorage.saveMeta('mappingProfile', newProfile);
+    var raw = global.LuminaStore.get('rawItems') || [];
+    rebuildCatalogFromRawAsync(raw, null, function () {
+      if (cb) cb();
+    }, true);
+  }
+
+  function undoLastMappingChange(cb) {
+    var stack = (global.LuminaStore.get('organizerUndoStack') || []).slice();
+    if (!stack.length) return cb && cb(false);
+    var prev = stack.pop();
+    global.LuminaStore.set('organizerUndoStack', stack);
+    global.LuminaStore.set('mappingProfile', prev);
+    if (global.LuminaStorage) global.LuminaStorage.saveMeta('mappingProfile', prev);
+    var raw = global.LuminaStore.get('rawItems') || [];
+    rebuildCatalogFromRawAsync(raw, null, function () {
+      if (cb) cb(true);
+    }, true);
+  }
+
+  function commitIncomingCatalog(newRawItems, onProgress, callback) {
+    var prevRaw = (global.LuminaStore && global.LuminaStore.get('rawItems')) || [];
+    var diff = computeCatalogDiff(prevRaw, newRawItems);
+
+    if (onProgress) onProgress({ stage: '4/4 \u00B7 Salvando catálogo na TV\u2026', percent: 92 });
+    global.LuminaStorage.saveCatalogBatch(
+      newRawItems,
+      function (saveErr, genMeta) {
+        if (saveErr) {
+          return callback(saveErr, null);
+        }
+        rebuildCatalogFromRawAsync(newRawItems, onProgress, function () {
+          var updateRecord = {
+            updatedAt: Date.now(),
+            generation: genMeta ? genMeta.generation : '',
+            stats: genMeta ? genMeta.stats : null,
+            diff: diff
+          };
+          if (global.LuminaStore) {
+            global.LuminaStore.set('recentAddedIds', diff.recentAddedIds);
+            global.LuminaStore.set('lastUpdateInfo', updateRecord);
+          }
+          if (global.LuminaStorage) {
+            global.LuminaStorage.saveMeta('lastUpdateInfo', updateRecord);
+          }
+          callback(null, newRawItems, updateRecord);
+        }, true);
+      },
+      function (ratio) {
+        if (onProgress) {
+          onProgress({ stage: '4/4 \u00B7 Salvando catálogo na TV\u2026', percent: 90 + Math.round(ratio * 10) });
+        }
+      },
+      { classifierVersion: global.LuminaClassifier.CLASSIFIER_VERSION }
+    );
+  }
+
+  function downloadM3uTextWithRetry(url, onProgress, cancelToken, cb) {
+    var maxRetries = M3U_RETRY_DELAYS_MS.length;
+    var attempt = 0;
+
+    function runAttempt() {
+      if (cancelToken && cancelToken.cancelled) {
+        return cb(new Error('Importação cancelada pelo usuário.'));
+      }
+      var xhr = new XMLHttpRequest();
+      cancelToken.activeXhr = xhr;
+      var startMs = Date.now();
+
+      try {
+        xhr.open('GET', url, true);
+        xhr.timeout = M3U_DOWNLOAD_TIMEOUT_MS;
+      } catch (e) {
+        return cb(new Error('URL M3U inválida: ' + e.message));
+      }
+
+      xhr.onprogress = function (e) {
+        if (!onProgress) return;
+        if (e.lengthComputable && e.total > 0) {
+          var pct = Math.min(48, Math.round((e.loaded / e.total) * 48));
+          var mb = (e.loaded / 1048576).toFixed(1);
+          onProgress({ stage: '2/4 \u00B7 Baixando arquivo M3U (' + mb + ' MB)\u2026', percent: pct });
+        } else if (e.loaded > 0) {
+          var mb2 = (e.loaded / 1048576).toFixed(1);
+          onProgress({ stage: '2/4 \u00B7 Baixando arquivo M3U (' + mb2 + ' MB)\u2026', percent: 28 });
+        }
+      };
+
+      function retryOrFail(errObj) {
+        var status = errObj.httpStatus || 0;
+        var proxyErr = errObj.proxyError || '';
+        var canRetry = !(cancelToken && cancelToken.cancelled) &&
+          attempt < maxRetries &&
+          status !== 401 && status !== 403 && status !== 404 &&
+          proxyErr !== 'SSL' && proxyErr !== 'DNS';
+
+        if (canRetry) {
+          var wait = M3U_RETRY_DELAYS_MS[attempt++];
+          setTimeout(runAttempt, wait);
+          return;
+        }
+        if (global.LuminaDiagLog) {
+          global.LuminaDiagLog.record('list-load', {
+            engine: 'M3ULoader',
+            url: url,
+            httpStatus: status,
+            code: errObj.code || 'M3U_ERR',
+            elapsedMs: Date.now() - startMs,
+            message: errObj.message
+          });
+        }
+        cb(errObj);
+      }
+
+      xhr.onload = function () {
+        if (cancelToken && cancelToken.cancelled) {
+          return cb(new Error('Importação cancelada pelo usuário.'));
+        }
+        var proxyHeader = '';
+        try { proxyHeader = xhr.getResponseHeader('X-Lumina-Proxy-Error') || ''; } catch (e) {}
+
+        if (xhr.status === 502 && proxyHeader) {
+          var pJson = null;
+          try { pJson = JSON.parse(xhr.responseText); } catch (e) {}
+          var pMsg = (pJson && pJson.message) || '';
+          var sslErr = new Error(
+            proxyHeader === 'SSL'
+              ? 'O certificado de segurança (HTTPS) deste servidor é inválido ou autoassinado.'
+              : (proxyHeader === 'DNS'
+                ? 'Não foi possível encontrar este servidor (erro de DNS). Confira o endereço digitado.'
+                : ('Falha de conexão com o servidor (' + (pMsg || proxyHeader) + ').'))
+          );
+          sslErr.httpStatus = 502;
+          sslErr.proxyError = proxyHeader;
+          sslErr.isSslError = (proxyHeader === 'SSL');
+          return retryOrFail(sslErr);
+        }
+
+        if (xhr.status < 200 || xhr.status >= 300) {
+          var httpErr = new Error(
+            (xhr.status === 401 || xhr.status === 403)
+              ? 'Acesso negado ao baixar a lista M3U (HTTP ' + xhr.status + '). Confira o link ou sua assinatura.'
+              : ('Falha ao baixar lista M3U (HTTP ' + xhr.status + ').')
+          );
+          httpErr.httpStatus = xhr.status;
+          return retryOrFail(httpErr);
+        }
+
+        var text = String(xhr.responseText || '');
+        var trimmed = text.trim();
+        if (!trimmed) {
+          return cb(new Error('A lista foi baixada, mas está vazia.'));
+        }
+        if (/^<!DOCTYPE\s+html|^<html/i.test(trimmed)) {
+          return cb(new Error('O servidor pediu login ou retornou uma página web em vez da lista M3U.'));
+        }
+        if (trimmed.indexOf('#EXTM3U') === -1 && trimmed.indexOf('#EXTINF') === -1) {
+          return cb(new Error('O arquivo baixado não é uma lista M3U válida (cabeçalho #EXTM3U ausente).'));
+        }
+
+        cb(null, text);
+      };
+
+      xhr.onerror = function () {
+        var netErr = new Error('Erro de rede ao baixar lista M3U. Verifique a conexão e a URL.');
+        netErr.httpStatus = 0;
+        retryOrFail(netErr);
+      };
+
+      xhr.ontimeout = function () {
+        var tErr = new Error('O servidor demorou demais para enviar a lista M3U.');
+        tErr.httpStatus = 0;
+        tErr.proxyError = 'TIMEOUT';
+        retryOrFail(tErr);
+      };
+
+      xhr.send();
+    }
+
+    runAttempt();
+  }
+
+  function loadFromUrlOrLocalPath(url, sourceId, onProgress, callback) {
+    var token = createCancelToken();
+    if (onProgress) onProgress({ stage: '2/4 \u00B7 Conectando ao servidor M3U\u2026', percent: 10 });
+
+    downloadM3uTextWithRetry(url, onProgress, token, function (dlErr, text) {
+      if (dlErr) return callback(dlErr, null);
+
+      global.LuminaM3UParser.parseChunkedAsync(
+        text,
+        sourceId || 'm3u',
+        global.LuminaClassifier.classifyEntry,
+        function (p) {
+          if (onProgress) {
+            onProgress({
+              stage: '3/4 \u00B7 Lendo canais e filmes (' + p.itemsCount + ' itens)\u2026',
+              percent: 50 + Math.round((p.percent || 0) * 0.4)
+            });
+          }
+        },
+        function (parseErr, items) {
+          if (parseErr) return callback(parseErr, null);
+          if (!items || !items.length) {
+            return callback(new Error('A lista foi baixada, mas não contém canais ou filmes válidos.'), null);
+          }
+          commitIncomingCatalog(items, onProgress, callback);
+        },
+        token
+      );
+    });
+  }
+
+  function loadFromXtream(creds, onProgress, callback) {
+    var token = createCancelToken();
+    global.LuminaXtream.fetchCompleteCatalog(creds, onProgress, function (err, items) {
+      if (err) return callback(err, null);
+      commitIncomingCatalog(items, onProgress, callback);
+    }, token);
+  }
+
+  // Troca entre listas salvas preservando favoritos e progresso por lista (Seção B6)
+  function activateSavedList(listId, onProgress, callback) {
+    var store = global.LuminaStore;
+    if (!store) return callback && callback(new Error('Store indisponível'));
+    var savedLists = store.get('savedLists') || [];
+    var target = null;
+    for (var i = 0; i < savedLists.length; i++) {
+      if (savedLists[i].id === listId) {
+        target = savedLists[i];
+        break;
+      }
+    }
+    if (!target) {
+      return callback && callback(new Error('Lista salva não encontrada.'));
+    }
+
+    var oldListId = store.get('activeListId');
+    if (oldListId && global.LuminaStorage) {
+      global.LuminaStorage.saveMeta('favorites_' + oldListId, store.get('favorites') || {});
+      global.LuminaStorage.saveMeta('watchProgress_' + oldListId, store.get('watchProgress') || {});
+    }
+
+    function restorePerListStateAndLoad() {
+      if (target.type === 'xtream' && target.creds) {
+        loadFromXtream(target.creds, onProgress, function (err, items, updRec) {
+          if (!err) {
+            var srcObj = { id: target.id, type: 'xtream', name: target.name, creds: target.creds };
+            store.set('xtreamCreds', target.creds);
+            store.set('source', srcObj);
+            if (global.LuminaStorage) global.LuminaStorage.saveMeta('source', srcObj);
+            store.upsertSavedList(srcObj);
+          }
+          if (callback) callback(err, items, updRec);
+        });
+      } else if (target.type === 'm3u' && target.url) {
+        loadFromUrlOrLocalPath(target.url, target.id, onProgress, function (err, items, updRec) {
+          if (!err) {
+            var srcObj2 = { id: target.id, type: 'm3u', name: target.name, url: target.url };
+            store.set('source', srcObj2);
+            if (global.LuminaStorage) global.LuminaStorage.saveMeta('source', srcObj2);
+            store.upsertSavedList(srcObj2);
+          }
+          if (callback) callback(err, items, updRec);
+        });
+      } else {
+        if (callback) callback(new Error('Dados da lista salva estão incompletos.'));
+      }
+    }
+
+    if (global.LuminaStorage) {
+      global.LuminaStorage.loadMeta('favorites_' + target.id, {}, function (favs) {
+        store.set('favorites', favs || {});
+        global.LuminaStorage.saveMeta('favorites', favs || {});
+        global.LuminaStorage.loadMeta('watchProgress_' + target.id, {}, function (prog) {
+          store.set('watchProgress', prog || {});
+          global.LuminaStorage.saveMeta('watchProgress', prog || {});
+          restorePerListStateAndLoad();
+        });
+      });
+    } else {
+      restorePerListStateAndLoad();
+    }
+  }
+
+  // Testador de stream sem abrir vídeo para "Testar minha lista" (Seção C3)
+  function testMyListStreams(callback, onProgress) {
+    var store = global.LuminaStore;
+    if (!store) return callback && callback(new Error('Store indisponível'));
+
+    var channels = store.get('channels') || [];
+    var movies = store.get('movies') || [];
+    var seriesList = store.get('seriesList') || [];
+    var samples = [];
+
+    if (channels.length) {
+      samples.push({ label: 'Canal ao vivo', title: channels[0].cleanTitle, url: channels[0].url, item: channels[0] });
+    }
+    if (movies.length) {
+      samples.push({ label: 'Filme', title: movies[0].cleanTitle, url: movies[0].url, item: movies[0] });
+    }
+    if (seriesList.length) {
+      var epUrl = '';
+      var s0 = seriesList[0];
+      if (s0.seasons && s0.seasons[0] && s0.seasons[0].episodes && s0.seasons[0].episodes[0]) {
+        epUrl = s0.seasons[0].episodes[0].url;
+      }
+      if (epUrl) {
+        samples.push({ label: 'Episódio de série', title: s0.cleanTitle, url: epUrl, item: s0 });
+      }
+    }
+    while (samples.length < 3 && channels.length > samples.length) {
+      var chNext = channels[samples.length];
+      samples.push({ label: 'Canal #' + (samples.length + 1), title: chNext.cleanTitle, url: chNext.url, item: chNext });
+    }
+
+    if (!samples.length) {
+      return callback(new Error('Sua lista ainda não tem itens carregados para testar.'), null);
+    }
+
+    var results = [];
+    var idx = 0;
+
+    function testNext() {
+      if (idx >= samples.length) {
+        var allOk = true;
+        var any403 = false;
+        var anyTimeout = false;
+        for (var i = 0; i < results.length; i++) {
+          if (!results[i].ok) allOk = false;
+          if (results[i].httpStatus === 401 || results[i].httpStatus === 403) any403 = true;
+          if (/timeout|tempo/i.test(String(results[i].error || ''))) anyTimeout = true;
+        }
+        var recommendation = 'Tudo pronto! Os streams da sua lista estão respondendo normalmente.';
+        if (!allOk) {
+          if (any403) {
+            recommendation = 'O servidor recusou a conexão (HTTP 401/403). Experimente mudar o User-Agent em Ajustes > Player ou verifique se outra TV está usando sua conta.';
+          } else if (anyTimeout) {
+            recommendation = 'O servidor demorou para responder. Experimente trocar o Formato preferido ao vivo para MPEG-TS (.ts) ou aumentar o Buffer.';
+          } else {
+            recommendation = 'Alguns itens falharam no teste. Verifique sua conexão ou atualize a lista.';
+          }
+        }
+        var summary = { testedAt: Date.now(), results: results, allOk: allOk, recommendation: recommendation };
+        store.set('streamTestResults', summary);
+        store.set('streamTestRunning', false);
+        return callback(null, summary);
+      }
+
+      var sample = samples[idx++];
+      var ua = (global.LuminaPlayer && global.LuminaPlayer.resolveUserAgentForItem)
+        ? global.LuminaPlayer.resolveUserAgentForItem(sample.item, sample.url)
+        : 'VLC/3.0.20 LibVLC/3.0.20';
+
+      if (onProgress) onProgress({ index: idx, total: samples.length, title: sample.title });
+
+      global.LuminaPlatform.probeStream(sample.url, ua, 8000, function (_, probeRes) {
+        var r = probeRes || { ok: false, httpStatus: 0, elapsedMs: 0, error: 'Sem resposta' };
+        var row = {
+          label: sample.label,
+          title: sample.title,
+          ok: !!r.ok,
+          httpStatus: Number(r.httpStatus || 0),
+          elapsedMs: Number(r.elapsedMs || 0),
+          detectedFormat: r.detectedFormat || '-',
+          error: r.error || ''
+        };
+        results.push(row);
+
+        if (global.LuminaDiagLog) {
+          global.LuminaDiagLog.record('probe', {
+            engine: 'StreamProbe',
+            url: sample.url,
+            format: row.detectedFormat,
+            userAgent: ua,
+            httpStatus: row.httpStatus,
+            code: row.ok ? 'PROBE_OK' : 'PROBE_FAIL',
+            elapsedMs: row.elapsedMs,
+            message: sample.label + ' (' + sample.title + '): ' + (row.ok ? 'OK' : (row.error || ('HTTP ' + row.httpStatus)))
+          });
+        }
+        setTimeout(testNext, 100);
+      });
+    }
+
+    store.set('streamTestRunning', true);
+    testNext();
+  }
+
   var api = {
+    M3U_DOWNLOAD_TIMEOUT_MS: M3U_DOWNLOAD_TIMEOUT_MS,
+    loadFromUrlOrLocalPath: loadFromUrlOrLocalPath,
     loadFromXtream: loadFromXtream,
-    rebuildCatalogFromRaw: rebuildCatalogFromRaw,
     rebuildCatalogFromRawAsync: rebuildCatalogFromRawAsync,
     applyMappingAndPersist: applyMappingAndPersist,
     undoLastMappingChange: undoLastMappingChange,
-    ingestM3UText: ingestM3UText,
-    loadFromUrlOrLocalPath: loadFromUrlOrLocalPath,
-    cancelActiveLoad: cancelActiveLoad
+    computeCatalogDiff: computeCatalogDiff,
+    cancelActiveLoad: cancelActiveLoad,
+    activateSavedList: activateSavedList,
+    testMyListStreams: testMyListStreams
   };
 
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

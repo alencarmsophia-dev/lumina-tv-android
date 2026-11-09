@@ -1,17 +1,20 @@
 package com.luminatv.player
 
 import android.graphics.Bitmap
+import android.util.Log
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.webkit.WebViewAssetLoader
-import okhttp3.OkHttpClient
 import okhttp3.Request
+import org.json.JSONObject
 import java.io.ByteArrayInputStream
+import java.net.SocketTimeoutException
+import java.net.UnknownHostException
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.TimeUnit
+import javax.net.ssl.SSLException
 
 class LuminaWebViewClient(
     private val assetLoader: WebViewAssetLoader,
@@ -22,25 +25,25 @@ class LuminaWebViewClient(
     data class StreamHeaderOverride(val userAgent: String, val referer: String)
 
     companion object {
+        private const val TAG = "LuminaProxy"
         const val ASSET_HOST = "appassets.androidplatform.net"
         const val PAIRING_HOST = "surubim-player-pairing.vercel.app"
-        const val CUSTOM_IPTV_USER_AGENT: String = ""
+
+        @Volatile
+        var customIptvUserAgent: String = "VLC/3.0.20 LibVLC/3.0.20"
 
         private val DIRECT_VIDEO_EXTENSIONS = listOf(
             ".mp4", ".mkv", ".avi", ".mov", ".flv", ".webm", ".mp3", ".aac"
         )
+
+        fun maskUrlCredentials(url: String): String {
+            return url
+                .replace(Regex("([?&](?:password|pass|token)=)([^&\\s]+)", RegexOption.IGNORE_CASE), "$1***")
+                .replace(Regex("(/(?:live|movie|series)/[^/\\s]+/)([^/\\s]+)(/)", RegexOption.IGNORE_CASE), "$1***$3")
+        }
     }
 
     private val streamHeadersMap = ConcurrentHashMap<String, StreamHeaderOverride>()
-
-    private val okHttpClient: OkHttpClient = OkHttpClient.Builder()
-        .connectTimeout(20, TimeUnit.SECONDS)
-        .readTimeout(120, TimeUnit.SECONDS)
-        .writeTimeout(30, TimeUnit.SECONDS)
-        .followRedirects(true)
-        .followSslRedirects(true)
-        .retryOnConnectionFailure(true)
-        .build()
 
     fun registerStreamHeaders(url: String, userAgent: String, referer: String) {
         if (url.isBlank()) return
@@ -114,9 +117,9 @@ class LuminaWebViewClient(
         return executeCorsProxyRequest(req)
     }
 
-    private fun executeCorsProxyRequest(webReq: WebResourceRequest): WebResourceResponse? {
+    private fun executeCorsProxyRequest(webReq: WebResourceRequest): WebResourceResponse {
+        val urlStr = webReq.url.toString()
         return try {
-            val urlStr = webReq.url.toString()
             val method = webReq.method?.uppercase(Locale.ROOT) ?: "GET"
             val reqBuilder = Request.Builder().url(urlStr)
 
@@ -148,7 +151,7 @@ class LuminaWebViewClient(
             val overrideHeaders = findHeaderOverride(urlStr)
             val uaToUse = when {
                 overrideHeaders != null && overrideHeaders.userAgent.isNotBlank() -> overrideHeaders.userAgent
-                CUSTOM_IPTV_USER_AGENT.isNotBlank() -> CUSTOM_IPTV_USER_AGENT
+                customIptvUserAgent.isNotBlank() -> customIptvUserAgent
                 else -> incomingHeaders["User-Agent"]?.takeIf { it.isNotBlank() } ?: defaultUserAgent
             }
             if (uaToUse.isNotBlank()) {
@@ -158,7 +161,8 @@ class LuminaWebViewClient(
                 reqBuilder.header("Referer", overrideHeaders.referer)
             }
 
-            val response = okHttpClient.newCall(reqBuilder.build()).execute()
+            val client = NativePlayerController.buildHttpClient(20L, 120L, true)
+            val response = client.newCall(reqBuilder.build()).execute()
             val contentTypeHeader = response.header("Content-Type") ?: guessMimeType(urlStr)
             val mimeType = contentTypeHeader.substringBefore(";").trim().ifEmpty { "application/octet-stream" }
             val charset = if (contentTypeHeader.contains("charset=", ignoreCase = true)) {
@@ -196,7 +200,34 @@ class LuminaWebViewClient(
                 bodyStream
             )
         } catch (e: Exception) {
-            null
+            val proxyErrType = when (e) {
+                is UnknownHostException -> "DNS"
+                is SocketTimeoutException -> "TIMEOUT"
+                is SSLException -> "SSL"
+                is java.net.ConnectException -> "CONNECT"
+                else -> "OTHER"
+            }
+            val safeMsg = e.message ?: e.javaClass.simpleName
+            Log.w(TAG, "Falha de proxy [$proxyErrType] em ${maskUrlCredentials(urlStr)}: $safeMsg")
+
+            val errJson = JSONObject().apply {
+                put("proxyError", proxyErrType)
+                put("message", safeMsg)
+            }.toString()
+
+            val errHeaders = corsHeaders().toMutableMap().apply {
+                put("X-Lumina-Proxy-Error", proxyErrType)
+                put("Content-Type", "application/json; charset=UTF-8")
+            }
+
+            WebResourceResponse(
+                "application/json",
+                "UTF-8",
+                502,
+                "Bad Gateway",
+                errHeaders,
+                ByteArrayInputStream(errJson.toByteArray(Charsets.UTF_8))
+            )
         }
     }
 
@@ -204,7 +235,7 @@ class LuminaWebViewClient(
         "Access-Control-Allow-Origin" to "*",
         "Access-Control-Allow-Headers" to "*",
         "Access-Control-Allow-Methods" to "GET, POST, OPTIONS, HEAD",
-        "Access-Control-Expose-Headers" to "*",
+        "Access-Control-Expose-Headers" to "*, X-Lumina-Proxy-Error",
         "Access-Control-Max-Age" to "86400"
     )
 
