@@ -1,0 +1,81 @@
+name: Build Lumina TV webOS IPK (v2.2.1)
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'webos-v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-webos-ipk:
+    name: Build & Validate LG webOS IPK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Run static verification tests (tests/webos.test.js)
+        run: |
+          chmod +x scripts/build-webos.sh
+          SKIP_ARES_PACKAGE=1 ./scripts/build-webos.sh
+          node tests/webos.test.js
+
+      - name: Install official LG webOS CLI (@webos-tools/cli)
+        run: npm i -g @webos-tools/cli
+
+      - name: Package webOS IPK (scripts/build-webos.sh)
+        run: ./scripts/build-webos.sh
+
+      - name: Inspect IPK contents and verify SHA-256
+        run: |
+          IPK_FILE="$(ls -1 com.luminatv.player_*.ipk | head -n 1)"
+          echo "IPK gerado: $IPK_FILE"
+          ls -lh "$IPK_FILE" "$IPK_FILE.sha256"
+          echo "=== Conteúdo da camada AR do IPK ==="
+          ar -t "$IPK_FILE"
+          mkdir -p /tmp/ipk_inspect
+          cp "$IPK_FILE" /tmp/ipk_inspect/
+          (
+            cd /tmp/ipk_inspect
+            ar -x "$IPK_FILE"
+            echo "=== Metadados control.tar.gz ==="
+            tar -ztvf control.tar.gz
+            echo "=== Arquivos empacotados em data.tar.gz ==="
+            tar -ztvf data.tar.gz
+          )
+          rm -rf /tmp/ipk_inspect
+          echo "=== SHA-256 ==="
+          cat "$IPK_FILE.sha256"
+          sha256sum -c "$IPK_FILE.sha256"
+
+      - name: Upload artifact (lumina-tv-v2.2.1-webos-ipk)
+        uses: actions/upload-artifact@v4
+        with:
+          name: lumina-tv-v2.2.1-webos-ipk
+          path: |
+            com.luminatv.player_*.ipk
+            com.luminatv.player_*.ipk.sha256
+          if-no-files-found: error
+
+      - name: Publish GitHub Release for LG webOS (tags webos-v*)
+        if: startsWith(github.ref, 'refs/tags/webos-v')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "Lumina TV LG webOS (${{ github.ref_name }})"
+          body: |
+            ## Lumina TV — LG webOS (Modo Desenvolvedor)
+            - **Plataforma:** LG webOS TV (alvo webOS 23 / Chromium 94)
+            - **Pacote:** `com.luminatv.player` (`2.2.1`)
+            - **Instalação:** Exclusivo para instalação via **Developer Mode** (`ares-install`). Veja instruções completas em `webos/README-WEBOS.md`.
+          files: |
+            com.luminatv.player_*.ipk
+            com.luminatv.player_*.ipk.sha256

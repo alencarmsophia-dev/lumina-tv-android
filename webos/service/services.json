@@ -1,0 +1,11 @@
+{
+  "id": "com.luminatv.player.service",
+  "description": "Lumina TV HTTP/CORS Fallback Service",
+  "services": [
+    {
+      "name": "com.luminatv.player.service",
+      "description": "Lumina TV HTTP/CORS Fallback Service",
+      "public": true
+    }
+  ]
+}

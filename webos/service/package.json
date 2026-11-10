@@ -1,0 +1,6 @@
+{
+  "name": "com.luminatv.player.service",
+  "version": "2.2.1",
+  "description": "Lumina TV Luna JS Service for CORS/HTTP fallback on LG webOS",
+  "main": "lumina_service.js"
+}
